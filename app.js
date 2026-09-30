@@ -1,5 +1,6 @@
 const state={user:null,products:[],orders:[],runners:[],overview:null,paused:false,cart:new Map(),filter:'All',query:''};
 const $=s=>document.querySelector(s), root=$('#view-content'), toastNode=$('#toast');
+let refreshTimer;
 const money=n=>new Intl.NumberFormat('en-PH',{style:'currency',currency:'PHP',maximumFractionDigits:2}).format(n||0);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const roleLabel={buyer:'Campus customer',owner:'Stall owner',runner:'Campus runner',admin:'Administrator'};
@@ -28,6 +29,14 @@ async function refresh(){
     if(state.user.role==='admin')state.overview=await api('/api/admin/overview');
     render();
   }catch(error){renderError(error.message)}
+}
+function startAutoRefresh(){
+  clearInterval(refreshTimer);
+  if(!state.user)return;
+  refreshTimer=setInterval(()=>{
+    if(document.visibilityState!=='visible'||document.querySelector('dialog[open]')||document.activeElement?.matches('input,textarea,select'))return;
+    refresh();
+  },10000);
 }
 function renderAuthWall(){
   accountTools();
@@ -117,7 +126,7 @@ document.addEventListener('click',async e=>{
   const remove=e.target.closest('[data-delete-product]');if(remove){if(!confirm('Remove this item from your menu?'))return;try{await api(`/api/products/${remove.dataset.deleteProduct}`,{method:'DELETE'});toast('Menu item removed.');await refresh()}catch(error){toast(error.message)}return}
   const action=e.target.closest('[data-action]');if(!action)return;
   if(action.dataset.action==='open-cart'){renderCart();return}
-  if(action.dataset.action==='logout'){await api('/api/logout',{method:'POST',body:'{}'});state.user=null;state.cart.clear();renderAuthWall();toast('You are signed out.');return}
+  if(action.dataset.action==='logout'){await api('/api/logout',{method:'POST',body:'{}'});clearInterval(refreshTimer);state.user=null;state.cart.clear();renderAuthWall();toast('You are signed out.');return}
   if(action.dataset.action==='retry'){await boot();return}
   if(action.dataset.action==='toggle-pause'){try{const result=await api('/api/admin/pause',{method:'POST',body:json({paused:!state.paused})});state.paused=result.ordering_paused;toast(state.paused?'Ordering paused.':'Ordering is open.');await refresh()}catch(error){toast(error.message)}return}
   if(action.dataset.action==='place-order'){action.disabled=true;try{const result=await api('/api/orders',{method:'POST',body:json({fulfillment:$('#fulfillment').value,note:$('#order-note').value,items:cartEntries().map(p=>({product_id:p.id,quantity:p.quantity}))})});state.cart.clear();$('#cart-dialog').close();toast(`Order #${result.order_id} sent to the stall.`);await refresh()}catch(error){toast(error.message);action.disabled=false}}
@@ -129,7 +138,7 @@ document.addEventListener('submit',async e=>{
   try{
     const values=Object.fromEntries(new FormData(form).entries());
     if(form.dataset.form==='login'||form.dataset.form==='signup'){
-      const result=await api(`/api/${form.dataset.form}`,{method:'POST',body:json(values)});state.user=result.user;$('#auth-dialog').close();toast(form.dataset.form==='signup'?'Your account is ready.':'Welcome back.');await refresh();return;
+      const result=await api(`/api/${form.dataset.form}`,{method:'POST',body:json(values)});state.user=result.user;startAutoRefresh();$('#auth-dialog').close();toast(form.dataset.form==='signup'?'Your account is ready.':'Welcome back.');await refresh();return;
     }
     if(form.dataset.form==='product'){
       values.price=Number(values.price);const result=await api('/api/products',{method:'POST',body:json(values)});toast(`${result.product.name} added to your menu.`);await refresh();return;
@@ -137,7 +146,7 @@ document.addEventListener('submit',async e=>{
   }catch(error){toast(error.message)}finally{if(submit)submit.disabled=false}
 });
 async function boot(){
-  try{const session=await api('/api/session');state.user=session.user;if(state.user){await refresh()}else renderAuthWall()}
+  try{const session=await api('/api/session');state.user=session.user;if(state.user){startAutoRefresh();await refresh()}else renderAuthWall()}
   catch(error){renderError(`${error.message} Start the server with “py server.py” from the FOODHUB folder.`)}
 }
 boot();

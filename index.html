@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f0e8">
+  <title>BiteHub · PNS campus food</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="app-ui.css">
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="#home" aria-label="BiteHub home"><span class="brand-mark">B</span><span>Bite<span class="brand-light">Hub</span><small>PNS CAMPUS FOOD</small></span></a>
+      <div id="account-tools" class="account-tools" hidden></div>
+    </header>
+    <main id="view-content" class="main-content" tabindex="-1"><div class="loading-state"><span class="brand-mark">B</span><p>Connecting to your campus hub…</p></div></main>
+    <footer class="site-footer"><span class="brand-light">BiteHub</span><span>Made for better campus breaks.</span><span>Local server · SQLite</span></footer>
+  </div>
+  <dialog id="cart-dialog" class="modal"><form method="dialog" class="modal-dismiss"><button class="icon-button" aria-label="Close cart">×</button></form><div id="cart-content"></div></dialog>
+  <dialog id="auth-dialog" class="modal auth-modal"></dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="app.js" defer></script>
+</body>
+</html>

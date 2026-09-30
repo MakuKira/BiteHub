@@ -1,0 +1,5 @@
+__pycache__/
+*.py[cod]
+bitehub.sqlite3
+bitehub.sqlite3-shm
+bitehub.sqlite3-wal

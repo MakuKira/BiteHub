@@ -22,8 +22,8 @@ Push notifications require a secure browser origin: `localhost` works for develo
 
 ## Account types
 
-- **Campus customer:** browse a stall-balanced rotating catalog, explore one stall at a time, filter dietary labels and allergens, view item details, choose capacity-limited 30-minute pickup windows or campus delivery, receive status alerts and ready-time estimates, and review completed orders.
-- **Stall owner:** create a stall account, prepare a menu while awaiting approval, set opening hours, typical prep time, per-window pickup limits, and stock counts, upload optional JPG/PNG/WebP menu photos (up to 2 MB each), disclose dietary/allergen information, edit items, accept orders, assign delivery orders to a runner, and read customer feedback.
+- **Campus customer:** browse a stall-balanced rotating catalog, see daily featured campus picks, explore one stall at a time, filter dietary labels and allergens, view item details, choose capacity-limited 30-minute pickup windows or campus delivery, receive status alerts and ready-time estimates, and review completed orders.
+- **Stall owner:** create a stall account, set opening hours, typical prep time, per-window pickup limits, and stock counts, feature one available item for 24 hours, upload optional JPG/PNG/WebP menu photos (up to 2 MB each), disclose dietary/allergen information, edit items, accept orders, assign delivery orders to a runner, and read customer feedback.
 - **Campus runner:** see assigned runs and update pickup and delivery progress.
 - **Administrator:** pause or resume stalls, review campus activity, and pause or resume ordering.
 

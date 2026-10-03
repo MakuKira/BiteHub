@@ -148,6 +148,7 @@ def initialize():
         product_columns = {row["name"] for row in db.execute("PRAGMA table_info(products)")}
         for name, declaration in (
             ("stock_count", "INTEGER CHECK(stock_count IS NULL OR stock_count >= 0)"),
+            ("featured_until", "TEXT"),
             ("dietary_tags", "TEXT NOT NULL DEFAULT '[]'"),
             ("allergen_tags", "TEXT NOT NULL DEFAULT '[]'"),
             ("photo_data", "BLOB"),
@@ -631,12 +632,17 @@ class Handler(BaseHTTPRequestHandler):
                 elif user["role"] == "owner":
                     where, args = "WHERE s.owner_id=? OR (s.status='approved' AND p.available=1)", [user["id"]]
                 rows = db.execute(f"""SELECT p.id,p.name,p.description,p.category,p.price_cents,p.emoji,p.available,
-                    p.stock_count,p.dietary_tags,p.allergen_tags,p.photo_type,s.id stall_id,s.name stall_name,s.description stall_description,
+                    p.stock_count,p.dietary_tags,p.allergen_tags,p.photo_type,p.featured_until,s.id stall_id,s.name stall_name,s.description stall_description,
                     s.status stall_status,s.opens_at,s.closes_at,s.pickup_lat,s.pickup_lon
                     FROM products p JOIN stalls s ON s.id=p.stall_id {where} ORDER BY s.name,p.name""", args).fetchall()
+                featured_rows = [row for row in rows if row["featured_until"] and row["featured_until"] > now()
+                    and row["available"] and (row["stock_count"] is None or row["stock_count"] > 0)
+                    and row["stall_status"] == "approved"]
+                featured_rows = rotate_stall_rows(featured_rows)
                 if not user or user["role"] == "buyer":
                     rows = rotate_stall_rows(rows)
             self.send_json(200, {"products": [self.product_json(row, bool(user and user["role"] in ("owner", "admin"))) for row in rows],
+                                 "featured_products": [self.product_json(row) for row in featured_rows],
                                  "ordering_paused": paused,
                                  "stall_status": user.get("stall_status") if user and user["role"] == "owner" else None,
                                  "owner_hours": {"opens_at": user["stall_opens_at"], "closes_at": user["stall_closes_at"]}
@@ -694,6 +700,9 @@ class Handler(BaseHTTPRequestHandler):
     @staticmethod
     def product_json(row, include_unavailable=False):
         stock_count = row["stock_count"]
+        featured_until = row["featured_until"] if "featured_until" in row.keys() else None
+        featured = bool(featured_until and featured_until > now() and row["available"]
+                        and (stock_count is None or stock_count > 0) and row["stall_status"] == "approved")
         item = {"id": row["id"], "name": row["name"], "description": row["description"],
                 "category": row["category"], "price": row["price_cents"] / 100, "emoji": row["emoji"],
             "available": bool(row["available"]) and (stock_count is None or stock_count > 0),
@@ -701,6 +710,7 @@ class Handler(BaseHTTPRequestHandler):
                 "allergen_tags": json.loads(row["allergen_tags"] or "[]"), "stall_id": row["stall_id"],
                 "stall_name": row["stall_name"], "stall_status": row["stall_status"],
                 "pickup_lat": row["pickup_lat"], "pickup_lon": row["pickup_lon"],
+                "featured": featured, "featured_until": featured_until if featured else None,
                 "opens_at": row["opens_at"], "closes_at": row["closes_at"],
             "stall_open": row["stall_status"] == "approved" and stall_is_open(row["opens_at"], row["closes_at"])}
         if "photo_type" in row.keys() and row["photo_type"]:
@@ -941,6 +951,29 @@ class Handler(BaseHTTPRequestHandler):
         raise ApiError(404, "That API route does not exist.")
 
     def api_patch(self, path, data):
+        if path == "/api/stall/feature":
+            owner = self.require_role("owner")
+            try: product_id = int(data.get("product_id"))
+            except (TypeError, ValueError): raise ValueError("Choose a menu item to feature.")
+            featured = data.get("featured")
+            if not isinstance(featured, bool): raise ValueError("Choose whether to feature this item.")
+            with connect() as db:
+                product = db.execute("""SELECT p.id,p.available,p.stock_count,s.id stall_id,s.status stall_status
+                    FROM products p JOIN stalls s ON s.id=p.stall_id
+                    WHERE p.id=? AND s.owner_id=?""", (product_id, owner["id"])).fetchone()
+                if not product: raise ApiError(404, "Menu item not found.")
+                if featured and product["stall_status"] != "approved": raise ApiError(409, "Your stall must be open to feature an item.")
+                if featured and (not product["available"] or product["stock_count"] == 0):
+                    raise ApiError(409, "Only an available menu item can be featured.")
+                if featured:
+                    expires = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat(timespec="seconds")
+                    db.execute("UPDATE products SET featured_until=NULL WHERE stall_id=?", (product["stall_id"],))
+                    db.execute("UPDATE products SET featured_until=? WHERE id=?", (expires, product_id))
+                else:
+                    expires = None
+                    db.execute("UPDATE products SET featured_until=NULL WHERE id=?", (product_id,))
+            self.send_json(200, {"product_id": product_id, "featured": featured, "featured_until": expires})
+            return
         if path == "/api/stall/profile":
             owner = self.require_role("owner")
             name = clean_text(data.get("name"), "Stall name", 80)
@@ -988,7 +1021,8 @@ class Handler(BaseHTTPRequestHandler):
                 if set(data) == {"available"}:
                     available = data["available"]
                     if not isinstance(available,bool): raise ValueError("Availability must be true or false.")
-                    db.execute("UPDATE products SET available=? WHERE id=?", (int(available),product_id))
+                    db.execute("UPDATE products SET available=?,featured_until=CASE WHEN ?=0 THEN NULL ELSE featured_until END WHERE id=?",
+                        (int(available),int(available),product_id))
                     self.send_json(200, {"ok":True}); return
                 name = clean_text(data.get("name",row["name"]), "Item name", 80)
                 desc = clean_text(data.get("description",row["description"]), "Description", 240, required=False)

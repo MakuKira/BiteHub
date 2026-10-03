@@ -1,0 +1,9 @@
+{
+  "name": "BiteHub · PNS campus food",
+  "short_name": "BiteHub",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f0e8",
+  "theme_color": "#f4f0e8",
+  "icons": [{ "src": "/bitehub-mark.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

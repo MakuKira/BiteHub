@@ -1,0 +1,5 @@
+Palawan National School campus map
+
+Map raster source: topoexport_2D_vectorial.pdf from the user-provided topoexport-4635D8.zip.
+Map data credits from the supplied license: Buildings, roads, waterways, and green areas © Overture Maps Foundation (2026), Open Database License (ODbL); canopy-height data © Meta and World Resources Institute (2026), CC BY 4.0; terrain © OpenGeoHub (2023), CC BY 4.0. Map exported by topoexport.com. The source license notes that map data may be approximate; verify stall and delivery points on site.
+Geographic bounds printed on source map: SW 9.736753, 118.737108; NE 9.740445, 118.740839.

@@ -14,14 +14,20 @@ The launcher uses Python 3 from your system, or the Python runtime bundled with 
 
 The database is created as `bitehub.sqlite3` in this folder. It survives server restarts and is excluded from source control. To put the database somewhere else, set the `BITEHUB_DB` environment variable before starting the server.
 
+### Device order notifications
+
+Install the push encryption dependency once with `python -m pip install -r requirements.txt` (or use the same Python runtime that starts BiteHub). The server creates a VAPID key under `.local-certs/` automatically; keep that folder when moving the app so existing device subscriptions continue to work. Customers and stall owners enable alerts with the **Enable alerts** button. Customers receive order status changes; the stall owner receives new order alerts.
+
+Push notifications require a secure browser origin: `localhost` works for development, and phones on the campus network need the HTTPS launcher with a certificate trusted by that phone. Set `BITEHUB_VAPID_SUBJECT` to a valid `mailto:` contact or HTTPS contact URL before deployment. Notifications are best-effort when a device is offline or its push subscription has expired.
+
 ## Account types
 
-- **Campus customer:** browse menus, place pickup or delivery orders, and track updates.
-- **Stall owner:** create a stall, post menu items, change availability, accept orders, and assign delivery orders to a runner.
+- **Campus customer:** browse a stall-balanced rotating catalog, explore one stall at a time, filter dietary labels and allergens, view item details, choose capacity-limited 30-minute pickup windows or campus delivery, receive status alerts and ready-time estimates, and review completed orders.
+- **Stall owner:** create a stall account, prepare a menu while awaiting approval, set opening hours, typical prep time, per-window pickup limits, and stock counts, upload optional JPG/PNG/WebP menu photos (up to 2 MB each), disclose dietary/allergen information, edit items, accept orders, assign delivery orders to a runner, and read customer feedback.
 - **Campus runner:** see assigned runs and update pickup and delivery progress.
-- **Administrator:** review campus activity and pause or resume ordering.
+- **Administrator:** approve or pause stalls, review campus activity, and pause or resume ordering.
 
-Customers, stall owners, and runners can create accounts from the sign-in page. Administrator accounts are deliberately not available through public signup. Create one from PowerShell with:
+Customers, stall owners, and runners can create accounts from the role chooser. Stall owners can self-register; there is no public cap on the number of owner accounts. New stalls stay hidden from customers until an administrator approves them. Administrator accounts are deliberately not available through public signup. Create one from PowerShell with:
 
 ```powershell
 .\start.ps1 --create-admin
@@ -34,6 +40,10 @@ The command prompts for an email, name, and password. Admin passwords and all ac
 The database schema is created automatically the first time the server starts. New installations start with an empty menu: register an owner account, add menu items, then register customer and runner accounts to work through the order flow. There are no seeded accounts or sample orders.
 
 This is intended for a trusted local prototype. The built-in HTTP server is not an internet-facing production deployment; use a production application server, HTTPS, backups, and an institutional identity provider before exposing real accounts or student data.
+
+## Capacity and production readiness
+
+The SQLite schema can store 20,000 student accounts, but this prototype is not certified for 20,000 simultaneous users. Background order checks are staggered and fetch only order data, but 20,000 active sessions would still generate hundreds of requests per second. Before a campus-wide launch, move to managed PostgreSQL and a production ASGI/WSGI application server with horizontal scaling, then run a staged load test at the expected peak. Keep the SQLite database for local development only; the free Render service is not a production capacity target.
 
 ## Free Render deployment
 

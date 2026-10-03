@@ -4,25 +4,34 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f0e8">
+  <link rel="manifest" href="/manifest.webmanifest">
   <title>BiteHub · PNS campus food</title>
+  <link rel="icon" type="image/svg+xml" href="bitehub-mark.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="app-ui.css">
+  <link rel="stylesheet" href="experience.css">
+  <link rel="stylesheet" href="school-theme.css">
+  <link rel="stylesheet" href="feature-ui.css">
 </head>
 <body>
   <div id="app" class="app-shell">
     <header class="topbar">
-      <a class="brand" href="#home" aria-label="BiteHub home"><span class="brand-mark">B</span><span>Bite<span class="brand-light">Hub</span><small>PNS CAMPUS FOOD</small></span></a>
+      <div class="header-brand-group"><a class="brand" href="#home" aria-label="BiteHub home"><img class="brand-mark" src="bitehub-mark.svg" alt=""><span>Bite<span class="brand-light">Hub</span><small>CAMPUS FOOD · MADE EASY</small></span></a><div class="school-signature topbar-school" aria-label="Palawan National School campus"><img class="school-seal" src="assets/palawan-national-school-logo.webp" alt="Palawan National School crest"><span><small>ON CAMPUS AT</small><strong>Palawan National</strong><strong>School</strong></span></div></div>
       <div id="account-tools" class="account-tools" hidden></div>
     </header>
-    <main id="view-content" class="main-content" tabindex="-1"><div class="loading-state"><span class="brand-mark">B</span><p>Connecting to your campus hub…</p></div></main>
+    <main id="view-content" class="main-content" tabindex="-1"><div class="loading-state"><img class="brand-mark" src="bitehub-mark.svg" alt=""><p>Connecting to your campus hub…</p></div></main>
     <footer class="site-footer"><span class="brand-light">BiteHub</span><span>Made for better campus breaks.</span><span>Local server · SQLite</span></footer>
   </div>
   <dialog id="cart-dialog" class="modal"><form method="dialog" class="modal-dismiss"><button class="icon-button" aria-label="Close cart">×</button></form><div id="cart-content"></div></dialog>
+  <dialog id="product-dialog" class="modal product-modal"><div id="product-content"></div></dialog>
+  <dialog id="product-edit-dialog" class="modal auth-modal"><div id="product-edit-content"></div></dialog>
+  <dialog id="stall-dialog" class="modal stall-modal"><div id="stall-content"></div></dialog>
   <dialog id="auth-dialog" class="modal auth-modal"></dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="app.js" defer></script>
+  <script src="app.js?v=mobile-stalls-push-20261003" defer></script>
 </body>
 </html>

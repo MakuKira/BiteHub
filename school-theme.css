@@ -1,0 +1,233 @@
+:root{
+  font-family:'DM Sans',sans-serif;
+  color:#20384d;
+  background:#f2f7f5;
+  --ink:#20384d;
+  --muted:#617486;
+  --line:#d9e4e7;
+  --paper:#ffffff;
+  --rose:#167a61;
+  --rose-dark:#105e4a;
+  --sage:#dceee5;
+  --gold:#efc45b;
+  --shadow:0 12px 30px #18384d12;
+  --school-blue:#3168a7;
+  --school-orange:#e8793d;
+  --school-green:#167a61;
+}
+body{
+  color:var(--ink);
+  background-color:#f2f7f5;
+  background-image:radial-gradient(#d5e3df 0.75px,transparent 0.75px);
+  background-size:22px 22px;
+}
+h1,h2,h3,.brand{font-family:'Nunito Sans','DM Sans',sans-serif;letter-spacing:0}
+::selection{background:#cfe6da;color:#153e34}
+.topbar{
+  height:76px;
+  background:#fff;
+  border-bottom:3px solid var(--school-green);
+  box-shadow:0 3px 12px #18384d0b;
+}
+.brand{gap:12px;color:#20384d}
+.brand-mark{display:block;width:46px;height:46px;flex:none;object-fit:contain;border-radius:50%}
+.brand .school-brand-mark{width:54px;height:54px;object-fit:contain;border-radius:0;box-shadow:none}
+.brand-light{color:var(--school-orange)}
+.brand small{color:#718398;letter-spacing:.15em}
+.account-chip strong{color:var(--ink);font-size:13px}
+.account-chip small{color:var(--muted)}
+.avatar{background:#e2effa;color:var(--school-blue)}
+.main-content{padding-top:38px}
+.site-footer{
+  background:#20384d;color:#e8f0f3;border-top:0;
+}
+.site-footer .brand-light{color:#f3c866}
+.button{border-radius:7px;font-weight:800;letter-spacing:.01em}
+.button-primary{background:var(--school-green);box-shadow:0 4px 10px #167a6125}
+.button-primary:hover:not(:disabled){background:#105e4a}
+.button-dark{background:#20384d}
+.button-light{background:#fff;color:#20384d}
+.button-outline{border-color:#c8d8df;background:#fff;color:#29485e}
+.button-outline:hover:not(:disabled){background:#eef6f8}
+.button-quiet{color:#a84d37}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible{
+  outline:3px solid #edae3c;outline-offset:3px;
+}
+.page-heading h1,.role-heading h1,.section-title h2,.panel h2,.product-modal h2{
+  color:#20384d;font-weight:900;
+}
+.eyebrow{color:#50708a;font-weight:800}
+.page-heading p,.form-intro{color:var(--muted)}
+.panel,.stat-card,.order-card,.product-card,.auth-card,.modal{
+  border-color:#d8e3e7;border-radius:8px;background:#fff;box-shadow:var(--shadow);
+}
+.stat-card{border-top:3px solid #83bea7}
+.stat-icon{background:#e8f3ed;color:var(--school-green)}
+.buyer-banner{
+  background:#246c72;
+  border-radius:10px;
+  box-shadow:0 12px 28px #194f5530;
+}
+.buyer-banner .eyebrow{color:#d9f1e3}
+.buyer-banner h2,.buyer-banner p{color:#fff}
+.banner-sun{background:#edc45d}
+.banner-art b{background:#fff;color:#25465a;border-radius:6px}
+.live-pill{background:#e2f3e9;color:#246647;border:1px solid #bfdfcb}
+.live-pill.is-paused{background:#fff0e8;color:#9a4e31;border-color:#efc6ae}
+.filter-chip{border-color:#d5e1e6;background:#fff;color:#476174}
+.filter-chip.is-active{background:#20384d;border-color:#20384d;color:#fff}
+.search-field,.sort-field select,.catalog-select select{
+  border-color:#cfdde3;background:#fff;color:var(--ink);border-radius:6px;
+}
+.product-card{overflow:hidden;border-radius:8px;transition:transform .18s,box-shadow .18s,border-color .18s}
+.product-card:hover{transform:translateY(-2px);border-color:#aacdbd;box-shadow:0 15px 32px #1d435019}
+.product-art{background:#e7f1f8;color:#2b5f8d}
+.product-art small{background:#fff;color:#325674;border-radius:4px}
+.product-stall{color:#49705e;font-weight:800}
+.product-name-trigger h3{color:#20384d;font-weight:900}
+.product-name-trigger:hover h3{color:var(--school-green)}
+.product-tag{background:#e4f2e9;color:#245a3d;border-radius:4px}
+.allergen-tag{background:#fff0e8;color:#924b2f}
+.stock-note{color:#a65e26;font-weight:700}
+.menu-controls{gap:10px}
+.result-count{color:#587084;font-weight:700}
+.order-card{border-left:3px solid #7bb79d}
+.order-number{color:#6a7e8c}
+.status-badge{border-radius:5px;font-weight:800}
+.status-placed{background:#fff1d2;color:#785514}
+.status-confirmed,.status-preparing{background:#e3eefb;color:#315f97}
+.status-ready{background:#e2f3e9;color:#286144}
+.status-completed{background:#e7f1ea;color:#356247}
+.status-out{background:#e2f3f4;color:#27656a}
+.status-declined{background:#fbe9e5;color:#963e34}
+.order-total,.cart-total strong,.product-bottom>strong{color:#20384d}
+.empty-state{border-radius:8px;background:#f6f9f8}
+.modal::backdrop{background:#18364b88;backdrop-filter:blur(3px)}
+.modal-dismiss .icon-button{background:#edf3f4;color:#35566a;border-radius:6px}
+.auth-card{border-top:4px solid var(--school-green)}
+.role-home{
+  position:relative;
+  padding:8px 24px 32px;
+}
+.role-heading{margin-bottom:28px}
+.role-brand{display:none}
+.role-heading>.eyebrow{color:#55758a}
+.role-heading h1{font-size:48px;line-height:1.08}
+.role-heading>p{color:#5c7183}
+.role-card-grid{gap:16px}
+.role-choice{
+  min-height:276px;padding:22px;
+  border-radius:9px;box-shadow:0 9px 22px #17394d12;
+  transition:transform .18s,box-shadow .18s,border-color .18s;
+}
+.role-choice:hover{transform:translateY(-3px);box-shadow:0 17px 32px #17394d20}
+.role-buyer{background:#edf5ff;border-color:#c7dcf3}
+.role-owner{background:#fff4e9;border-color:#f1d1aa}
+.role-admin{background:#edf7f0;border-color:#c7e2ce}
+.role-choice-icon{
+  width:62px;height:62px;border-radius:13px;
+  box-shadow:0 4px 12px #17394d12;
+}
+.role-choice>strong{color:#20384d;font-size:20px;font-weight:900}
+.role-choice>small{color:#52697b;font-size:13px;line-height:1.55}
+.role-choice-action{border-radius:6px;background:var(--school-blue)}
+.role-owner .role-choice-action{background:var(--school-orange)}
+.role-admin .role-choice-action{background:var(--school-green)}
+.role-login,.runner-signup{color:#596f80}
+.text-button{color:#245d88}
+.role-tagline{
+  background:#3168a7;border-radius:7px;
+  box-shadow:0 5px 0 #214e81;
+}
+.role-home>.auth-card{background:#fff}
+.stall-status-notice{background:#fff7df;border-color:#e9cc78;border-left-color:#ce9630}
+.stall-status-notice strong{color:#785919}
+.stall-status-notice.is-paused{background:#fff0ea;border-color:#efc6ae;border-left-color:#c45d43}
+.stall-review-item,.feedback-entry{border-radius:7px;background:#fff}
+.stall-status-badge{border-radius:4px}
+.stall-hours-panel{border-top:3px solid #75b397}
+.order-estimate{width:fit-content;margin:10px 0 0;padding:7px 10px;border-radius:5px;background:#e5f2ea;color:#315f49;font-size:11px;font-weight:700}
+.pickup-slot-label{display:grid;gap:7px;margin:14px 0;color:#365368;font-size:11px;font-weight:800}
+.pickup-slot-label select{width:100%;padding:11px;border:1px solid #cfdde3;border-radius:6px;background:#fff;color:var(--ink)}
+.pickup-slot-label small{color:var(--muted);font-size:10px;font-weight:500}
+.stall-hours-form label input[name="pickup_slot_capacity"]{width:100px}
+.tag-picker{border-color:#d4e0e5;border-radius:6px}
+input,select,textarea{color:var(--ink)}
+input::placeholder,textarea::placeholder{color:#8b9aa5}
+@media(max-width:700px){
+  .topbar{height:68px}
+  .main-content{padding-top:26px}
+  .role-home{padding:0 0 24px}
+  .role-heading{margin-bottom:20px}
+  .role-brand{margin-bottom:17px}
+  .role-heading h1{font-size:34px}
+  .role-card-grid{gap:10px}
+  .role-choice{min-height:0;padding:14px;border-radius:8px}
+  .role-choice>strong{font-size:15px}
+  .role-choice>small{font-size:11px}
+  .product-details h3{font-size:12px}
+  .product-stall{font-size:9px}
+  .product-details>p{font-size:10px;line-height:1.4}
+  .product-bottom>strong{font-size:11px}
+  .button-small{font-size:10px;padding:7px 9px}
+  .product-bottom .button-small{font-size:10px;padding:7px 8px}
+  .filter-chip{font-size:10px;padding:7px 10px}
+  .order-items-summary{font-size:10px}
+  .order-subline{font-size:9px;line-height:1.45}
+  .result-count,.catalog-select{font-size:10px}
+  .site-footer{font-size:10px}
+  .site-footer{gap:10px;flex-wrap:wrap}
+}
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+}
+/* Public sign-in / role chooser, inspired by the supplied BiteHub reference. */
+#app.auth-open{min-height:100vh;background-color:#f7fbff;background-image:linear-gradient(#dce9f522 1px,transparent 1px),linear-gradient(90deg,#dce9f522 1px,transparent 1px),radial-gradient(ellipse at 50% 4%,#ffffff 0,#f7fbff 68%);background-size:28px 28px,28px 28px,auto}
+#app.auth-open .topbar,#app.auth-open .site-footer{display:none}
+#app.auth-open .main-content{width:100%;max-width:none;margin:0;padding:0;flex:none}
+.role-home{position:relative;isolation:isolate;min-height:100vh;overflow:hidden;padding:28px clamp(22px,6vw,92px) 28px;background:transparent}
+.role-home:before,.role-home:after{content:"";position:absolute;z-index:-1;width:340px;height:210px;border-radius:48%;pointer-events:none;opacity:.6}
+.role-home:before{top:-145px;left:-95px;background:#a9c5ff;transform:rotate(-25deg)}
+.role-home:after{right:-175px;bottom:-115px;background:#c6d5ff;transform:rotate(-28deg)}
+.auth-masthead{width:min(1360px,100%);margin:0 auto 18px;display:flex;align-items:center;justify-content:space-between;gap:22px}
+.auth-brand{gap:14px;font-size:clamp(25px,3.2vw,43px);color:#172b47}
+.auth-brand .brand-mark{width:clamp(50px,6vw,76px);height:clamp(50px,6vw,76px);border-radius:50%;box-shadow:none}
+.auth-brand .brand-light{color:#e45f48}
+.auth-brand small{font-size:clamp(9px,1.1vw,14px);letter-spacing:.03em;color:#315a91}
+.school-signature{display:flex;align-items:center;gap:12px;color:#173d76}
+.school-seal{width:67px;height:67px;display:block;flex:none;object-fit:contain;border:0;border-radius:0;background:transparent;box-shadow:none}
+.school-signature>span:last-child{display:grid;padding-left:12px;border-left:2px solid #244c85;font:700 clamp(13px,1.6vw,20px)/1.2 'Nunito Sans',sans-serif}
+.header-brand-group{display:flex;align-items:center;gap:clamp(12px,2vw,24px);min-width:0}.topbar-school{gap:8px}.topbar-school .school-seal{width:38px;height:38px}.topbar-school>span:last-child{gap:2px;padding-left:10px;border-left:1px solid #bdc9d1;font:700 10px/1.15 'Nunito Sans',sans-serif;color:#314c65}.topbar-school>span>small{color:#718398;font:800 7px 'DM Sans',sans-serif;letter-spacing:.12em}.topbar-school>span>strong{font-size:10px}
+.role-heading{position:relative;z-index:1;margin:0 auto 32px;text-align:center}
+.role-heading>.eyebrow{color:#315e9b;font-size:12px;letter-spacing:.09em}
+.role-heading h1{margin:4px 0;font-size:clamp(48px,6vw,76px);line-height:1.04;letter-spacing:-.055em;color:#172b47}
+.role-heading h1 span{color:#e45f48}
+.role-heading>p{margin:0;color:#153d78;font-size:clamp(17px,2vw,25px);font-weight:700}
+.role-heading .role-prompt{display:block;margin-top:7px;color:#647895;font-size:clamp(14px,1.5vw,19px);font-weight:600}
+.role-card-grid{width:min(1140px,100%);margin:0 auto;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:clamp(16px,2.4vw,36px);align-items:stretch}
+.role-choice{min-width:0;min-height:480px;padding:20px 20px 24px;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:8px;border:2px solid;border-radius:25px;box-shadow:0 14px 26px #18385214;cursor:pointer;overflow:hidden;transition:transform .18s,box-shadow .18s}
+.role-choice:hover{transform:translateY(-5px);box-shadow:0 19px 32px #18385222}
+.role-buyer{background:linear-gradient(180deg,#f5faff 0%,#e9f3ff 80%,#cfe5ff 100%);border-color:#a9d0ff}
+.role-owner{background:linear-gradient(180deg,#fffaf2 0%,#fff2df 80%,#ffdcaa 100%);border-color:#ffd197}
+.role-admin{background:linear-gradient(180deg,#f5fff8 0%,#e8f8ed 80%,#c9efd5 100%);border-color:#a8e1bd}
+.role-art{width:min(100%,235px);height:235px;display:grid;place-items:center;flex:none}
+.role-art svg{display:block;width:100%;height:100%;overflow:visible}
+.role-choice>strong{margin-top:3px;color:#172f53;font-size:clamp(19px,2vw,27px);font-weight:900;text-align:center}
+.role-choice>small{min-height:44px;color:#183e75;font-size:clamp(13px,1.2vw,16px);line-height:1.55;text-align:center}
+.role-choice-action{width:min(100%,260px);margin-top:auto;padding:13px 18px;display:flex;align-items:center;justify-content:center;gap:13px;border-radius:999px;background:#3473cb;color:#fff;font-size:16px;font-weight:900;text-transform:uppercase;box-shadow:0 5px 10px #1e4f8924}
+.role-owner .role-choice-action{background:#f47a1e}
+.role-admin .role-choice-action{background:#2e9d62}
+.role-choice-action b{font-size:22px;line-height:1}
+.role-login{margin:19px 0 0;text-align:center;color:#526c8d;font-size:13px}
+.role-tagline{width:min(760px,82%);margin:24px auto 0;padding:13px 20px;text-align:center;border-radius:50% 50% 0 0;background:linear-gradient(90deg,#3169bc,#4b9be7,#3169bc);color:#fff;font:600 clamp(16px,2vw,23px) 'Nunito Sans',sans-serif;box-shadow:0 -4px 0 #8bc1ff}
+.role-tagline i{padding:0 9px;color:#ffe29a;font-style:normal}
+.role-tagline>span{padding:0 8px;color:#eaf4ff}
+.role-home>.auth-card{position:relative;width:min(490px,100%);margin:0 auto;padding:28px;background:#fff;border:1px solid #d6e3ed;border-top:4px solid #3473cb;border-radius:18px;box-shadow:0 14px 36px #18385218}
+.role-home>.auth-card .auth-back{margin-bottom:18px}
+.role-home>.auth-card .auth-footnote{color:#71849a}
+.role-home>.auth-card .button-primary{background:#2e9d62}
+@media(max-width:760px){.role-home{padding:20px 18px 28px}.auth-masthead{margin-bottom:26px}.school-seal{width:52px;height:52px;font-size:13px}.role-heading{margin-bottom:22px}.role-card-grid{max-width:520px;grid-template-columns:1fr;gap:14px}.role-choice{min-height:0;display:grid;grid-template-columns:110px minmax(0,1fr);grid-template-rows:auto auto 1fr;column-gap:14px;row-gap:4px;padding:13px 16px;border-radius:18px;text-align:left}.role-art{grid-column:1;grid-row:1/4;width:110px;height:118px}.role-choice>strong{align-self:end;margin:0;text-align:left;font-size:19px}.role-choice>small{min-height:0;text-align:left;font-size:12px}.role-choice-action{grid-column:2;width:100%;margin:6px 0 0;padding:9px 12px;font-size:12px}.role-tagline{width:min(460px,100%);margin-top:22px;border-radius:14px}.role-login,.runner-signup{font-size:12px}}
+@media(max-width:430px){.auth-brand{gap:8px;font-size:22px}.auth-brand .brand-mark{width:45px;height:45px}.auth-brand small{font-size:7px}.school-signature{gap:7px}.school-seal{width:43px;height:43px;border-width:3px;font-size:11px}.school-signature>span:last-child{padding-left:8px;font-size:11px}.role-home{padding:15px 12px 24px}.role-heading h1{font-size:42px}.role-heading>p{font-size:16px}.role-heading .role-prompt{font-size:13px}.role-card-grid{gap:10px}.role-choice{grid-template-columns:82px minmax(0,1fr);padding:10px 12px}.role-art{width:82px;height:100px}.role-choice>strong{font-size:16px}.role-choice>small{font-size:11px}.role-choice-action{font-size:11px;padding:8px}.role-tagline{font-size:15px;padding:11px 8px}}
+@media(max-width:700px){.topbar{height:70px;padding-left:4%;padding-right:4%}.header-brand-group{gap:10px}.header-brand-group>.brand{gap:8px;font-size:17px}.header-brand-group>.brand .brand-mark{width:39px;height:39px}.topbar-school .school-seal{width:32px;height:32px}.topbar-school>span:last-child{padding-left:7px;font-size:9px}.topbar-school>span>strong{font-size:9px}.header-brand-group>.brand small{font-size:6px;letter-spacing:.07em}}
+@media(max-width:430px){.topbar{padding-left:12px;padding-right:12px}.topbar-school{display:none}}
+@media(prefers-reduced-motion:reduce){.role-choice{transition:none}.role-choice:hover{transform:none}}

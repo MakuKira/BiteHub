@@ -1,1 +1,2 @@
-# BiteHub uses only Python's standard library.
+# Optional Web Push dependency; other BiteHub features use Python's standard library.
+cryptography>=42.0

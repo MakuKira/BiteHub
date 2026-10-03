@@ -3,3 +3,8 @@ __pycache__/
 bitehub.sqlite3
 bitehub.sqlite3-shm
 bitehub.sqlite3-wal
+.local-certs/
+desktop.ini
+assets/bitehub-local-root-ca.crt
+tmp/generate_local_cert.py
+tmp/pdfs/

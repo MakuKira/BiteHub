@@ -555,14 +555,16 @@ class Handler(BaseHTTPRequestHandler):
         stall_match = re.fullmatch(r"/api/stalls/(\d+)", path)
         if stall_match:
             with connect() as db:
-                stall = db.execute("""SELECT id,name,description,status,opens_at,closes_at FROM stalls
-                    WHERE id=? AND status='approved'""", (int(stall_match.group(1)),)).fetchone()
+                stall = db.execute("""SELECT s.id,s.name,s.description,s.status,s.opens_at,s.closes_at,
+                    u.name owner_name FROM stalls s JOIN users u ON u.id=s.owner_id
+                    WHERE s.id=? AND s.status='approved'""", (int(stall_match.group(1)),)).fetchone()
                 if not stall: raise ApiError(404, "Stall not found.")
                 products = db.execute("""SELECT p.id,p.name,p.description,p.category,p.price_cents,p.emoji,
                     p.available,p.stock_count,p.photo_type FROM products p WHERE p.stall_id=? AND p.available=1
                     ORDER BY p.category,p.name""", (stall["id"],)).fetchall()
                 payload = dict(stall)
                 payload["is_open"] = stall_is_open(stall["opens_at"], stall["closes_at"])
+                payload["menu_count"] = len(products)
                 payload["products"] = [{"id": p["id"], "name": p["name"], "description": p["description"],
                     "category": p["category"], "price": p["price_cents"] / 100, "emoji": p["emoji"],
                     "stock_count": p["stock_count"], "photo_url": f"/api/products/{p['id']}/photo" if p["photo_type"] else None}

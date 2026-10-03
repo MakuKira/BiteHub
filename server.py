@@ -123,6 +123,9 @@ def initialize():
         stall_columns = {row["name"] for row in db.execute("PRAGMA table_info(stalls)")}
         if "status" not in stall_columns:
             db.execute("ALTER TABLE stalls ADD COLUMN status TEXT NOT NULL DEFAULT 'approved' CHECK(status IN ('pending','approved','paused'))")
+        # Stall signup no longer requires an administrator's approval. Make
+        # stalls created by older versions visible after this upgrade.
+        db.execute("UPDATE stalls SET status='approved' WHERE status='pending'")
         for name, declaration in (
             ("opens_at", "TEXT NOT NULL DEFAULT '00:00'"),
             ("closes_at", "TEXT NOT NULL DEFAULT '23:59'"),
@@ -676,7 +679,7 @@ class Handler(BaseHTTPRequestHandler):
                 stall_rows = db.execute("""SELECT s.id,s.name,s.status,s.created_at,u.name owner_name,u.email owner_email,
                     COUNT(p.id) product_count FROM stalls s JOIN users u ON u.id=s.owner_id
                     LEFT JOIN products p ON p.stall_id=s.id GROUP BY s.id ORDER BY
-                    CASE s.status WHEN 'pending' THEN 0 WHEN 'paused' THEN 1 ELSE 2 END,s.name""").fetchall()
+                    CASE s.status WHEN 'paused' THEN 0 ELSE 1 END,s.name""").fetchall()
                 products = db.execute("SELECT COUNT(*) FROM products").fetchone()[0]
                 rows = db.execute("SELECT status,COUNT(*) count,COALESCE(SUM(total_cents),0) sales FROM orders GROUP BY status").fetchall()
                 paused = db.execute("SELECT value FROM settings WHERE key='ordering_paused'").fetchone()[0] == "true"
@@ -778,7 +781,7 @@ class Handler(BaseHTTPRequestHandler):
                 cur = db.execute("INSERT INTO users(name,email,password_hash,password_salt,role,created_at) VALUES(?,?,?,?,?,?)",
                                  (name,email,password_digest(password,salt),salt.hex(),role,now()))
                 user_id = cur.lastrowid
-                if role == "owner": db.execute("INSERT INTO stalls(owner_id,name,status,created_at) VALUES(?,?,'pending',?)", (user_id,stall_name,now()))
+                if role == "owner": db.execute("INSERT INTO stalls(owner_id,name,status,created_at) VALUES(?,?,'approved',?)", (user_id,stall_name,now()))
             self.send_json(201, {"user": self.current_user_from_id(user_id)}, self.create_session(user_id))
             return
         if path == "/api/login":

@@ -281,14 +281,12 @@ function renderAdmin(){
 }
 function renderStallApprovals(){
   const stalls=state.overview?.stall_list||[];
-  const pending=stalls.filter(stall=>stall.status==='pending').length;
-  return `<section class="panel stall-approvals"><div class="section-title"><div><span class="eyebrow">CAMPUS STALLS</span><h2>Stall approvals</h2></div><span class="result-count">${pending} pending</span></div>${stalls.length?`<div class="stall-review-list">${stalls.map(stall=>{const action=stall.status==='pending'?['approved','Approve stall']:stall.status==='approved'?['paused','Pause stall']:['approved','Resume stall'];return `<article class="stall-review-item"><div class="stall-review-copy"><strong>${esc(stall.name)}</strong><span>${esc(stall.owner_name)} · ${esc(stall.owner_email)}</span><small>${stall.product_count} menu ${stall.product_count===1?'item':'items'} · Joined ${new Date(stall.created_at).toLocaleDateString()}</small></div><span class="stall-status-badge status-${esc(stall.status)}">${esc(stall.status)}</span><button class="button ${stall.status==='pending'?'button-primary':'button-outline'} button-small" data-stall-status="${stall.id}" data-next-status="${action[0]}">${action[1]}</button></article>`}).join('')}</div>`:emptyState('⌂','No stall accounts yet','New owner registrations will appear here for review.')}</section>`;
+  return `<section class="panel stall-approvals"><div class="section-title"><div><span class="eyebrow">CAMPUS STALLS</span><h2>Stall status</h2></div><span class="result-count">${stalls.length} registered</span></div>${stalls.length?`<div class="stall-review-list">${stalls.map(stall=>{const paused=stall.status==='paused';const action=paused?['approved','Resume stall']:['paused','Pause stall'];return `<article class="stall-review-item"><div class="stall-review-copy"><strong>${esc(stall.name)}</strong><span>${esc(stall.owner_name)} · ${esc(stall.owner_email)}</span><small>${stall.product_count} menu ${stall.product_count===1?'item':'items'} · Joined ${new Date(stall.created_at).toLocaleDateString()}</small></div><span class="stall-status-badge status-${paused?'paused':'approved'}">${paused?'paused':'open'}</span><button class="button button-outline button-small" data-stall-status="${stall.id}" data-next-status="${action[0]}">${action[1]}</button></article>`}).join('')}</div>`:emptyState('⌂','No stall accounts yet','Registered stalls will appear here.')}</section>`;
 }
 function renderOwnerStallNotice(){
   const status=state.user.stall_status;
-  if(status==='approved')return;
-  const paused=status==='paused';
-  root.insertAdjacentHTML('afterbegin',`<aside class="stall-status-notice ${paused?'is-paused':''}"><strong>${paused?'Stall paused':'Approval pending'}</strong><p>${paused?'Customers cannot see or order from your stall while it is paused. Contact an administrator to resume it.':'Your stall is hidden from customers while an administrator reviews it. You can prepare your menu while you wait.'}</p></aside>`);
+  if(status!=='paused')return;
+  root.insertAdjacentHTML('afterbegin',`<aside class="stall-status-notice is-paused"><strong>Stall paused</strong><p>Customers cannot see or order from your stall while it is paused. Contact an administrator to resume it.</p></aside>`);
 }
 function render(){
   accountTools();
@@ -416,7 +414,7 @@ document.addEventListener('click',async e=>{
   const filter=e.target.closest('[data-filter]');if(filter){state.filter=filter.dataset.filter;renderBuyerView();return}
   const quant=e.target.closest('[data-quantity]');if(quant){changeQuantity(quant.dataset.id,Number(quant.dataset.quantity));return}
   const orderButton=e.target.closest('[data-order-action]');if(orderButton){orderButton.disabled=true;try{await orderAction(orderButton)}catch(error){toast(error.message);orderButton.disabled=false}return}
-  const stallStatus=e.target.closest('[data-stall-status]');if(stallStatus){stallStatus.disabled=true;try{await api(`/api/admin/stalls/${stallStatus.dataset.stallStatus}`,{method:'PATCH',body:json({status:stallStatus.dataset.nextStatus})});toast(stallStatus.dataset.nextStatus==='approved'?'Stall approved and visible to customers.':stallStatus.dataset.nextStatus==='paused'?'Stall paused.':'Stall resumed.');await refresh()}catch(error){toast(error.message);stallStatus.disabled=false}return}
+  const stallStatus=e.target.closest('[data-stall-status]');if(stallStatus){stallStatus.disabled=true;try{await api(`/api/admin/stalls/${stallStatus.dataset.stallStatus}`,{method:'PATCH',body:json({status:stallStatus.dataset.nextStatus})});toast(stallStatus.dataset.nextStatus==='paused'?'Stall paused; customers can’t order from it.':'Stall resumed and visible to customers.');await refresh()}catch(error){toast(error.message);stallStatus.disabled=false}return}
   const remove=e.target.closest('[data-delete-product]');if(remove){if(!confirm('Remove this item from your menu?'))return;try{await api(`/api/products/${remove.dataset.deleteProduct}`,{method:'DELETE'});toast('Menu item removed.');await refresh()}catch(error){toast(error.message)}return}
   const action=e.target.closest('[data-action]');if(!action)return;
   if(action.dataset.action==='open-cart'){renderCart();return}
@@ -456,7 +454,7 @@ document.addEventListener('submit',async e=>{
       values.allergen_tags=formData.getAll('allergen_tags');
     }
     if(form.dataset.form==='login'||form.dataset.form==='signup'){
-      const result=await api(`/api/${form.dataset.form}`,{method:'POST',body:json(values)});state.user=result.user;startAutoRefresh();$('#auth-dialog').close();toast(form.dataset.form==='signup'&&result.user.role==='owner'?'Stall account created. Waiting for admin approval.':form.dataset.form==='signup'?'Your account is ready.':'Welcome back.');await refresh();loadNotificationState();return;
+      const result=await api(`/api/${form.dataset.form}`,{method:'POST',body:json(values)});state.user=result.user;startAutoRefresh();$('#auth-dialog').close();toast(form.dataset.form==='signup'&&result.user.role==='owner'?'Stall account created. Your stall is now open to customers.':form.dataset.form==='signup'?'Your account is ready.':'Welcome back.');await refresh();loadNotificationState();return;
     }
     if(form.dataset.form==='product'){
       values.price=Number(values.price);const result=await api('/api/products',{method:'POST',body:json(values)});toast(`${result.product.name} added to your menu.`);await refresh();return;

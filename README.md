@@ -25,9 +25,9 @@ Push notifications require a secure browser origin: `localhost` works for develo
 - **Campus customer:** browse a stall-balanced rotating catalog, explore one stall at a time, filter dietary labels and allergens, view item details, choose capacity-limited 30-minute pickup windows or campus delivery, receive status alerts and ready-time estimates, and review completed orders.
 - **Stall owner:** create a stall account, prepare a menu while awaiting approval, set opening hours, typical prep time, per-window pickup limits, and stock counts, upload optional JPG/PNG/WebP menu photos (up to 2 MB each), disclose dietary/allergen information, edit items, accept orders, assign delivery orders to a runner, and read customer feedback.
 - **Campus runner:** see assigned runs and update pickup and delivery progress.
-- **Administrator:** approve or pause stalls, review campus activity, and pause or resume ordering.
+- **Administrator:** pause or resume stalls, review campus activity, and pause or resume ordering.
 
-Customers, stall owners, and runners can create accounts from the role chooser. Stall owners can self-register; there is no public cap on the number of owner accounts. New stalls stay hidden from customers until an administrator approves them. Administrator accounts are deliberately not available through public signup. Create one from PowerShell with:
+Customers, stall owners, and runners can create accounts from the role chooser. Stall owners can self-register; their stalls appear to customers as soon as signup is complete. Administrators can pause a stall if needed, and paused stalls stay hidden until resumed. Administrator accounts are deliberately not available through public signup. Create one from PowerShell with:
 
 ```powershell
 .\start.ps1 --create-admin

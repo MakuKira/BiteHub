@@ -1,46 +1,317 @@
-<mxfile host="app.diagrams.net" modified="2026-10-03T00:00:00.000Z" agent="Codex" version="24.7.17" type="device">
-  <diagram id="bitehub-full-framework" name="BiteHub Full Framework">
-    <mxGraphModel dx="1640" dy="1080" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1680" pageHeight="1120" math="0" shadow="0">
-      <root>
-        <mxCell id="0"/><mxCell id="1" parent="0"/>
-        <mxCell id="title" value="BITEHUB · FULL FRAMEWORK FLOW" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=26;fontStyle=1;fontColor=#20384d;" vertex="1" parent="1"><mxGeometry x="40" y="20" width="780" height="45" as="geometry"/></mxCell>
-        <mxCell id="subtitle" value="3 campus sign-in paths + restricted administrator access · browser → Python API → SQLite → role-specific updates" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=13;fontColor=#617486;" vertex="1" parent="1"><mxGeometry x="42" y="62" width="1120" height="30" as="geometry"/></mxCell>
-        <mxCell id="entry" value="&lt;b&gt;BROWSER / START&lt;/b&gt;&lt;br&gt;BiteHub landing page&lt;br&gt;Sign in or create account" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#20384d;fontColor=#ffffff;strokeColor=#20384d;fontSize=15;spacing=12;" vertex="1" parent="1"><mxGeometry x="40" y="460" width="180" height="100" as="geometry"/></mxCell>
-
-        <mxCell id="buyerAuth" value="&lt;b&gt;CUSTOMER LOGIN / SIGNUP&lt;/b&gt;&lt;br&gt;Public account · buyer role" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#edf5ff;fontColor=#20384d;strokeColor=#8eb5df;fontSize=13;spacing=10;" vertex="1" parent="1"><mxGeometry x="280" y="150" width="230" height="72" as="geometry"/></mxCell>
-        <mxCell id="ownerAuth" value="&lt;b&gt;STALL OWNER LOGIN / SIGNUP&lt;/b&gt;&lt;br&gt;Public account · owner role" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff4e9;fontColor=#20384d;strokeColor=#e6aa73;fontSize=13;spacing=10;" vertex="1" parent="1"><mxGeometry x="280" y="360" width="230" height="72" as="geometry"/></mxCell>
-        <mxCell id="runnerAuth" value="&lt;b&gt;CAMPUS RUNNER LOGIN / SIGNUP&lt;/b&gt;&lt;br&gt;Public account · runner role" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eaf6f5;fontColor=#20384d;strokeColor=#78b8b5;fontSize=13;spacing=10;" vertex="1" parent="1"><mxGeometry x="280" y="570" width="230" height="72" as="geometry"/></mxCell>
-        <mxCell id="adminAuth" value="&lt;b&gt;ADMINISTRATOR LOGIN&lt;/b&gt;&lt;br&gt;Restricted · no public signup&lt;br&gt;Account created from server CLI" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#edf7f0;fontColor=#20384d;strokeColor=#82bd96;fontSize=13;spacing=10;" vertex="1" parent="1"><mxGeometry x="280" y="780" width="230" height="82" as="geometry"/></mxCell>
-
-        <mxCell id="buyerUI" value="&lt;b&gt;CUSTOMER EXPERIENCE&lt;/b&gt;&lt;br&gt;Browse/filter menu · view stall hours&lt;br&gt;Cart → choose pickup slot or delivery&lt;br&gt;Place order · track status · submit review" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f7fbff;fontColor=#20384d;strokeColor=#8eb5df;fontSize=13;spacing=10;" vertex="1" parent="1"><mxGeometry x="565" y="130" width="280" height="112" as="geometry"/></mxCell>
-        <mxCell id="ownerUI" value="&lt;b&gt;STALL OWNER WORKSPACE&lt;/b&gt;&lt;br&gt;Create/edit menu · stock · dietary/allergens&lt;br&gt;Set opening hours, prep time, slot capacity&lt;br&gt;Accept/decline → prepare → ready&lt;br&gt;Assign delivery runner · read feedback" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fffaf5;fontColor=#20384d;strokeColor=#e6aa73;fontSize=13;spacing=10;" vertex="1" parent="1"><mxGeometry x="565" y="330" width="280" height="132" as="geometry"/></mxCell>
-        <mxCell id="runnerUI" value="&lt;b&gt;RUNNER WORKSPACE&lt;/b&gt;&lt;br&gt;See assigned delivery runs&lt;br&gt;Ready → picked up / out → delivered&lt;br&gt;Only assigned orders are actionable" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5fbfa;fontColor=#20384d;strokeColor=#78b8b5;fontSize=13;spacing=10;" vertex="1" parent="1"><mxGeometry x="565" y="550" width="280" height="100" as="geometry"/></mxCell>
-        <mxCell id="adminUI" value="&lt;b&gt;ADMIN WORKSPACE&lt;/b&gt;&lt;br&gt;Approve/pause stalls · pause/resume ordering&lt;br&gt;Review campus orders and activity totals" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5fbf6;fontColor=#20384d;strokeColor=#82bd96;fontSize=13;spacing=10;" vertex="1" parent="1"><mxGeometry x="565" y="770" width="280" height="92" as="geometry"/></mxCell>
-
-        <mxCell id="api" value="&lt;b&gt;PYTHON SERVER · server.py&lt;/b&gt;&lt;br&gt;HTTP API + role/ownership checks&lt;br&gt;Password hashing · session lookup&lt;br&gt;Validates orders, stock, hours, capacity&lt;br&gt;Applies order status transitions&lt;br&gt;Serves app.js, HTML, CSS, logo" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e9f0f5;fontColor=#20384d;strokeColor=#3168a7;fontSize=14;spacing=12;" vertex="1" parent="1"><mxGeometry x="930" y="385" width="270" height="210" as="geometry"/></mxCell>
-        <mxCell id="db" value="&lt;b&gt;SQLITE DATABASE&lt;/b&gt;&lt;br&gt;bitehub.sqlite3 · WAL mode&lt;br&gt;&lt;br&gt;&lt;b&gt;users&lt;/b&gt; · salted password hashes · roles&lt;br&gt;&lt;b&gt;sessions&lt;/b&gt; · hashed token · expiry&lt;br&gt;&lt;b&gt;stalls&lt;/b&gt; · approval · hours · capacity&lt;br&gt;&lt;b&gt;products&lt;/b&gt; · prices · stock · food tags&lt;br&gt;&lt;b&gt;orders / order_items&lt;/b&gt; · status · totals&lt;br&gt;&lt;b&gt;feedback&lt;/b&gt; · ratings · comments&lt;br&gt;&lt;b&gt;settings&lt;/b&gt; · global ordering pause" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#fff7df;fontColor=#20384d;strokeColor=#d1a83e;fontSize=13;spacing=12;" vertex="1" parent="1"><mxGeometry x="1290" y="330" width="330" height="330" as="geometry"/></mxCell>
-        <mxCell id="rules" value="&lt;b&gt;CORE DATA RULES&lt;/b&gt;&lt;br&gt;• Buyer orders one stall per order&lt;br&gt;• Stock reserved at checkout&lt;br&gt;• Pickup slot capacity checked on server&lt;br&gt;• Stall must be approved, open, and available&lt;br&gt;• Owner can update only their stall/orders&lt;br&gt;• Runner can advance only assigned delivery&lt;br&gt;• Admin actions require admin role" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;fontColor=#40596c;strokeColor=#cbd9df;fontSize=12;align=left;spacing=12;" vertex="1" parent="1"><mxGeometry x="930" y="700" width="690" height="155" as="geometry"/></mxCell>
-        <mxCell id="legend" value="&lt;b&gt;FLOW KEY&lt;/b&gt;  &lt;font color='#3168a7'&gt;━━&gt; API request / data write&lt;/font&gt;     &lt;font color='#738797'&gt;┄┄&gt; response / refreshed view&lt;/font&gt;     &lt;font color='#167a61'&gt;Role access is enforced by the server&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8fafb;fontColor=#40596c;strokeColor=#d9e4e7;fontSize=12;spacing=10;" vertex="1" parent="1"><mxGeometry x="40" y="970" width="900" height="50" as="geometry"/></mxCell>
-
-        <mxCell id="e1" edge="1" parent="1" source="entry" target="buyerAuth" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#3168a7;strokeWidth=2;endArrow=block;endFill=1;"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e2" edge="1" parent="1" source="entry" target="ownerAuth" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#e8793d;strokeWidth=2;endArrow=block;endFill=1;"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e3" edge="1" parent="1" source="entry" target="runnerAuth" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#278887;strokeWidth=2;endArrow=block;endFill=1;"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e4" edge="1" parent="1" source="entry" target="adminAuth" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#167a61;strokeWidth=2;endArrow=block;endFill=1;"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e5" edge="1" parent="1" source="buyerAuth" target="buyerUI" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#3168a7;strokeWidth=2;endArrow=block;endFill=1;"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e6" edge="1" parent="1" source="ownerAuth" target="ownerUI" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#e8793d;strokeWidth=2;endArrow=block;endFill=1;"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e7" edge="1" parent="1" source="runnerAuth" target="runnerUI" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#278887;strokeWidth=2;endArrow=block;endFill=1;"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e8" edge="1" parent="1" source="adminAuth" target="adminUI" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#167a61;strokeWidth=2;endArrow=block;endFill=1;"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e9" value="JSON / cookie" edge="1" parent="1" source="buyerUI" target="api" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#3168a7;strokeWidth=2;endArrow=block;endFill=1;fontSize=10;fontColor=#3168a7;labelBackgroundColor=#ffffff;"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e10" value="JSON / cookie" edge="1" parent="1" source="ownerUI" target="api" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#e8793d;strokeWidth=2;endArrow=block;endFill=1;fontSize=10;fontColor=#9a582e;labelBackgroundColor=#ffffff;"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e11" value="JSON / cookie" edge="1" parent="1" source="runnerUI" target="api" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#278887;strokeWidth=2;endArrow=block;endFill=1;fontSize=10;fontColor=#278887;labelBackgroundColor=#ffffff;"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e12" value="JSON / cookie" edge="1" parent="1" source="adminUI" target="api" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#167a61;strokeWidth=2;endArrow=block;endFill=1;fontSize=10;fontColor=#167a61;labelBackgroundColor=#ffffff;"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e13" value="queries / transactions" edge="1" parent="1" source="api" target="db" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#3168a7;strokeWidth=3;endArrow=block;endFill=1;fontSize=11;fontColor=#3168a7;labelBackgroundColor=#ffffff;"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e14" value="data / status" edge="1" parent="1" source="db" target="api" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#738797;strokeWidth=2;dashed=1;endArrow=block;endFill=1;fontSize=10;fontColor=#607789;labelBackgroundColor=#ffffff;"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e15" value="role-specific response" edge="1" parent="1" source="api" target="buyerUI" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#738797;strokeWidth=1;dashed=1;endArrow=block;endFill=1;fontSize=9;fontColor=#607789;labelBackgroundColor=#ffffff;"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e16" value="role-specific response" edge="1" parent="1" source="api" target="ownerUI" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#738797;strokeWidth=1;dashed=1;endArrow=block;endFill=1;fontSize=9;fontColor=#607789;labelBackgroundColor=#ffffff;"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e17" value="role-specific response" edge="1" parent="1" source="api" target="runnerUI" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#738797;strokeWidth=1;dashed=1;endArrow=block;endFill=1;fontSize=9;fontColor=#607789;labelBackgroundColor=#ffffff;"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e18" value="role-specific response" edge="1" parent="1" source="api" target="adminUI" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#738797;strokeWidth=1;dashed=1;endArrow=block;endFill=1;fontSize=9;fontColor=#607789;labelBackgroundColor=#ffffff;"><mxGeometry relative="1" as="geometry"/></mxCell>
-      </root>
-    </mxGraphModel>
-  </diagram>
+<mxfile host="65bd71144e">
+    <diagram id="bitehub-three-role-flow" name="BiteHub Three-Role Flowchart">
+        <mxGraphModel dx="5180" dy="1955" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="2500" pageHeight="2200" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="buyerLane" collapsed="1" parent="1" style="swimlane;horizontal=0;startSize=55;whiteSpace=wrap;html=1;fillColor=#f5f9ff;strokeColor=#8eb5df;fontColor=#20384d;fontSize=22;spacing=12;fontStyle=1;" value="BUYER" vertex="1">
+                    <mxGeometry height="130" width="70" x="-600" y="100" as="geometry">
+                        <mxRectangle height="1690" width="900" x="-600" y="100" as="alternateBounds"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="bBrowse" parent="buyerLane" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff;strokeColor=#8eb5df;fontColor=#20384d;fontSize=19;spacing=12;" value="Browse available campus stalls&lt;br&gt;Search or filter food listings" vertex="1">
+                    <mxGeometry height="95" width="560" x="-90" y="300" as="geometry"/>
+                </mxCell>
+                <mxCell id="bSelect" parent="buyerLane" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff;strokeColor=#8eb5df;fontColor=#20384d;fontSize=18;spacing=12;" value="Open a stall and choose food&lt;br&gt;Review description, price, stock and food info" vertex="1">
+                    <mxGeometry height="110" width="560" x="-410" y="450" as="geometry"/>
+                </mxCell>
+                <mxCell id="b6" edge="1" parent="buyerLane" source="bBrowse" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#516879;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#516879;labelBackgroundColor=#ffffff;" target="bSelect" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="bPickup" parent="buyerLane" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff;strokeColor=#8eb5df;fontColor=#20384d;fontSize=18;spacing=12;fontStyle=1;" value="PICKUP&lt;br&gt;Select an available 30-minute slot" vertex="1">
+                    <mxGeometry height="105" width="330" x="220" y="960" as="geometry"/>
+                </mxCell>
+                <mxCell id="bFulfill" parent="buyerLane" style="rhombus;whiteSpace=wrap;html=1;fillColor=#edf5ff;strokeColor=#8eb5df;fontColor=#20384d;fontSize=20;spacing=12;fontStyle=1;" value="Choose pickup or&lt;br&gt;PNS campus delivery" vertex="1">
+                    <mxGeometry height="120" width="370" x="470" y="530" as="geometry"/>
+                </mxCell>
+                <mxCell id="b9" edge="1" parent="buyerLane" source="bFulfill" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#3168a7;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#3168a7;labelBackgroundColor=#ffffff;" target="bPickup" value="Pickup">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ownerLane" collapsed="1" parent="1" style="swimlane;horizontal=0;startSize=55;whiteSpace=wrap;html=1;fillColor=#fff8f1;strokeColor=#e6aa73;fontColor=#20384d;fontSize=22;spacing=12;fontStyle=1;" value="STALL OWNER" vertex="1">
+                    <mxGeometry height="210" width="70" x="680" y="150" as="geometry">
+                        <mxRectangle height="1785" width="790" x="680" y="150" as="alternateBounds"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="oLogin" parent="ownerLane" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff4e9;strokeColor=#e6aa73;fontColor=#20384d;fontSize=19;spacing=12;fontStyle=1;" value="STALL OWNER LOGIN / SIGN UP&lt;br&gt;Create stall account or sign in" vertex="1">
+                    <mxGeometry height="100" width="560" x="125" y="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="adminLane" collapsed="1" parent="1" style="swimlane;horizontal=0;startSize=55;whiteSpace=wrap;html=1;fillColor=#f4faf5;strokeColor=#82bd96;fontColor=#20384d;fontSize=22;spacing=12;fontStyle=1;" value="ADMIN" vertex="1">
+                    <mxGeometry height="120" width="70" x="2600" y="700" as="geometry">
+                        <mxRectangle height="1785" width="790" x="1650" y="180" as="alternateBounds"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="aErr" parent="adminLane" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff0ef;strokeColor=#d68c83;fontColor=#20384d;fontSize=18;spacing=12;" value="Access denied&lt;br&gt;Retry or contact system administrator" vertex="1">
+                    <mxGeometry height="90" width="560" x="40" y="230" as="geometry"/>
+                </mxCell>
+                <mxCell id="aManage" parent="adminLane" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff;strokeColor=#82bd96;fontColor=#20384d;fontSize=18;spacing=12;" value="Manage service availability&lt;br&gt;Pause / resume campus ordering&lt;br&gt;Pause / resume a stall" vertex="1">
+                    <mxGeometry height="125" width="560" x="138" y="632.5" as="geometry"/>
+                </mxCell>
+                <mxCell id="aEnd" parent="adminLane" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e4f4e9;strokeColor=#72ac88;fontColor=#20384d;fontSize=18;spacing=12;fontStyle=1;" value="END ADMIN SESSION&lt;br&gt;Saved data remains available next login" vertex="1">
+                    <mxGeometry height="90" width="560" x="145" y="1150" as="geometry"/>
+                </mxCell>
+                <mxCell id="start" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#20384d;strokeColor=#20384d;fontColor=#ffffff;fontSize=22;spacing=12;fontStyle=1;" value="START · OPEN BITEHUB" vertex="1">
+                    <mxGeometry height="78" width="680" x="990" y="-710" as="geometry"/>
+                </mxCell>
+                <mxCell id="s1" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#516879;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#516879;labelBackgroundColor=#ffffff;" target="roleChoice" value="">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1320" y="-620"/>
+                            <mxPoint x="1320" y="-660"/>
+                            <mxPoint x="1300" y="-660"/>
+                            <mxPoint x="1300" y="-236.75"/>
+                            <mxPoint x="1270" y="-236.75"/>
+                        </Array>
+                        <mxPoint x="1290" y="-620" as="sourcePoint"/>
+                        <mxPoint x="1320" y="-236.76470588235293" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="bLogin" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#edf5ff;strokeColor=#8eb5df;fontColor=#20384d;fontSize=19;spacing=12;fontStyle=1;" value="BUYER LOGIN / SIGN UP&lt;br&gt;Sign in or create buyer account" vertex="1">
+                    <mxGeometry height="100" width="560" x="-580" y="-350" as="geometry"/>
+                </mxCell>
+                <mxCell id="bErr" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff0ef;strokeColor=#d68c83;fontColor=#20384d;fontSize=18;spacing=12;" value="Show sign-in error&lt;br&gt;Correct details and retry" vertex="1">
+                    <mxGeometry height="85" width="560" x="-1080" y="-60" as="geometry"/>
+                </mxCell>
+                <mxCell id="bOrder" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e4f4e9;strokeColor=#72ac88;fontColor=#20384d;fontSize=18;spacing=12;fontStyle=1;" value="PLACE ORDER&lt;br&gt;Server calculates total, saves order/items&lt;br&gt;and reserves available stock" vertex="1">
+                    <mxGeometry height="105" width="560" x="-570" y="2680" as="geometry"/>
+                </mxCell>
+                <mxCell id="b1" edge="1" parent="1" source="roleChoice" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#3168a7;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#3168a7;labelBackgroundColor=#ffffff;" target="bLogin" value="Buyer">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="b2" edge="1" parent="1" source="bLogin" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#516879;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#516879;labelBackgroundColor=#ffffff;" target="bAuth" value="">
+                    <mxGeometry relative="1" x="-0.0477" as="geometry">
+                        <mxPoint as="offset"/>
+                        <Array as="points">
+                            <mxPoint x="-299.92" y="-129.92"/>
+                            <mxPoint x="110.08" y="-129.92"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="zt3onbwltbXiLuop-099-5" connectable="0" parent="b2" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" value="Text" vertex="1">
+                    <mxGeometry relative="1" x="0.0376" y="-12" as="geometry">
+                        <mxPoint x="1" as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="b3" edge="1" parent="1" source="bAuth" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#b65d56;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#b65d56;labelBackgroundColor=#ffffff;" target="bErr" value="No">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="b4" edge="1" parent="1" source="bErr" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#b65d56;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#b65d56;labelBackgroundColor=#ffffff;" target="bLogin" value="Retry">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="b8" edge="1" parent="1" source="bCart" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#516879;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#516879;labelBackgroundColor=#ffffff;" target="bFulfill" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="b12" edge="1" parent="1" source="bDelivery" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#516879;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#516879;labelBackgroundColor=#ffffff;" target="bChecks" value="">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="235" y="1310.11"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="b13" edge="1" parent="1" source="bChecks" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#516879;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#516879;labelBackgroundColor=#ffffff;" target="bCheckResult" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="b14" edge="1" parent="1" source="bCheckResult" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#167a61;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#167a61;labelBackgroundColor=#ffffff;" target="bOrder" value="Yes">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="b15" edge="1" parent="1" source="bCheckResult" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#b65d56;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#b65d56;labelBackgroundColor=#ffffff;" target="bCorrect" value="No">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="b16" edge="1" parent="1" source="bCorrect" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#b65d56;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#b65d56;labelBackgroundColor=#ffffff;" target="bFulfill" value="Fix and retry">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="-419.89" y="1470.11"/>
+                            <mxPoint x="55" y="1470.11"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="oSetup" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff;strokeColor=#e6aa73;fontColor=#20384d;fontSize=18;spacing=12;" value="Create stall profile&lt;br&gt;Stall name, description, hours and pickup point" vertex="1">
+                    <mxGeometry height="105" width="560" x="975" y="380" as="geometry"/>
+                </mxCell>
+                <mxCell id="oMenu" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff;strokeColor=#e6aa73;fontColor=#20384d;fontSize=18;spacing=12;" value="Build and update menu&lt;br&gt;Photos · item details · prices · stock&lt;br&gt;Dietary and allergen information" vertex="1">
+                    <mxGeometry height="125" width="560" x="975" y="515" as="geometry"/>
+                </mxCell>
+                <mxCell id="oIncoming" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff1e4;strokeColor=#e6aa73;fontColor=#20384d;fontSize=19;spacing=12;fontStyle=1;" value="NEW ORDER ALERT&lt;br&gt;Review items, quantities, total&lt;br&gt;and selected fulfillment type" vertex="1">
+                    <mxGeometry height="115" width="560" x="975" y="670" as="geometry"/>
+                </mxCell>
+                <mxCell id="oAccept" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff;strokeColor=#e6aa73;fontColor=#20384d;fontSize=19;spacing=12;fontStyle=1;" value="Accept this order?" vertex="1">
+                    <mxGeometry height="110" width="360" x="1075" y="820" as="geometry"/>
+                </mxCell>
+                <mxCell id="oDecline" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff0ef;strokeColor=#d68c83;fontColor=#20384d;fontSize=18;spacing=12;fontStyle=1;" value="DECLINE ORDER&lt;br&gt;Buyer receives update&lt;br&gt;Order ends" vertex="1">
+                    <mxGeometry height="120" width="275" x="722.5" y="980" as="geometry"/>
+                </mxCell>
+                <mxCell id="oPrepare" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fffaf5;strokeColor=#e6aa73;fontColor=#20384d;fontSize=18;spacing=12;fontStyle=1;" value="ACCEPT · CONFIRM ORDER&lt;br&gt;Prepare food · set ready estimate&lt;br&gt;Update order to Preparing" vertex="1">
+                    <mxGeometry height="120" width="405" x="1420" y="980" as="geometry"/>
+                </mxCell>
+                <mxCell id="oReady" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff1e4;strokeColor=#e6aa73;fontColor=#20384d;fontSize=18;spacing=12;fontStyle=1;" value="Mark order READY&lt;br&gt;Buyer receives status notification" vertex="1">
+                    <mxGeometry height="95" width="560" x="810" y="1180" as="geometry"/>
+                </mxCell>
+                <mxCell id="oMethod" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff;strokeColor=#e6aa73;fontColor=#20384d;fontSize=19;spacing=12;fontStyle=1;" value="Pickup or delivery?" vertex="1">
+                    <mxGeometry height="110" width="360" x="680" y="1450" as="geometry"/>
+                </mxCell>
+                <mxCell id="oPickup" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#edf5ff;strokeColor=#8eb5df;fontColor=#20384d;fontSize=17;spacing=12;fontStyle=1;" value="PICKUP HANDOFF&lt;br&gt;Buyer collects from stall&lt;br&gt;at chosen pickup time" vertex="1">
+                    <mxGeometry height="125" width="275" x="360" y="1710" as="geometry"/>
+                </mxCell>
+                <mxCell id="oDelivery" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e8f6f4;strokeColor=#78b8b5;fontColor=#20384d;fontSize=17;spacing=12;fontStyle=1;" value="CAMPUS DELIVERY HANDOFF&lt;br&gt;Stall owner brings order to&lt;br&gt;selected PNS campus point" vertex="1">
+                    <mxGeometry height="125" width="405" x="1450" y="1450" as="geometry"/>
+                </mxCell>
+                <mxCell id="oPayment" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff5da;strokeColor=#d1a83e;fontColor=#20384d;fontSize=18;spacing=12;fontStyle=1;" value="PAYMENT AT HANDOFF&lt;br&gt;Buyer pays stall directly&lt;br&gt;Owner confirms handoff / completion" vertex="1">
+                    <mxGeometry height="115" width="560" x="910" y="1910" as="geometry"/>
+                </mxCell>
+                <mxCell id="oFinish" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e4f4e9;strokeColor=#72ac88;fontColor=#20384d;fontSize=18;spacing=12;fontStyle=1;" value="ORDER COMPLETED&lt;br&gt;Buyer may leave a rating and comment&lt;br&gt;Owner can review customer feedback" vertex="1">
+                    <mxGeometry height="115" width="560" x="890" y="2410" as="geometry"/>
+                </mxCell>
+                <mxCell id="o2" edge="1" parent="1" source="oLogin" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#516879;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#516879;labelBackgroundColor=#ffffff;" target="oSetup" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="o3" edge="1" parent="1" source="oSetup" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#516879;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#516879;labelBackgroundColor=#ffffff;" target="oMenu" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="o4" edge="1" parent="1" source="oMenu" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#516879;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#516879;labelBackgroundColor=#ffffff;" target="oIncoming" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="o5" edge="1" parent="1" source="oIncoming" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#516879;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#516879;labelBackgroundColor=#ffffff;" target="oAccept" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="o6" edge="1" parent="1" source="oAccept" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#b65d56;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#b65d56;labelBackgroundColor=#ffffff;" target="oDecline" value="No">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="o7" edge="1" parent="1" source="oAccept" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#167a61;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#167a61;labelBackgroundColor=#ffffff;" target="oPrepare" value="Yes">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="o8" edge="1" parent="1" source="oPrepare" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#516879;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#516879;labelBackgroundColor=#ffffff;" target="oReady" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="o9" edge="1" parent="1" source="oReady" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#516879;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#516879;labelBackgroundColor=#ffffff;" target="oMethod" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="o10" edge="1" parent="1" source="oMethod" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#3168a7;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#3168a7;labelBackgroundColor=#ffffff;" target="oPickup" value="Pickup">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="o11" edge="1" parent="1" source="oMethod" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#278887;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#278887;labelBackgroundColor=#ffffff;" target="oDelivery" value="Delivery">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="o12" edge="1" parent="1" source="oPickup" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#516879;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#516879;labelBackgroundColor=#ffffff;" target="oPayment" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="o13" edge="1" parent="1" source="oDelivery" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#516879;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#516879;labelBackgroundColor=#ffffff;" target="oPayment" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="o14" edge="1" parent="1" source="oPayment" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#516879;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#516879;labelBackgroundColor=#ffffff;" target="oFinish" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="aLogin" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#edf7f0;strokeColor=#82bd96;fontColor=#20384d;fontSize=19;spacing=12;fontStyle=1;" value="ADMIN LOGIN&lt;br&gt;Restricted account&lt;br&gt;Created privately by system admin" vertex="1">
+                    <mxGeometry height="105" width="560" x="1600" y="-220" as="geometry"/>
+                </mxCell>
+                <mxCell id="aDashboard" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff;strokeColor=#82bd96;fontColor=#20384d;fontSize=19;spacing=12;fontStyle=1;" value="ADMIN DASHBOARD&lt;br&gt;Campus accounts · stalls · menu items&lt;br&gt;Orders and recorded sales totals" vertex="1">
+                    <mxGeometry height="125" width="560" x="2030" y="-40" as="geometry"/>
+                </mxCell>
+                <mxCell id="aReview" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff;strokeColor=#82bd96;fontColor=#20384d;fontSize=18;spacing=12;" value="Review campus order ledger&lt;br&gt;Monitor order status and activity totals" vertex="1">
+                    <mxGeometry height="105" width="560" x="2870" y="910" as="geometry"/>
+                </mxCell>
+                <mxCell id="aSave" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f1f7f2;strokeColor=#82bd96;fontColor=#20384d;fontSize=18;spacing=12;" value="Server checks admin permissions&lt;br&gt;Updated settings and order data persist&lt;br&gt;in the BiteHub database" vertex="1">
+                    <mxGeometry height="120" width="560" x="2500" y="1500" as="geometry"/>
+                </mxCell>
+                <mxCell id="a1" edge="1" parent="1" source="roleChoice" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#167a61;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#167a61;labelBackgroundColor=#ffffff;" target="aLogin" value="Admin">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="a2" edge="1" parent="1" source="aLogin" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#516879;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#516879;labelBackgroundColor=#ffffff;" target="aAuth" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="a4" edge="1" parent="1" source="aErr" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#b65d56;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#b65d56;labelBackgroundColor=#ffffff;" target="aLogin" value="Retry">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="a5" edge="1" parent="1" source="aAuth" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#167a61;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#167a61;labelBackgroundColor=#ffffff;" target="aDashboard" value="Yes">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="a6" edge="1" parent="1" source="aDashboard" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#516879;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#516879;labelBackgroundColor=#ffffff;" target="aManage" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="a7" edge="1" parent="1" source="aManage" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#516879;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#516879;labelBackgroundColor=#ffffff;" target="aReview" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="a8" edge="1" parent="1" source="aReview" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#516879;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#516879;labelBackgroundColor=#ffffff;" target="aSave" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="a9" edge="1" parent="1" source="aSave" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#516879;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#516879;labelBackgroundColor=#ffffff;" target="aEnd" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="x1" edge="1" parent="1" source="bOrder" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#3168a7;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#3168a7;labelBackgroundColor=#ffffff;dashed=1;" target="oIncoming" value="Order and owner alert">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="x2" edge="1" parent="1" source="oPrepare" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#e8793d;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#e8793d;labelBackgroundColor=#ffffff;dashed=1;" target="bOrder" value="Buyer receives status updates">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="-290" y="1030"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="x3" edge="1" parent="1" source="bCorrect" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#167a61;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#167a61;labelBackgroundColor=#ffffff;dashed=1;" target="bOrder" value="Service pause blocks new orders">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="aAuth" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff;strokeColor=#82bd96;fontColor=#20384d;fontSize=19;spacing=12;fontStyle=1;" value="Credentials valid?" vertex="1">
+                    <mxGeometry height="110" width="360" x="1940" y="420" as="geometry"/>
+                </mxCell>
+                <mxCell id="a3" edge="1" parent="1" source="aAuth" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#b65d56;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#b65d56;labelBackgroundColor=#ffffff;" target="aErr" value="No">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="roleChoice" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#eef3f6;strokeColor=#aabac4;fontColor=#20384d;fontSize=20;spacing=12;fontStyle=1;" value="Choose account role" vertex="1">
+                    <mxGeometry height="110" width="340" x="1140" y="-450" as="geometry"/>
+                </mxCell>
+                <mxCell id="o1" edge="1" parent="1" source="roleChoice" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#e8793d;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#e8793d;labelBackgroundColor=#ffffff;" target="oLogin" value="Stall Owner">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="bChecks" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f1f5f7;strokeColor=#7c929f;fontColor=#20384d;fontSize=18;spacing=12;fontStyle=1;" value="SERVER CHECKS&lt;br&gt;Ordering is open · stall is available&lt;br&gt;Stock is sufficient · pickup slot has room&lt;br&gt;Delivery coordinates are inside PNS" vertex="1">
+                    <mxGeometry height="150" width="560" x="-1670" y="1245" as="geometry"/>
+                </mxCell>
+                <mxCell id="b11" edge="1" parent="1" source="bPickup" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#516879;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#516879;labelBackgroundColor=#ffffff;" target="bChecks" value="">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="zt3onbwltbXiLuop-099-4" edge="1" parent="1" source="aManage" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#167a61;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#167a61;labelBackgroundColor=#ffffff;dashed=1;" target="bCorrect" value="">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="2635" y="860"/>
+                            <mxPoint x="-1050" y="860"/>
+                        </Array>
+                        <mxPoint x="1788" y="875" as="sourcePoint"/>
+                        <mxPoint x="470" y="2280" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="bCorrect" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff0ef;strokeColor=#d68c83;fontColor=#20384d;fontSize=17;spacing=12;" value="Explain the problem&lt;br&gt;Change cart, time slot or map point" vertex="1">
+                    <mxGeometry height="95" width="560" x="-1330" y="2200" as="geometry"/>
+                </mxCell>
+                <mxCell id="bCart" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff;strokeColor=#8eb5df;fontColor=#20384d;fontSize=18;spacing=12;" value="Add items to bag&lt;br&gt;One order can include items from one stall" vertex="1">
+                    <mxGeometry height="100" width="560" x="-1320" y="550" as="geometry"/>
+                </mxCell>
+                <mxCell id="b7" edge="1" parent="1" source="bSelect" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#516879;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#516879;labelBackgroundColor=#ffffff;" target="bCart" value="">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="-1040" y="230"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="bAuth" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff;strokeColor=#8eb5df;fontColor=#20384d;fontSize=19;spacing=12;fontStyle=1;" value="Credentials valid?" vertex="1">
+                    <mxGeometry height="110" width="360" x="-60" y="-60" as="geometry"/>
+                </mxCell>
+                <mxCell id="b5" edge="1" parent="1" source="bAuth" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#167a61;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#167a61;labelBackgroundColor=#ffffff;" target="bBrowse" value="Yes">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="0.08" y="517.46"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="bCheckResult" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff;strokeColor=#7c929f;fontColor=#20384d;fontSize=19;spacing=12;fontStyle=1;" value="All checks pass?" vertex="1">
+                    <mxGeometry height="110" width="360" x="-1570" y="1910" as="geometry"/>
+                </mxCell>
+                <mxCell id="zt3onbwltbXiLuop-099-3" edge="1" parent="1" source="bCheckResult" style="edgeStyle=orthogonalEdgeStyle;html=1;innerLoopWaypoints=1;exitX=0;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" target="bCheckResult">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="bDelivery" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff;strokeColor=#8eb5df;fontColor=#20384d;fontSize=17;spacing=12;fontStyle=1;" value="CAMPUS DELIVERY&lt;br&gt;Select handoff point on campus map&lt;br&gt;Off-campus point is rejected" vertex="1">
+                    <mxGeometry height="125" width="350" x="60" y="1065" as="geometry"/>
+                </mxCell>
+                <mxCell id="b10" edge="1" parent="1" source="bFulfill" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#3168a7;strokeWidth=2;endArrow=block;endFill=1;fontSize=15;fontColor=#3168a7;labelBackgroundColor=#ffffff;" target="bDelivery" value="Delivery">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
 </mxfile>

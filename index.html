@@ -12,15 +12,28 @@
   <link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
-  <link rel="stylesheet" href="app-ui.css">
+  <link rel="stylesheet" href="app-ui.css?v=brand-school-header-20261003">
   <link rel="stylesheet" href="experience.css">
   <link rel="stylesheet" href="school-theme.css">
-  <link rel="stylesheet" href="feature-ui.css?v=campus-picks-20261003">
+  <link rel="stylesheet" href="feature-ui.css?v=campus-music-20261003">
+  <link rel="stylesheet" href="stall-profile.css?v=stall-pages-20261003">
+  <link rel="stylesheet" href="opening-screen.css?v=school-name-size-20261003">
 </head>
 <body>
+  <div id="opening-splash" class="opening-splash" role="status" aria-label="Opening BiteHub">
+    <div class="opening-splash-card">
+      <div class="splash-brand-lockup">
+        <div class="splash-food-mark" aria-hidden="true"><img src="bitehub-mark.svg" alt=""><span>🥪</span><i>✦</i></div>
+        <div><small class="splash-kicker">YOUR CAMPUS FOOD HUB</small><h1>Bite<span>Hub</span></h1><p>Good breaks start here.</p></div>
+      </div>
+      <div class="splash-loading" aria-hidden="true"><i></i><i></i><i></i></div>
+      <div class="splash-school-lockup"><img src="assets/palawan-national-school-logo.webp" alt=""><span>Made for <strong>Palawan National School</strong></span></div>
+    </div>
+    <span class="splash-orb splash-orb-one" aria-hidden="true"></span><span class="splash-orb splash-orb-two" aria-hidden="true"></span>
+  </div>
   <div id="app" class="app-shell">
     <header class="topbar">
-      <div class="header-brand-group"><a class="brand" href="#home" aria-label="BiteHub home"><img class="brand-mark" src="bitehub-mark.svg" alt=""><span>Bite<span class="brand-light">Hub</span><small>CAMPUS FOOD · MADE EASY</small></span></a><div class="school-signature topbar-school" aria-label="Palawan National School campus"><img class="school-seal" src="assets/palawan-national-school-logo.webp" alt="Palawan National School crest"><span><small>ON CAMPUS AT</small><strong>Palawan National</strong><strong>School</strong></span></div></div>
+      <div class="header-brand-group"><a class="brand" href="#home" aria-label="BiteHub home"><img class="brand-mark" src="bitehub-mark.svg" alt=""><span class="brand-copy"><span class="brand-name">Bite<span class="brand-light">Hub</span></span><small>CAMPUS FOOD · MADE EASY</small></span></a><div class="school-signature topbar-school" aria-label="Palawan National School campus"><img class="school-seal" src="assets/palawan-national-school-logo.webp" alt="Palawan National School crest"><span><small>ON CAMPUS AT</small><strong>Palawan National School</strong></span></div></div>
       <div id="account-tools" class="account-tools" hidden></div>
     </header>
     <main id="view-content" class="main-content" tabindex="-1"><div class="loading-state"><img class="brand-mark" src="bitehub-mark.svg" alt=""><p>Connecting to your campus hub…</p></div></main>
@@ -32,6 +45,16 @@
   <dialog id="stall-dialog" class="modal stall-modal"><div id="stall-content"></div></dialog>
   <dialog id="auth-dialog" class="modal auth-modal"></dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="app.js?v=campus-picks-20261003" defer></script>
+  <aside class="campus-music" aria-label="Background music">
+    <button id="music-toggle" class="music-toggle" type="button" aria-pressed="false" aria-label="Play soft background music">
+      <span class="music-toggle-icon" aria-hidden="true">♫</span>
+      <span id="music-label">Play soft music</span>
+    </button>
+    <label class="music-volume-label" for="music-volume">Volume</label>
+    <input id="music-volume" class="music-volume" type="range" min="0" max="16" value="8" aria-label="Background music volume">
+    <span id="music-track" class="music-track" aria-live="polite"></span>
+  </aside>
+<script src="app.js?v=opening-splash-5sec-20261003" defer></script>
 </body>
 </html>
+

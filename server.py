@@ -70,11 +70,11 @@ def initialize():
                                         closes_at TEXT NOT NULL DEFAULT '23:59', prep_minutes INTEGER NOT NULL DEFAULT 15
                                             CHECK(prep_minutes BETWEEN 1 AND 180), pickup_slot_capacity INTEGER NOT NULL DEFAULT 4
                                             CHECK(pickup_slot_capacity BETWEEN 1 AND 100), pickup_lat REAL, pickup_lon REAL,
-                                            created_at TEXT NOT NULL
+                                            logo_data BLOB, logo_type TEXT, created_at TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS products (
           id INTEGER PRIMARY KEY, stall_id INTEGER NOT NULL REFERENCES stalls(id) ON DELETE CASCADE,
-          name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', category TEXT NOT NULL,
+          name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', ingredients TEXT NOT NULL DEFAULT '', category TEXT NOT NULL,
           price_cents INTEGER NOT NULL CHECK(price_cents > 0), emoji TEXT NOT NULL DEFAULT '🍽️',
                     available INTEGER NOT NULL DEFAULT 1 CHECK(available IN (0,1)), stock_count INTEGER
                         CHECK(stock_count IS NULL OR stock_count >= 0), dietary_tags TEXT NOT NULL DEFAULT '[]',
@@ -134,6 +134,9 @@ def initialize():
         ):
             if name not in stall_columns:
                 db.execute(f"ALTER TABLE stalls ADD COLUMN {name} {declaration}")
+        for name, declaration in (("logo_data", "BLOB"), ("logo_type", "TEXT")):
+            if name not in stall_columns:
+                db.execute(f"ALTER TABLE stalls ADD COLUMN {name} {declaration}")
         for name in ("pickup_lat", "pickup_lon"):
             if name not in stall_columns:
                 db.execute(f"ALTER TABLE stalls ADD COLUMN {name} REAL")
@@ -153,6 +156,7 @@ def initialize():
             ("allergen_tags", "TEXT NOT NULL DEFAULT '[]'"),
             ("photo_data", "BLOB"),
             ("photo_type", "TEXT"),
+            ("ingredients", "TEXT NOT NULL DEFAULT ''"),
         ):
             if name not in product_columns:
                 db.execute(f"ALTER TABLE products ADD COLUMN {name} {declaration}")
@@ -311,24 +315,24 @@ def parse_stock_count(value):
     return quantity
 
 
-def parse_product_photo(encoded, media_type):
+def parse_product_photo(encoded, media_type, label="food photo"):
     if not isinstance(encoded, str) or not isinstance(media_type, str):
-        raise ValueError("Choose a JPG, PNG, or WebP food photo.")
+        raise ValueError(f"Choose a JPG, PNG, or WebP {label}.")
     if len(encoded) > ((MAX_PRODUCT_PHOTO_BYTES + 2) // 3) * 4:
-        raise ValueError("Food photos must be 2 MB or smaller.")
+        raise ValueError(f"Images must be 2 MB or smaller.")
     try:
         photo = base64.b64decode(encoded, validate=True)
     except (ValueError, binascii.Error):
-        raise ValueError("That food photo could not be read. Please choose it again.")
+        raise ValueError("That image could not be read. Please choose it again.")
     if not photo or len(photo) > MAX_PRODUCT_PHOTO_BYTES:
-        raise ValueError("Food photos must be between 1 byte and 2 MB.")
+        raise ValueError("Images must be between 1 byte and 2 MB.")
     signatures = {
         "image/jpeg": photo.startswith(b"\xff\xd8\xff"),
         "image/png": photo.startswith(b"\x89PNG\r\n\x1a\n"),
         "image/webp": len(photo) >= 12 and photo.startswith(b"RIFF") and photo[8:12] == b"WEBP",
     }
     if media_type not in signatures or not signatures[media_type]:
-        raise ValueError("Choose a valid JPG, PNG, or WebP food photo.")
+        raise ValueError(f"Choose a valid JPG, PNG, or WebP {label}.")
     return photo, media_type
 
 
@@ -479,11 +483,13 @@ class Handler(BaseHTTPRequestHandler):
                 row = db.execute("""SELECT u.id,u.name,u.email,u.role,s.id stall_id,s.name stall_name,s.description stall_description,s.status stall_status,
                     s.opens_at stall_opens_at,s.closes_at stall_closes_at,s.prep_minutes stall_prep_minutes,
                     s.pickup_slot_capacity stall_pickup_slot_capacity,s.pickup_lat stall_pickup_lat,
-                    s.pickup_lon stall_pickup_lon
+                    s.pickup_lon stall_pickup_lon,s.logo_type stall_logo_type
                     FROM sessions x JOIN users u ON u.id=x.user_id LEFT JOIN stalls s ON s.owner_id=u.id
                     WHERE x.token_hash=? AND x.expires_at>?""", (token_hash, int(time.time()))).fetchone()
             if row:
-                return dict(row)
+                user = dict(row)
+                user["stall_logo_url"] = f"/api/stalls/{user['stall_id']}/logo" if user.get("stall_logo_type") else None
+                return user
         if required:
             raise ApiError(401, "Please sign in to continue.")
         return None
@@ -547,26 +553,53 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/stalls":
             with connect() as db:
-                rows = db.execute("""SELECT s.id,s.name,s.description,s.status,s.opens_at,s.closes_at,
+                rows = db.execute("""SELECT s.id,s.name,s.description,s.status,s.opens_at,s.closes_at,s.logo_type,
                     COUNT(CASE WHEN p.available=1 THEN 1 END) menu_count FROM stalls s
                     LEFT JOIN products p ON p.stall_id=s.id WHERE s.status='approved'
                     GROUP BY s.id ORDER BY s.name""").fetchall()
-            self.send_json(200, {"stalls": [dict(row, is_open=stall_is_open(row["opens_at"], row["closes_at"])) for row in rows]})
+            self.send_json(200, {"stalls": [dict(row, is_open=stall_is_open(row["opens_at"], row["closes_at"]),
+                logo_url=f"/api/stalls/{row['id']}/logo" if row["logo_type"] else None) for row in rows]})
+            return
+        logo_match = re.fullmatch(r"/api/stalls/(\d+)/logo", path)
+        if logo_match:
+            stall_id = int(logo_match.group(1))
+            user = self.current_user(required=False)
+            with connect() as db:
+                row = db.execute("SELECT logo_data,logo_type,status,owner_id FROM stalls WHERE id=?", (stall_id,)).fetchone()
+            public = row and row["status"] == "approved"
+            owner = row and user and user["role"] == "owner" and user["id"] == row["owner_id"]
+            admin = user and user["role"] == "admin"
+            if not row or not row["logo_data"] or not row["logo_type"] or not (public or owner or admin):
+                raise ApiError(404, "Stall logo not found.")
+            self.send_response(200)
+            self.send_header("Content-Type", row["logo_type"])
+            self.send_header("Content-Length", str(len(row["logo_data"])))
+            self.send_header("Cache-Control", "private, max-age=300")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(row["logo_data"])
             return
         stall_match = re.fullmatch(r"/api/stalls/(\d+)", path)
         if stall_match:
             with connect() as db:
-                stall = db.execute("""SELECT s.id,s.name,s.description,s.status,s.opens_at,s.closes_at,
+                stall = db.execute("""SELECT s.id,s.name,s.description,s.status,s.opens_at,s.closes_at,s.logo_type,
                     u.name owner_name FROM stalls s JOIN users u ON u.id=s.owner_id
                     WHERE s.id=? AND s.status='approved'""", (int(stall_match.group(1)),)).fetchone()
                 if not stall: raise ApiError(404, "Stall not found.")
-                products = db.execute("""SELECT p.id,p.name,p.description,p.category,p.price_cents,p.emoji,
-                    p.available,p.stock_count,p.photo_type FROM products p WHERE p.stall_id=? AND p.available=1
+                products = db.execute("""SELECT p.id,p.name,p.description,p.ingredients,p.category,p.price_cents,p.emoji,
+                    p.available,p.stock_count,p.photo_type,p.dietary_tags,p.allergen_tags FROM products p WHERE p.stall_id=? AND p.available=1
                     ORDER BY p.category,p.name""", (stall["id"],)).fetchall()
                 payload = dict(stall)
                 payload["is_open"] = stall_is_open(stall["opens_at"], stall["closes_at"])
                 payload["menu_count"] = len(products)
+                rating = db.execute("""SELECT AVG(f.rating) average,COUNT(f.rating) count FROM feedback f
+                    JOIN orders o ON o.id=f.order_id WHERE o.stall_id=?""", (stall["id"],)).fetchone()
+                payload["rating"] = round(rating["average"],1) if rating["average"] is not None else None
+                payload["review_count"] = rating["count"]
+                payload["logo_url"] = f"/api/stalls/{stall['id']}/logo" if stall["logo_type"] else None
                 payload["products"] = [{"id": p["id"], "name": p["name"], "description": p["description"],
+                    "ingredients": p["ingredients"], "dietary_tags": json.loads(p["dietary_tags"] or "[]"),
+                    "allergen_tags": json.loads(p["allergen_tags"] or "[]"),
                     "category": p["category"], "price": p["price_cents"] / 100, "emoji": p["emoji"],
                     "stock_count": p["stock_count"], "photo_url": f"/api/products/{p['id']}/photo" if p["photo_type"] else None}
                     for p in products]
@@ -631,9 +664,9 @@ class Handler(BaseHTTPRequestHandler):
                     where = "WHERE p.available=1 AND s.status='approved'"
                 elif user["role"] == "owner":
                     where, args = "WHERE s.owner_id=? OR (s.status='approved' AND p.available=1)", [user["id"]]
-                rows = db.execute(f"""SELECT p.id,p.name,p.description,p.category,p.price_cents,p.emoji,p.available,
+                rows = db.execute(f"""SELECT p.id,p.name,p.description,p.ingredients,p.category,p.price_cents,p.emoji,p.available,
                     p.stock_count,p.dietary_tags,p.allergen_tags,p.photo_type,p.featured_until,s.id stall_id,s.name stall_name,s.description stall_description,
-                    s.status stall_status,s.opens_at,s.closes_at,s.pickup_lat,s.pickup_lon
+                    s.status stall_status,s.opens_at,s.closes_at,s.pickup_lat,s.pickup_lon,s.logo_type stall_logo_type
                     FROM products p JOIN stalls s ON s.id=p.stall_id {where} ORDER BY s.name,p.name""", args).fetchall()
                 featured_rows = [row for row in rows if row["featured_until"] and row["featured_until"] > now()
                     and row["available"] and (row["stock_count"] is None or row["stock_count"] > 0)
@@ -704,6 +737,7 @@ class Handler(BaseHTTPRequestHandler):
         featured = bool(featured_until and featured_until > now() and row["available"]
                         and (stock_count is None or stock_count > 0) and row["stall_status"] == "approved")
         item = {"id": row["id"], "name": row["name"], "description": row["description"],
+                "ingredients": row["ingredients"] if "ingredients" in row.keys() else "",
                 "category": row["category"], "price": row["price_cents"] / 100, "emoji": row["emoji"],
             "available": bool(row["available"]) and (stock_count is None or stock_count > 0),
                 "stock_count": stock_count, "dietary_tags": json.loads(row["dietary_tags"] or "[]"),
@@ -716,6 +750,8 @@ class Handler(BaseHTTPRequestHandler):
         if "photo_type" in row.keys() and row["photo_type"]:
             item["photo_url"] = f"/api/products/{row['id']}/photo"
         if "stall_description" in row.keys(): item["stall_description"] = row["stall_description"]
+        if "stall_logo_type" in row.keys() and row["stall_logo_type"]:
+            item["stall_logo_url"] = f"/api/stalls/{row['stall_id']}/logo"
         return item
 
     @staticmethod
@@ -843,6 +879,7 @@ class Handler(BaseHTTPRequestHandler):
             owner = self.require_role("owner")
             name = clean_text(data.get("name"), "Item name", 80)
             desc = clean_text(data.get("description"), "Description", 240, required=False)
+            ingredients = clean_text(data.get("ingredients"), "Ingredients", 700, required=False)
             category = data.get("category")
             if category not in ("Meals", "Snacks", "Drinks"): raise ValueError("Choose a menu category.")
             price = cents(data.get("price"))
@@ -854,9 +891,9 @@ class Handler(BaseHTTPRequestHandler):
             if "photo_data" in data or "photo_type" in data:
                 photo_data, photo_type = parse_product_photo(data.get("photo_data"), data.get("photo_type"))
             with connect() as db:
-                cur = db.execute("""INSERT INTO products(stall_id,name,description,category,price_cents,emoji,stock_count,
-                    dietary_tags,allergen_tags,photo_data,photo_type,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (owner["stall_id"],name,desc,category,price,emoji,stock_count,json.dumps(dietary_tags),json.dumps(allergen_tags),photo_data,photo_type,now()))
+                cur = db.execute("""INSERT INTO products(stall_id,name,description,ingredients,category,price_cents,emoji,stock_count,
+                    dietary_tags,allergen_tags,photo_data,photo_type,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (owner["stall_id"],name,desc,ingredients,category,price,emoji,stock_count,json.dumps(dietary_tags),json.dumps(allergen_tags),photo_data,photo_type,now()))
                 row = db.execute("""SELECT p.*,s.id stall_id,s.name stall_name,s.status stall_status,s.opens_at,s.closes_at,
                     s.pickup_lat,s.pickup_lon
                     FROM products p JOIN stalls s ON s.id=p.stall_id WHERE p.id=?""", (cur.lastrowid,)).fetchone()
@@ -974,6 +1011,23 @@ class Handler(BaseHTTPRequestHandler):
                     db.execute("UPDATE products SET featured_until=NULL WHERE id=?", (product_id,))
             self.send_json(200, {"product_id": product_id, "featured": featured, "featured_until": expires})
             return
+        if path == "/api/stall/profile/logo":
+            owner = self.require_role("owner")
+            remove_logo = data.get("remove_logo", False)
+            if not isinstance(remove_logo, bool): raise ValueError("Choose whether to remove the stall logo.")
+            if remove_logo and ("logo_data" in data or "logo_type" in data):
+                raise ValueError("Choose a new logo or remove the existing one, not both.")
+            if remove_logo:
+                logo_data = logo_type = None
+            else:
+                logo_data, logo_type = parse_product_photo(data.get("logo_data"), data.get("logo_type"), "stall logo")
+            with connect() as db:
+                cur = db.execute("UPDATE stalls SET logo_data=?,logo_type=? WHERE owner_id=?",
+                    (logo_data,logo_type,owner["id"]))
+                if not cur.rowcount: raise ApiError(404, "Stall not found.")
+                stall_id = db.execute("SELECT id FROM stalls WHERE owner_id=?",(owner["id"],)).fetchone()[0]
+            self.send_json(200,{"logo_url":f"/api/stalls/{stall_id}/logo" if logo_type else None})
+            return
         if path == "/api/stall/profile":
             owner = self.require_role("owner")
             name = clean_text(data.get("name"), "Stall name", 80)
@@ -1026,6 +1080,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json(200, {"ok":True}); return
                 name = clean_text(data.get("name",row["name"]), "Item name", 80)
                 desc = clean_text(data.get("description",row["description"]), "Description", 240, required=False)
+                ingredients = clean_text(data.get("ingredients",row["ingredients"]), "Ingredients", 700, required=False)
                 category = data.get("category",row["category"])
                 if category not in ("Meals", "Snacks", "Drinks"): raise ValueError("Choose a menu category.")
                 price = cents(data.get("price",row["price_cents"] / 100))
@@ -1041,9 +1096,9 @@ class Handler(BaseHTTPRequestHandler):
                     photo_data = photo_type = None
                 elif "photo_data" in data or "photo_type" in data:
                     photo_data, photo_type = parse_product_photo(data.get("photo_data"), data.get("photo_type"))
-                db.execute("""UPDATE products SET name=?,description=?,category=?,price_cents=?,emoji=?,stock_count=?,
+                db.execute("""UPDATE products SET name=?,description=?,ingredients=?,category=?,price_cents=?,emoji=?,stock_count=?,
                     dietary_tags=?,allergen_tags=?,photo_data=?,photo_type=? WHERE id=?""",
-                    (name,desc,category,price,emoji,stock_count,json.dumps(dietary_tags),json.dumps(allergen_tags),photo_data,photo_type,product_id))
+                    (name,desc,ingredients,category,price,emoji,stock_count,json.dumps(dietary_tags),json.dumps(allergen_tags),photo_data,photo_type,product_id))
                 updated = db.execute("""SELECT p.*,s.id stall_id,s.name stall_name,s.status stall_status,s.opens_at,s.closes_at,
                     s.pickup_lat,s.pickup_lon
                     FROM products p JOIN stalls s ON s.id=p.stall_id WHERE p.id=?""", (product_id,)).fetchone()
@@ -1113,8 +1168,10 @@ class Handler(BaseHTTPRequestHandler):
     @staticmethod
     def current_user_from_id(user_id):
         with connect() as db:
-            row = db.execute("SELECT u.id,u.name,u.email,u.role,s.id stall_id,s.name stall_name,s.description stall_description,s.status stall_status,s.opens_at stall_opens_at,s.closes_at stall_closes_at,s.prep_minutes stall_prep_minutes,s.pickup_slot_capacity stall_pickup_slot_capacity FROM users u LEFT JOIN stalls s ON s.owner_id=u.id WHERE u.id=?",(user_id,)).fetchone()
-        return dict(row)
+            row = db.execute("SELECT u.id,u.name,u.email,u.role,s.id stall_id,s.name stall_name,s.description stall_description,s.status stall_status,s.opens_at stall_opens_at,s.closes_at stall_closes_at,s.prep_minutes stall_prep_minutes,s.pickup_slot_capacity stall_pickup_slot_capacity,s.logo_type stall_logo_type FROM users u LEFT JOIN stalls s ON s.owner_id=u.id WHERE u.id=?",(user_id,)).fetchone()
+        user = dict(row)
+        user["stall_logo_url"] = f"/api/stalls/{user['stall_id']}/logo" if user.get("stall_logo_type") else None
+        return user
 
     def serve_static(self, requested):
         relative = unquote(requested).lstrip("/") or "index.html"

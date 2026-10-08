@@ -6,6 +6,7 @@ import argparse
 import base64
 import binascii
 import hashlib
+import hmac
 import json
 import math
 import mimetypes
@@ -17,6 +18,7 @@ import ssl
 import sys
 import time
 import threading
+from collections import deque
 import urllib.error
 import urllib.request
 from datetime import date, datetime, time as clock_time, timedelta, timezone
@@ -25,7 +27,6 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
-from zoneinfo import ZoneInfo
 
 BASE = Path(__file__).resolve().parent
 DB_PATH = Path(os.environ.get("BITEHUB_DB", BASE / "bitehub.sqlite3"))
@@ -35,10 +36,16 @@ ROLES = {"buyer", "owner", "runner", "admin"}
 MAX_BODY = 3 * 1024 * 1024
 MAX_PRODUCT_PHOTO_BYTES = 2 * 1024 * 1024
 PICKUP_SLOT_MINUTES = 30
-CAMPUS_ZONE = ZoneInfo("Asia/Manila")
+# Manila stays on UTC+8 year-round. Use the fixed offset so Windows Python
+# installations do not need a separate IANA time-zone database package.
+CAMPUS_ZONE = timezone(timedelta(hours=8), "Asia/Manila")
 DIETARY_TAGS = {"vegetarian", "vegan", "halal", "gluten-free", "dairy-free", "nut-free"}
 ALLERGEN_TAGS = {"peanuts", "tree-nuts", "milk", "eggs", "soy", "wheat", "fish", "shellfish", "sesame"}
 CAMPUS_BOUNDS = {"south": 9.736753, "north": 9.740445, "west": 118.737108, "east": 118.740839}
+REACH_COOKIE_SECONDS = 60 * 60 * 24 * 365
+_rate_limit_lock = threading.Lock()
+_rate_limit_events = {}
+_rate_limit_calls = 0
 
 
 def connect():
@@ -80,6 +87,15 @@ def initialize():
                         CHECK(stock_count IS NULL OR stock_count >= 0), dietary_tags TEXT NOT NULL DEFAULT '[]',
                     allergen_tags TEXT NOT NULL DEFAULT '[]', photo_data BLOB, photo_type TEXT, created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS reach_views (
+          id INTEGER PRIMARY KEY, stall_id INTEGER NOT NULL REFERENCES stalls(id) ON DELETE CASCADE,
+          product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
+          viewed_on TEXT NOT NULL, viewer_key TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS reach_product_daily_viewer_idx
+          ON reach_views(stall_id,product_id,viewed_on,viewer_key) WHERE product_id IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS reach_stall_daily_viewer_idx
+          ON reach_views(stall_id,viewed_on,viewer_key) WHERE product_id IS NULL;
         CREATE TABLE IF NOT EXISTS settings (
           key TEXT PRIMARY KEY, value TEXT NOT NULL
         );
@@ -161,6 +177,11 @@ def initialize():
             if name not in product_columns:
                 db.execute(f"ALTER TABLE products ADD COLUMN {name} {declaration}")
         db.execute("DELETE FROM sessions WHERE expires_at <= ?", (int(time.time()),))
+        db.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('reach_signing_secret',?)", (secrets.token_hex(32),))
+        # Remove any stale runner locations left by earlier server versions.
+        db.execute("DELETE FROM delivery_positions WHERE order_id IN (SELECT id FROM orders WHERE status!='out' OR fulfillment!='delivery')")
+        # Precise handoff coordinates are no longer needed after delivery.
+        db.execute("UPDATE orders SET delivery_lat=NULL,delivery_lon=NULL WHERE status='completed'")
 
 
 def now():
@@ -438,6 +459,55 @@ class ApiError(Exception):
 class Handler(BaseHTTPRequestHandler):
     server_version = "BiteHub/1.0"
 
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(30)
+
+    def client_ip(self):
+        return str(self.client_address[0]) if self.client_address else "unknown"
+
+    def enforce_rate_limit(self, scope, identity, limit, window_seconds):
+        global _rate_limit_calls
+        key = (scope, identity)
+        current = time.monotonic()
+        with _rate_limit_lock:
+            events = _rate_limit_events.setdefault(key, deque())
+            while events and events[0] <= current - window_seconds:
+                events.popleft()
+            if len(events) >= limit:
+                raise ApiError(429, "Too many requests. Please wait a moment and try again.")
+            events.append(current)
+            _rate_limit_calls += 1
+            if _rate_limit_calls % 256 == 0:
+                for stale_key, stale_events in list(_rate_limit_events.items()):
+                    if not stale_events or stale_events[-1] <= current - 3600:
+                        _rate_limit_events.pop(stale_key, None)
+
+    def clear_rate_limit(self, scope, identity):
+        with _rate_limit_lock:
+            _rate_limit_events.pop((scope, identity), None)
+
+    def reach_viewer(self):
+        cookie = SimpleCookie()
+        try:
+            cookie.load(self.headers.get("Cookie", ""))
+            signed = cookie["bitehub_viewer"].value if "bitehub_viewer" in cookie else ""
+        except Exception:
+            signed = ""
+        with connect() as db:
+            secret_row = db.execute("SELECT value FROM settings WHERE key='reach_signing_secret'").fetchone()
+        secret = bytes.fromhex(secret_row["value"])
+        if "." in signed:
+            viewer_id, signature = signed.split(".", 1)
+            expected = hmac.new(secret, viewer_id.encode("ascii", "ignore"), hashlib.sha256).hexdigest()
+            if re.fullmatch(r"[0-9a-f]{32}", viewer_id) and secrets.compare_digest(signature, expected):
+                return viewer_id, None, False
+        viewer_id = secrets.token_hex(16)
+        signature = hmac.new(secret, viewer_id.encode("ascii"), hashlib.sha256).hexdigest()
+        secure = "; Secure" if getattr(self.server, "is_https", False) else ""
+        header = f"bitehub_viewer={viewer_id}.{signature}; HttpOnly; SameSite=Strict; Path=/; Max-Age={REACH_COOKIE_SECONDS}{secure}"
+        return viewer_id, header, True
+
     def log_message(self, fmt, *args):
         sys.stdout.write("%s - %s\n" % (self.log_date_time_string(), fmt % args))
 
@@ -455,10 +525,24 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def body(self):
-        length = int(self.headers.get("Content-Length", "0"))
+        if self.headers.get("Transfer-Encoding"):
+            self.close_connection = True
+            raise ApiError(400, "Chunked request bodies are not supported.")
+        raw_length = self.headers.get("Content-Length")
+        if raw_length is None:
+            self.close_connection = True
+            raise ApiError(411, "A Content-Length header is required.")
+        if not re.fullmatch(r"[0-9]{1,10}", raw_length):
+            self.close_connection = True
+            raise ApiError(400, "Invalid Content-Length header.")
+        length = int(raw_length)
         if length > MAX_BODY:
+            self.close_connection = True
             raise ApiError(413, "Request is too large.")
         raw = self.rfile.read(length)
+        if len(raw) != length:
+            self.close_connection = True
+            raise ApiError(400, "Request body ended before Content-Length bytes were received.")
         try:
             value = json.loads(raw or b"{}")
         except (json.JSONDecodeError, UnicodeDecodeError):
@@ -507,7 +591,8 @@ class Handler(BaseHTTPRequestHandler):
             db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
             db.execute("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)",
                        (hashlib.sha256(token.encode()).hexdigest(), user_id, expires))
-        return {"Set-Cookie": f"bitehub_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={SESSION_SECONDS}"}
+        secure = "; Secure" if getattr(self.server, "is_https", False) else ""
+        return {"Set-Cookie": f"bitehub_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={SESSION_SECONDS}{secure}"}
 
     def do_GET(self):
         path = urlparse(self.path).path
@@ -529,7 +614,23 @@ class Handler(BaseHTTPRequestHandler):
     def api_request(self, method):
         try:
             path = urlparse(self.path).path
-            data = self.body() if method != "DELETE" else {}
+            if method == "DELETE":
+                if self.headers.get("Transfer-Encoding"):
+                    self.close_connection = True
+                    raise ApiError(400, "Chunked request bodies are not supported.")
+                raw_length = self.headers.get("Content-Length", "0")
+                if not re.fullmatch(r"[0-9]{1,10}", raw_length):
+                    self.close_connection = True
+                    raise ApiError(400, "Invalid Content-Length header.")
+                if int(raw_length) > MAX_BODY:
+                    self.close_connection = True
+                    raise ApiError(413, "Request is too large.")
+                if int(raw_length) != 0:
+                    self.close_connection = True
+                    raise ApiError(400, "DELETE requests must not include a body.")
+                data = {}
+            else:
+                data = self.body()
             if method == "POST": self.api_post(path, data)
             elif method == "PATCH": self.api_patch(path, data)
             else: self.api_delete(path)
@@ -559,6 +660,37 @@ class Handler(BaseHTTPRequestHandler):
                     GROUP BY s.id ORDER BY s.name""").fetchall()
             self.send_json(200, {"stalls": [dict(row, is_open=stall_is_open(row["opens_at"], row["closes_at"]),
                 logo_url=f"/api/stalls/{row['id']}/logo" if row["logo_type"] else None) for row in rows]})
+            return
+        if path == "/api/reach-viewer":
+            viewer_id, set_cookie, is_new = self.reach_viewer()
+            if is_new:
+                self.enforce_rate_limit("reach-viewer", self.client_ip(), 1200, 3600)
+            self.send_json(200, {"ok": True}, {"Set-Cookie": set_cookie} if set_cookie else None)
+            return
+        if path == "/api/stall/analytics":
+            owner = self.require_role("owner")
+            stall_id = owner["stall_id"]
+            week_ago = (datetime.now(CAMPUS_ZONE).date() - timedelta(days=6)).isoformat()
+            with connect() as db:
+                stall_views = db.execute("""SELECT COUNT(*) total,
+                    SUM(CASE WHEN viewed_on>=? THEN 1 ELSE 0 END) last_7_days
+                    FROM reach_views WHERE stall_id=? AND product_id IS NULL""", (week_ago,stall_id)).fetchone()
+                rows = db.execute("""SELECT p.id,p.name,COALESCE(v.views_total,0) views_total,
+                    COALESCE(v.views_7_days,0) views_7_days,COALESCE(o.order_count,0) order_count,
+                    COALESCE(o.units_ordered,0) units_ordered
+                    FROM products p
+                    LEFT JOIN (SELECT product_id,COUNT(*) views_total,
+                        SUM(CASE WHEN viewed_on>=? THEN 1 ELSE 0 END) views_7_days
+                        FROM reach_views WHERE product_id IS NOT NULL GROUP BY product_id) v ON v.product_id=p.id
+                    LEFT JOIN (SELECT oi.product_id,COUNT(DISTINCT o.id) order_count,
+                        SUM(oi.quantity) units_ordered FROM order_items oi JOIN orders o ON o.id=oi.order_id
+                        WHERE o.status!='declined' GROUP BY oi.product_id) o ON o.product_id=p.id
+                    WHERE p.stall_id=? ORDER BY p.name""", (week_ago,stall_id)).fetchall()
+            self.send_json(200, {"stall_views": {"total": stall_views["total"] or 0,
+                "last_7_days": stall_views["last_7_days"] or 0},
+                "products": [{"id":row["id"],"name":row["name"],"views_total":row["views_total"] or 0,
+                    "views_7_days":row["views_7_days"] or 0,"order_count":row["order_count"],
+                    "units_ordered":row["units_ordered"]} for row in rows]})
             return
         logo_match = re.fullmatch(r"/api/stalls/(\d+)/logo", path)
         if logo_match:
@@ -643,7 +775,7 @@ class Handler(BaseHTTPRequestHandler):
             user = self.current_user()
             order_id = int(location_match.group(1))
             with connect() as db:
-                row = db.execute("""SELECT o.buyer_id,o.runner_id,s.owner_id,dp.latitude,dp.longitude,
+                row = db.execute("""SELECT o.buyer_id,o.runner_id,o.fulfillment,o.status,s.owner_id,dp.latitude,dp.longitude,
                     dp.accuracy,dp.heading,dp.updated_at FROM orders o JOIN stalls s ON s.id=o.stall_id
                     LEFT JOIN delivery_positions dp ON dp.order_id=o.id WHERE o.id=?""", (order_id,)).fetchone()
             if not row: raise ApiError(404, "Order not found.")
@@ -651,6 +783,8 @@ class Handler(BaseHTTPRequestHandler):
                        (user["role"] == "owner" and row["owner_id"] == user["id"]) or
                        (user["role"] == "runner" and row["runner_id"] == user["id"]))
             if not allowed: raise ApiError(403, "This account cannot view this delivery location.")
+            if row["fulfillment"] != "delivery" or row["status"] != "out":
+                raise ApiError(404, "Live delivery location is no longer available.")
             self.send_json(200, {"location": ({"latitude": row["latitude"], "longitude": row["longitude"],
                 "accuracy": row["accuracy"], "heading": row["heading"], "updated_at": row["updated_at"]}
                 if row["latitude"] is not None else None)})
@@ -711,6 +845,65 @@ class Handler(BaseHTTPRequestHandler):
             with connect() as db:
                 rows = db.execute("SELECT id,name FROM users WHERE role='runner' ORDER BY name").fetchall()
             self.send_json(200, {"runners": [dict(row) for row in rows]})
+            return
+        if path == "/api/admin/reports":
+            self.require_role("admin")
+            with connect() as db:
+                daily_orders = db.execute("""SELECT date(created_at,'+8 hours') day,COUNT(*) orders,
+                    SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) completed_orders,
+                    SUM(CASE WHEN status='declined' THEN 1 ELSE 0 END) declined_orders,
+                    COALESCE(SUM(CASE WHEN status='completed' THEN total_cents ELSE 0 END),0) sales_cents
+                    FROM orders GROUP BY date(created_at,'+8 hours') ORDER BY day""").fetchall()
+                daily_views = db.execute("""SELECT viewed_on day,
+                    SUM(CASE WHEN product_id IS NULL THEN 1 ELSE 0 END) stall_views,
+                    SUM(CASE WHEN product_id IS NOT NULL THEN 1 ELSE 0 END) item_views
+                    FROM reach_views GROUP BY viewed_on ORDER BY viewed_on""").fetchall()
+                daily_units = db.execute("""SELECT date(o.created_at,'+8 hours') day,COALESCE(SUM(oi.quantity),0) units_ordered
+                    FROM orders o JOIN order_items oi ON oi.order_id=o.id WHERE o.status!='declined'
+                    GROUP BY date(o.created_at,'+8 hours') ORDER BY day""").fetchall()
+                stalls = db.execute("""SELECT s.id,s.name,COALESCE(o.orders,0) orders,
+                    COALESCE(o.completed_orders,0) completed_orders,COALESCE(o.declined_orders,0) declined_orders,
+                    COALESCE(o.sales_cents,0) sales_cents,COALESCE(o.units_ordered,0) units_ordered,
+                    COALESCE(v.stall_views,0) stall_views,COALESCE(v.item_views,0) item_views
+                    FROM stalls s
+                    LEFT JOIN (SELECT o.stall_id,COUNT(*) orders,
+                        SUM(CASE WHEN o.status='completed' THEN 1 ELSE 0 END) completed_orders,
+                        SUM(CASE WHEN o.status='declined' THEN 1 ELSE 0 END) declined_orders,
+                        SUM(CASE WHEN o.status='completed' THEN o.total_cents ELSE 0 END) sales_cents,
+                        SUM(CASE WHEN o.status!='declined' THEN (SELECT COALESCE(SUM(oi.quantity),0)
+                            FROM order_items oi WHERE oi.order_id=o.id) ELSE 0 END) units_ordered
+                        FROM orders o GROUP BY o.stall_id) o ON o.stall_id=s.id
+                    LEFT JOIN (SELECT stall_id,SUM(CASE WHEN product_id IS NULL THEN 1 ELSE 0 END) stall_views,
+                        SUM(CASE WHEN product_id IS NOT NULL THEN 1 ELSE 0 END) item_views
+                        FROM reach_views GROUP BY stall_id) v ON v.stall_id=s.id
+                    ORDER BY s.name""").fetchall()
+                products = db.execute("""SELECT p.id,p.name,s.name stall_name,
+                    COALESCE(v.views,0) views,COALESCE(o.orders,0) orders,COALESCE(o.units_ordered,0) units_ordered,
+                    COALESCE(o.sales_cents,0) sales_cents
+                    FROM products p JOIN stalls s ON s.id=p.stall_id
+                    LEFT JOIN (SELECT product_id,COUNT(*) views FROM reach_views
+                        WHERE product_id IS NOT NULL GROUP BY product_id) v ON v.product_id=p.id
+                    LEFT JOIN (SELECT oi.product_id,COUNT(DISTINCT o.id) orders,SUM(oi.quantity) units_ordered,
+                        SUM(CASE WHEN o.status='completed' THEN oi.price_cents*oi.quantity ELSE 0 END) sales_cents
+                        FROM order_items oi JOIN orders o ON o.id=oi.order_id
+                        WHERE o.status!='declined' GROUP BY oi.product_id) o ON o.product_id=p.id
+                    ORDER BY orders DESC,p.name""").fetchall()
+            daily = {row["day"]:{"date":row["day"],"orders":row["orders"],
+                "completed_orders":row["completed_orders"],"declined_orders":row["declined_orders"],
+                "sales_cents":row["sales_cents"],"units_ordered":0,"stall_views":0,"item_views":0} for row in daily_orders}
+            for row in daily_views:
+                record = daily.setdefault(row["day"], {"date":row["day"],"orders":0,
+                    "completed_orders":0,"declined_orders":0,"sales_cents":0,"units_ordered":0,"stall_views":0,"item_views":0})
+                record["stall_views"],record["item_views"] = row["stall_views"],row["item_views"]
+            for row in daily_units:
+                record = daily.setdefault(row["day"], {"date":row["day"],"orders":0,
+                    "completed_orders":0,"declined_orders":0,"sales_cents":0,"units_ordered":0,"stall_views":0,"item_views":0})
+                record["units_ordered"] = row["units_ordered"]
+            daily_rows = [daily[key] for key in sorted(daily)]
+            totals = {key:sum(row[key] for row in daily_rows) for key in
+                ("orders","completed_orders","declined_orders","sales_cents","units_ordered","stall_views","item_views")}
+            self.send_json(200, {"totals":totals,"daily":daily_rows,
+                "stalls":[dict(row) for row in stalls],"products":[dict(row) for row in products]})
             return
         if path == "/api/admin/overview":
             self.require_role("admin")
@@ -779,11 +972,43 @@ class Handler(BaseHTTPRequestHandler):
             "pickup_at":row["pickup_at"],"items":items_by_order.get(row["id"],[]),
             "stall_latitude":row["stall_latitude"],"stall_longitude":row["stall_longitude"],
             "delivery_latitude":row["delivery_lat"],"delivery_longitude":row["delivery_lon"],
-            "driver_latitude":row["driver_latitude"],"driver_longitude":row["driver_longitude"],
-            "driver_accuracy":row["driver_accuracy"],"driver_updated_at":row["driver_updated_at"],
+            "driver_latitude":row["driver_latitude"] if row["status"] == "out" and row["fulfillment"] == "delivery" else None,
+            "driver_longitude":row["driver_longitude"] if row["status"] == "out" and row["fulfillment"] == "delivery" else None,
+            "driver_accuracy":row["driver_accuracy"] if row["status"] == "out" and row["fulfillment"] == "delivery" else None,
+            "driver_updated_at":row["driver_updated_at"] if row["status"] == "out" and row["fulfillment"] == "delivery" else None,
             "feedback":feedback_by_order.get(row["id"])} for row in rows]
 
     def api_post(self, path, data):
+        if path == "/api/reach-views":
+            viewer_id, _, is_new = self.reach_viewer()
+            if is_new:
+                raise ApiError(403, "Refresh the page before recording a view.")
+            self.enforce_rate_limit("reach-post", self.client_ip(), 6000, 3600)
+            self.enforce_rate_limit("reach-viewer", viewer_id, 80, 3600)
+            try:
+                stall_id = int(data.get("stall_id"))
+                product_id = int(data["product_id"]) if data.get("product_id") is not None else None
+            except (TypeError,ValueError,KeyError):
+                raise ValueError("Choose a valid stall or menu item.")
+            viewed_on = datetime.now(CAMPUS_ZONE).date().isoformat()
+            counted = False
+            with connect() as db:
+                db.execute("BEGIN IMMEDIATE")
+                stall = db.execute("SELECT id FROM stalls WHERE id=? AND status='approved'",(stall_id,)).fetchone()
+                if not stall: raise ApiError(404,"Stall not found.")
+                if product_id is not None:
+                    product = db.execute("SELECT id FROM products WHERE id=? AND stall_id=? AND available=1",
+                        (product_id,stall_id)).fetchone()
+                    if not product: raise ApiError(404,"Menu item not found.")
+                viewer_key = hashlib.sha256(viewer_id.encode()).hexdigest()
+                exists = db.execute("SELECT 1 FROM reach_views WHERE stall_id=? AND product_id IS ? AND viewed_on=? AND viewer_key=? LIMIT 1",
+                    (stall_id,product_id,viewed_on,viewer_key)).fetchone()
+                if not exists:
+                    db.execute("INSERT INTO reach_views(stall_id,product_id,viewed_on,viewer_key) VALUES(?,?,?,?)",
+                        (stall_id,product_id,viewed_on,viewer_key))
+                    counted = True
+            self.send_json(200,{"counted":counted})
+            return
         if path == "/api/notifications/unsubscribe":
             user = self.current_user()
             endpoint = data.get("endpoint")
@@ -821,6 +1046,7 @@ class Handler(BaseHTTPRequestHandler):
             if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email): raise ValueError("Enter a valid email address.")
             password = str(data.get("password") or "")
             if len(password) < 10: raise ValueError("Use a password with at least 10 characters.")
+            if len(password) > 1024: raise ValueError("Password must be 1,024 characters or fewer.")
             role = data.get("role")
             if role not in ("buyer", "owner", "runner"): raise ApiError(400, "Choose a supported account type.")
             stall_name = clean_text(data.get("stall_name"), "Stall name", 80) if role == "owner" else None
@@ -835,9 +1061,16 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/login":
             email = str(data.get("email") or "").strip().lower()
             password = str(data.get("password") or "")
+            if len(email) > 254 or len(password) > 1024:
+                raise ApiError(400, "Email or password is too long.")
+            ip = self.client_ip()
+            account_key = hashlib.sha256(f"{ip}|{email}".encode()).hexdigest()
+            self.enforce_rate_limit("login-ip", ip, 120, 60)
+            self.enforce_rate_limit("login-account", account_key, 8, 600)
             with connect() as db: user = db.execute("SELECT id,password_hash,password_salt FROM users WHERE email=?", (email,)).fetchone()
             if not user or not secrets.compare_digest(password_digest(password,bytes.fromhex(user["password_salt"])),user["password_hash"]):
                 raise ApiError(401, "Email or password did not match.")
+            self.clear_rate_limit("login-account", account_key)
             self.send_json(200, {"user": self.current_user_from_id(user["id"])}, self.create_session(user["id"]))
             return
         if path == "/api/logout":
@@ -959,7 +1192,7 @@ class Handler(BaseHTTPRequestHandler):
                 for product in products:
                     db.execute("INSERT INTO order_items(order_id,product_id,name,price_cents,quantity,emoji) VALUES(?,?,?,?,?,?)",
                                (order_id,product["id"],product["name"],product["price_cents"],quantities[product["id"]],product["emoji"]))
-            dispatch_push([stall_owner_id], {"title": "New BiteHub order", "body": f"New order #{order_id} is waiting at your stall.", "url": "/#orders", "tag": f"bitehub-order-{order_id}"})
+            dispatch_push([stall_owner_id], {"title": "New BiteHub order", "body": f"New order #{order_id} is waiting at your stall.", "url": "/#owner-orders", "tag": f"bitehub-order-{order_id}"})
             self.send_json(201, {"order_id": order_id})
             return
         feedback_match = re.fullmatch(r"/api/orders/(\d+)/feedback", path)
@@ -1108,9 +1341,10 @@ class Handler(BaseHTTPRequestHandler):
             order_id, action = int(order_match.group(1)), data.get("action")
             user = self.current_user()
             with connect() as db:
+                db.execute("BEGIN IMMEDIATE")
                 order = db.execute("SELECT o.*,s.owner_id,s.prep_minutes FROM orders o JOIN stalls s ON s.id=o.stall_id WHERE o.id=?", (order_id,)).fetchone()
                 if not order: raise ApiError(404, "Order not found.")
-                next_status, runner_id = None, order["runner_id"]
+                next_status, expected_status, runner_id = None, None, order["runner_id"]
                 if user["role"] == "owner" and order["owner_id"] == user["id"]:
                     transitions = {"confirm":("placed","confirmed"),"decline":("placed","declined"),"prepare":("confirmed","preparing"),"ready":("preparing","ready")}
                     if action == "assign":
@@ -1120,24 +1354,39 @@ class Handler(BaseHTTPRequestHandler):
                         runner = db.execute("SELECT id FROM users WHERE id=? AND role='runner'", (runner_id,)).fetchone()
                         if not runner: raise ValueError("Choose a valid campus runner.")
                     elif action in transitions:
-                        expected,next_status = transitions[action]
-                        if order["status"] != expected: raise ApiError(409,"That order has already changed. Refresh and try again.")
+                        expected_status,next_status = transitions[action]
+                        if order["status"] != expected_status: raise ApiError(409,"That order has already changed. Refresh and try again.")
                     else: raise ApiError(400,"That order action is not supported.")
                 elif user["role"] == "runner" and order["runner_id"] == user["id"]:
                     transitions = {"out":("ready","out"),"delivered":("out","completed")}
                     if action not in transitions: raise ApiError(400,"That order action is not supported.")
-                    expected,next_status = transitions[action]
-                    if order["status"] != expected: raise ApiError(409,"That order has already changed. Refresh and try again.")
+                    expected_status,next_status = transitions[action]
+                    if order["status"] != expected_status: raise ApiError(409,"That order has already changed. Refresh and try again.")
                 elif user["role"] == "buyer" and order["buyer_id"] == user["id"]:
                     if action != "collect" or order["fulfillment"] != "pickup" or order["status"] != "ready": raise ApiError(403,"That order cannot be confirmed as collected.")
+                    expected_status = "ready"
                     next_status = "completed"
                 else: raise ApiError(403,"This account cannot update that order.")
                 if next_status == "confirmed":
                     estimate = (datetime.now(timezone.utc)+timedelta(minutes=order["prep_minutes"])).isoformat(timespec="seconds")
-                    db.execute("UPDATE orders SET status=?,updated_at=?,estimated_ready_at=? WHERE id=?",
-                        (next_status,now(),estimate,order_id))
-                elif next_status: db.execute("UPDATE orders SET status=?,updated_at=? WHERE id=?",(next_status,now(),order_id))
-                else: db.execute("UPDATE orders SET runner_id=?,updated_at=? WHERE id=?",(runner_id,now(),order_id))
+                    changed = db.execute("UPDATE orders SET status=?,updated_at=?,estimated_ready_at=? WHERE id=? AND status=?",
+                        (next_status,now(),estimate,order_id,expected_status))
+                elif next_status:
+                    changed = db.execute("UPDATE orders SET status=?,updated_at=? WHERE id=? AND status=?",
+                        (next_status,now(),order_id,expected_status))
+                else:
+                    changed = db.execute("UPDATE orders SET runner_id=?,updated_at=? WHERE id=? AND status='ready' AND fulfillment='delivery'",
+                        (runner_id,now(),order_id))
+                if not changed.rowcount:
+                    raise ApiError(409,"That order has already changed. Refresh and try again.")
+                if next_status == "declined":
+                    reserved = db.execute("SELECT product_id,quantity FROM order_items WHERE order_id=? AND product_id IS NOT NULL", (order_id,)).fetchall()
+                    for item in reserved:
+                        db.execute("UPDATE products SET stock_count=MIN(1000000,stock_count+?) WHERE id=? AND stock_count IS NOT NULL",
+                            (item["quantity"],item["product_id"]))
+                if next_status == "completed":
+                    db.execute("DELETE FROM delivery_positions WHERE order_id=?", (order_id,))
+                    db.execute("UPDATE orders SET delivery_lat=NULL,delivery_lon=NULL WHERE id=?", (order_id,))
                 buyer_id = order["buyer_id"]
                 assigned_runner_id = runner_id if action == "assign" else None
                 stall_name = db.execute("SELECT name FROM stalls WHERE id=?", (order["stall_id"],)).fetchone()[0]
@@ -1150,9 +1399,9 @@ class Handler(BaseHTTPRequestHandler):
                     "declined": ("Order update", f"{stall_name} could not accept order #{order_id}.")}
                 if next_status in push_status:
                     title, body = push_status[next_status]
-                    dispatch_push([buyer_id], {"title": title, "body": body, "url": "/#orders", "tag": f"bitehub-order-{order_id}"})
+                    dispatch_push([buyer_id], {"title": title, "body": body, "url": "/#buyer-orders", "tag": f"bitehub-order-{order_id}"})
             if assigned_runner_id:
-                dispatch_push([assigned_runner_id], {"title": "Delivery assigned", "body": f"Order #{order_id} is ready for your delivery.", "url": "/#orders", "tag": f"bitehub-order-{order_id}"})
+                dispatch_push([assigned_runner_id], {"title": "Delivery assigned", "body": f"Order #{order_id} is ready for your delivery.", "url": "/#runner-queue", "tag": f"bitehub-order-{order_id}"})
             self.send_json(200,{"ok":True}); return
         raise ApiError(404,"That API route does not exist.")
 
@@ -1175,6 +1424,22 @@ class Handler(BaseHTTPRequestHandler):
 
     def serve_static(self, requested):
         relative = unquote(requested).lstrip("/") or "index.html"
+        # Only publish files the frontend actually uses. The project directory also
+        # contains the SQLite database, certificates, and other private files.
+        public_files = {
+            "index.html", "styles.css", "app-ui.css", "experience.css",
+            "school-theme.css", "feature-ui.css", "stall-profile.css",
+            "opening-screen.css", "market-ui.css", "app.js", "sw.js", "manifest.webmanifest",
+            "bitehub-mark.svg",
+            "assets/palawan-campus-map.png",
+            "assets/palawan-national-school-logo.webp",
+            "background music assets/Panaginip.mp3",
+            "background music assets/pahina.mp3",
+            "background music assets/life time.mp3",
+            "background music assets/bawat piyesa.mp3",
+        }
+        if relative not in public_files:
+            self.send_error(404); return
         target = (BASE / relative).resolve()
         if BASE not in target.parents and target != BASE:
             self.send_error(403); return
@@ -1186,6 +1451,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type",mime)
         self.send_header("Content-Length",str(len(data)))
+        self.send_header("Cache-Control", "no-cache" if target.name == "index.html" or target.suffix in {".js", ".css", ".webmanifest"} else "public, max-age=3600")
         self.send_header("X-Content-Type-Options","nosniff")
         self.send_header("Content-Security-Policy","default-src 'self'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self'; connect-src 'self'; base-uri 'self'; frame-ancestors 'none'")
         self.end_headers(); self.wfile.write(data)
@@ -1208,6 +1474,7 @@ def main():
     parser.add_argument("--port",type=int,default=int(os.environ.get("PORT", "8000")),help="Port to bind")
     parser.add_argument("--https-cert",help="PEM server certificate for HTTPS (use with --https-key)")
     parser.add_argument("--https-key",help="PEM private key for HTTPS (use with --https-cert)")
+    parser.add_argument("--behind-proxy",action="store_true",help="Serve behind a reverse proxy that terminates HTTPS")
     parser.add_argument("--create-admin",action="store_true",help="Create an admin account, then exit")
     parser.add_argument("--email",help="Admin email for --create-admin")
     parser.add_argument("--name",help="Admin display name for --create-admin")
@@ -1221,7 +1488,12 @@ def main():
         create_admin(email,name,password); return
     if bool(args.https_cert) != bool(args.https_key):
         parser.error("--https-cert and --https-key must be used together.")
+    if args.https_cert and args.behind_proxy:
+        parser.error("Use either local HTTPS certificates or --behind-proxy, not both.")
+    if args.host in ("0.0.0.0", "::") and not (args.https_cert or args.behind_proxy):
+        parser.error("Binding to the network requires HTTPS. Use start-secure.cmd or --behind-proxy behind a trusted HTTPS proxy.")
     httpd = ThreadingHTTPServer((args.host,args.port),Handler)
+    httpd.is_https = bool(args.https_cert or args.behind_proxy)
     scheme = "http"
     if args.https_cert:
         tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)

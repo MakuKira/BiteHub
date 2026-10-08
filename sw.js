@@ -6,13 +6,13 @@ self.addEventListener('push', event => {
     icon: '/bitehub-mark.svg',
     badge: '/bitehub-mark.svg',
     tag: message.tag || `bitehub-order-${Date.now()}`,
-    data: { url: message.url || '/#orders' }
+    data: { url: message.url || '/#buyer-orders' }
   }));
 });
 
 self.addEventListener('notificationclick', event => {
   event.notification.close();
-  const target = new URL(event.notification.data?.url || '/#orders', self.location.origin).href;
+  const target = new URL(event.notification.data?.url || '/#buyer-orders', self.location.origin).href;
   event.waitUntil(clients.matchAll({ type: 'window', includeUncontrolled: true }).then(windows => {
     const app = windows.find(client => client.url.startsWith(self.location.origin));
     if (app) return app.navigate(target).then(client => client.focus());

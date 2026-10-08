@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f4f0e8">
+  <meta name="theme-color" content="#244c39">
   <link rel="manifest" href="/manifest.webmanifest">
   <title>BiteHub · PNS campus food</title>
   <link rel="icon" type="image/svg+xml" href="bitehub-mark.svg">
@@ -15,9 +15,10 @@
   <link rel="stylesheet" href="app-ui.css?v=brand-school-header-20261003">
   <link rel="stylesheet" href="experience.css">
   <link rel="stylesheet" href="school-theme.css">
-  <link rel="stylesheet" href="feature-ui.css?v=campus-music-20261003">
+  <link rel="stylesheet" href="feature-ui.css?v=bag-redesign-20261007">
   <link rel="stylesheet" href="stall-profile.css?v=stall-pages-20261003">
   <link rel="stylesheet" href="opening-screen.css?v=school-name-size-20261003">
+  <link rel="stylesheet" href="market-ui.css?v=role-workspaces-20261007">
 </head>
 <body>
   <div id="opening-splash" class="opening-splash" role="status" aria-label="Opening BiteHub">
@@ -39,7 +40,8 @@
     <main id="view-content" class="main-content" tabindex="-1"><div class="loading-state"><img class="brand-mark" src="bitehub-mark.svg" alt=""><p>Connecting to your campus hub…</p></div></main>
     <footer class="site-footer"><span class="brand-light">BiteHub</span><span>Made for better campus breaks.</span><span>Local server · SQLite</span></footer>
   </div>
-  <dialog id="cart-dialog" class="modal"><form method="dialog" class="modal-dismiss"><button class="icon-button" aria-label="Close cart">×</button></form><div id="cart-content"></div></dialog>
+  <dialog id="cart-dialog" class="modal cart-modal" aria-labelledby="cart-title"><form method="dialog" class="modal-dismiss"><button id="cart-close" class="icon-button" aria-label="Close bag">×</button></form><div id="cart-content"></div></dialog>
+  <button id="cart-fab" class="cart-fab" type="button" data-action="open-cart" hidden></button>
   <dialog id="product-dialog" class="modal product-modal"><div id="product-content"></div></dialog>
   <dialog id="product-edit-dialog" class="modal auth-modal"><div id="product-edit-content"></div></dialog>
   <dialog id="stall-dialog" class="modal stall-modal"><div id="stall-content"></div></dialog>
@@ -54,7 +56,7 @@
     <input id="music-volume" class="music-volume" type="range" min="0" max="16" value="8" aria-label="Background music volume">
     <span id="music-track" class="music-track" aria-live="polite"></span>
   </aside>
-<script src="app.js?v=opening-splash-5sec-20261003" defer></script>
+<script src="app.js?v=bag-redesign-20261007" defer></script>
 </body>
 </html>
 

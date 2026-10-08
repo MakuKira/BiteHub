@@ -1,6 +1,6 @@
 <mxfile host="65bd71144e">
     <diagram id="bitehub-three-role-flow" name="BiteHub Three-Role Flowchart">
-        <mxGraphModel dx="5180" dy="1955" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="2500" pageHeight="2200" math="0" shadow="0">
+        <mxGraphModel dx="3327" dy="1640" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="2500" pageHeight="2200" math="0" shadow="0">
             <root>
                 <mxCell id="0"/>
                 <mxCell id="1" parent="0"/>
@@ -58,8 +58,9 @@
                             <mxPoint x="1320" y="-620"/>
                             <mxPoint x="1320" y="-660"/>
                             <mxPoint x="1300" y="-660"/>
-                            <mxPoint x="1300" y="-236.75"/>
-                            <mxPoint x="1270" y="-236.75"/>
+                            <mxPoint x="1300" y="-236.7"/>
+                            <mxPoint x="1080" y="-236.7"/>
+                            <mxPoint x="1080" y="-395"/>
                         </Array>
                         <mxPoint x="1290" y="-620" as="sourcePoint"/>
                         <mxPoint x="1320" y="-236.76470588235293" as="targetPoint"/>

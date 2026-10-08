@@ -3,4 +3,4 @@ services:
     name: bitehub
     runtime: python
     buildCommand: python -m py_compile server.py
-    startCommand: python server.py --host 0.0.0.0 --port $PORT
+    startCommand: python server.py --host 0.0.0.0 --port $PORT --behind-proxy

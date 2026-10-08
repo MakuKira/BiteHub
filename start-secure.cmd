@@ -4,7 +4,14 @@ set "BITEHUB_PORT=8000"
 set "BITEHUB_CERT=%~dp0.local-certs\server.crt"
 set "BITEHUB_KEY=%~dp0.local-certs\server.key"
 if not exist "%BITEHUB_CERT%" (
-  echo Missing local TLS certificate. See README.md section "Phone GPS over local HTTPS".
+  echo Local HTTPS certificate is missing. From PowerShell, run:
+  echo   py generate_local_cert.py --host-ip YOUR-PC-LAN-IP
+  echo Then see README.md section "Phone GPS over local HTTPS" for phone trust setup.
+  pause
+  exit /b 1
+)
+if not exist "%BITEHUB_KEY%" (
+  echo Local HTTPS private key is missing. Recreate the certificate with generate_local_cert.py.
   pause
   exit /b 1
 )

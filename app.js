@@ -407,69 +407,16 @@ function renderAuthForm(mode,role=state.authRole){
   const roleName=role==='owner'?'stall owner':role==='runner'?'school runner':role==='admin'?'administrator':'school customer';
   const roleCopy=role==='owner'?'Set up your stall and start publishing menu items.':role==='runner'?'Create your account to receive assigned school deliveries.':role==='admin'?'Manage school stalls and keep ordering on track.':'Browse school menus and follow your orders.';
   const loginCopy=role==='owner'?'Manage your stall, menu, and incoming orders.':role==='runner'?'See assigned runs and delivery details.':role==='admin'?'Manage school stalls and ordering.':'Browse school menus and follow your orders.';
-  slot.innerHTML=mode==='login'?`<span class="eyebrow">${esc(roleName)} workspace</span><h2>Welcome back.</h2><p class="form-intro">${esc(loginCopy)}</p><form class="stack-form" data-form="login"><label>Email address<input name="email" type="email" autocomplete="username" maxlength="254" required placeholder="you@school.edu"></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button class="button button-primary button-wide">Sign in <span>→</span></button></form><p class="auth-switch">New to BiteHub? <button class="text-button" data-auth-mode="choose">Choose your role</button></p>`:`<span class="eyebrow">${esc(roleName)}</span><h2>Create your ${esc(roleName)} account</h2><p class="form-intro">${esc(roleCopy)}</p><form class="stack-form signup-form" data-form="signup"><input type="hidden" name="role" value="${esc(role)}"><section class="signup-school-section"><div class="signup-step-heading"><span>01</span><div><h3>Your school community</h3><p>Choose any secondary school or university in the Philippines.</p></div></div><label>Institution type<select name="school_type" required><option value="">Choose type</option><option>Secondary school</option><option>University</option><option>Other school</option></select></label><label>School or university name<input name="school_name" maxlength="120" required placeholder="Search the official school name"></label><details class="school-location-optional" data-school-location><summary><span>Optional: add a school pin for delivery</span><small>You can create your account without latitude or longitude. A pin is needed to enable campus delivery.</small></summary><div class="school-search-row"><button class="button button-outline" type="button" data-school-find>Find on Google Maps</button><span>Palawan National School and Palawan State University are the first pilot examples. Other Philippine schools can join too.</span></div><div class="school-place-results" aria-live="polite" hidden></div><div class="school-map-panel"><div class="school-map-heading"><strong>School delivery location</strong><small>Search for your school, then adjust its pin on the map.</small></div><div class="school-signup-map" data-school-map aria-label="Optional Google Map to choose your school location"></div><p class="school-map-status" data-school-map-status>Open this optional section only if you want to set up campus delivery now.</p><div class="school-coordinate-fallback" data-school-coordinate-fallback hidden><p>The map is unavailable right now. You can skip this section and create your account.</p></div><input type="hidden" name="school_latitude"><input type="hidden" name="school_longitude"><small class="school-map-radius">A school pin is optional for sign-up and required for location-based campus delivery.</small></div></details><label>Region<select name="school_region" required><option value="">Choose region</option>${PH_REGION_OPTIONS.map(region=>`<option>${esc(region)}</option>`).join('')}</select></label><label>Province<input name="school_province" maxlength="80" required placeholder="Province"></label><label>City or municipality<input name="school_city" maxlength="80" required placeholder="City or municipality"></label><p class="school-country-lock"><span aria-hidden="true">🇵🇭</span> Country is set to Philippines</p><label class="confirm-school"><input type="checkbox" name="confirm_school" value="yes" required><span>I confirm these school details are correct.</span></label></section><section class="signup-person-section"><div class="signup-step-heading"><span>02</span><div><h3>Your account</h3><p>Your account will belong to the school you selected.</p></div></div><label>Your name<input name="name" autocomplete="name" maxlength="80" required placeholder="Full name"></label><label>Email address<input name="email" type="email" autocomplete="email" maxlength="254" required placeholder="you@example.com"></label>${role==='owner'?'<label>Stall name<input name="stall_name" maxlength="80" required placeholder="Your stall name"></label>':''}<label>Password <span class="field-hint">At least 10 characters</span><input name="password" type="password" autocomplete="new-password" minlength="10" required></label><button class="button button-primary button-wide">Create account <span>→</span></button></section></form><p class="auth-switch">Already have an account? <button class="text-button" data-auth-mode="login">Sign in</button></p>`;
-  if(mode==='signup')initializeSignupSchoolMap(slot.querySelector('[data-form="signup"]'));
+  slot.innerHTML=mode==='login'?`<span class="eyebrow">${esc(roleName)} workspace</span><h2>Welcome back.</h2><p class="form-intro">${esc(loginCopy)}</p><form class="stack-form" data-form="login"><label>Email address<input name="email" type="email" autocomplete="username" maxlength="254" required placeholder="you@school.edu"></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button class="button button-primary button-wide">Sign in <span>→</span></button></form><p class="auth-switch">New to BiteHub? <button class="text-button" data-auth-mode="choose">Choose your role</button></p>`:`<span class="eyebrow">${esc(roleName)}</span><h2>Create your ${esc(roleName)} account</h2><p class="form-intro">${esc(roleCopy)}</p><form class="stack-form signup-form" data-form="signup"><input type="hidden" name="role" value="${esc(role)}"><section class="signup-school-section"><div class="signup-step-heading"><span>01</span><div><h3>Your school community</h3><p>Choose any secondary school or university in the Philippines.</p></div></div><label>Institution type<select name="school_type" required><option value="">Choose type</option><option>Secondary school</option><option>University</option><option>Other school</option></select></label><label>School or university name<input name="school_name" maxlength="120" required placeholder="Search the official school name"></label><label>Region<select name="school_region" required><option value="">Choose region</option>${PH_REGION_OPTIONS.map(region=>`<option>${esc(region)}</option>`).join('')}</select></label><label>Province<input name="school_province" maxlength="80" required placeholder="Province"></label><label>City or municipality<input name="school_city" maxlength="80" required placeholder="City or municipality"></label><p class="school-country-lock"><span aria-hidden="true">🇵🇭</span> Country is set to Philippines</p><label class="confirm-school"><input type="checkbox" name="confirm_school" value="yes" required><span>I confirm these school details are correct.</span></label></section><section class="signup-person-section"><div class="signup-step-heading"><span>02</span><div><h3>Your account</h3><p>Your account will belong to the school you selected.</p></div></div><label>Your name<input name="name" autocomplete="name" maxlength="80" required placeholder="Full name"></label><label>Email address<input name="email" type="email" autocomplete="email" maxlength="254" required placeholder="you@example.com"></label>${role==='owner'?'<label>Stall name<input name="stall_name" maxlength="80" required placeholder="Your stall name"></label>':''}<label>Password <span class="field-hint">At least 10 characters</span><input name="password" type="password" autocomplete="new-password" minlength="10" required></label><button class="button button-primary button-wide">Create account <span>→</span></button></section></form><p class="auth-switch">Already have an account? <button class="text-button" data-auth-mode="login">Sign in</button></p>`;
+  if(mode==='signup')initializeSignupSchoolFields(slot.querySelector('[data-form="signup"]'));
 }
-async function initializeSignupSchoolMap(form){
-  if(!form)return;
+function initializeSignupSchoolFields(form){
+  if(!form||form.dataset.schoolFieldsInitialized==='true')return;
   const regionField=form.elements.namedItem('school_region'),provinceField=form.elements.namedItem('school_province');
+  if(!regionField||!provinceField)return;
   const syncProvinceRequirement=()=>{const isNcr=regionField.value==='National Capital Region (NCR)';provinceField.required=!isNcr;provinceField.closest('label').firstChild.textContent=isNcr?'Province (if applicable)':'Province'};
-  if(form.dataset.schoolFieldsInitialized!=='true'){
-    const schoolNameLabel=form.elements.namedItem('school_name').closest('label');
-    schoolNameLabel.after(regionField.closest('label'),provinceField.closest('label'),form.elements.namedItem('school_city').closest('label'));
-    regionField.addEventListener('change',syncProvinceRequirement);syncProvinceRequirement();
-    form.dataset.schoolFieldsInitialized='true';
-  }
-  const optionalLocation=form.querySelector('[data-school-location]');
-  if(optionalLocation&&!optionalLocation.open&&optionalLocation.dataset.mapInitialized!=='true'){
-    optionalLocation.addEventListener('toggle',()=>{if(optionalLocation.open&&optionalLocation.dataset.mapInitialized!=='true'){optionalLocation.dataset.mapInitialized='true';initializeSignupSchoolMap(form)}});
-    return;
-  }
-  const host=form.querySelector('[data-school-map]'),status=form.querySelector('[data-school-map-status]'),find=form.querySelector('[data-school-find]'),results=form.querySelector('.school-place-results'),fallback=form.querySelector('[data-school-coordinate-fallback]');
-  const latitudeField=form.elements.namedItem('school_latitude'),longitudeField=form.elements.namedItem('school_longitude');
-  find.disabled=true;find.textContent='Loading map…';
-  let maps=null,map=null,marker=null,deliveryCircle=null,places=[];
-  const savePoint=(latitude,longitude,message='School pin saved. Click the map to fine-tune it.')=>{
-    latitudeField.value=Number(latitude).toFixed(7);longitudeField.value=Number(longitude).toFixed(7);status.textContent=message;
-    if(map){const point={lat:Number(latitude),lng:Number(longitude)};if(marker)marker.setPosition(point);else marker=new maps.Marker({map,position:point,title:'School location'});if(deliveryCircle)deliveryCircle.setCenter(point);else deliveryCircle=new maps.Circle({map,center:point,radius:1500,fillColor:'#7650c9',fillOpacity:.055,strokeColor:'#7650c9',strokeOpacity:.65,strokeWeight:2,clickable:false});}
-  };
-  try{
-    maps=await loadGoogleMapsApi();
-    if(maps){
-      map=new maps.Map(host,{center:{lat:12.8797,lng:121.774},zoom:6,minZoom:5,maxZoom:21,mapTypeId:'roadmap',mapTypeControl:false,streetViewControl:false,fullscreenControl:false,gestureHandling:'cooperative',restriction:{latLngBounds:{south:4,north:22.5,west:115,east:128},strictBounds:true}});
-      map.addListener('click',event=>{if(event.latLng)savePoint(event.latLng.lat(),event.latLng.lng())});
-    }else{status.textContent='Google Maps could not load. You can skip this optional step and create your account.';fallback.hidden=false;}
-  }catch{status.textContent='Google Maps could not load. You can skip this optional step and create your account.';fallback.hidden=false;}
-  find.addEventListener('click',async()=>{
-    const name=form.elements.namedItem('school_name').value.trim(),region=form.elements.namedItem('school_region').value,province=form.elements.namedItem('school_province').value.trim(),city=form.elements.namedItem('school_city').value.trim();
-    if(!name){form.elements.namedItem('school_name').focus();status.textContent='Enter the school or university name first.';return}
-    if(!maps||!map){status.textContent='Google Maps is unavailable. Skip this optional step and create your account.';fallback.hidden=false;return}
-    find.disabled=true;find.textContent='Searching…';results.hidden=false;results.innerHTML='<p>Looking for your school…</p>';
-    try{
-      const {Place}=await maps.importLibrary('places');
-      const query=[name,city,province,region,'Philippines'].filter(Boolean).join(', ');
-      const response=await Place.searchByText({textQuery:query,fields:['displayName','formattedAddress','location','addressComponents'],maxResultCount:5});
-      places=response.places||[];
-      results.innerHTML=places.length?`${places.map((place,index)=>`<button type="button" class="school-place-option" data-school-place="${index}"><strong>${esc(place.displayName||name)}</strong><small>${esc(place.formattedAddress||'Philippines')}</small></button>`).join('')}<small class="school-google-attribution">Google Maps results</small>`:'<p>No matching place was found. Try the school’s full name and city, or click its location on the map.</p>';
-    }catch{results.innerHTML='<p>Could not search right now. Try the full official school name with its city, or click the school location on the map.</p>';}
-    finally{find.disabled=false;find.textContent='Find on Google Maps'}
-  });
-  results.addEventListener('click',event=>{
-    const button=event.target.closest('[data-school-place]');if(!button)return;const place=places[Number(button.dataset.schoolPlace)],location=place?.location;if(!location)return;
-    const latitude=typeof location.lat==='function'?location.lat():Number(location.lat),longitude=typeof location.lng==='function'?location.lng():Number(location.lng),components=place.addressComponents||[];
-    form.elements.namedItem('school_name').value=place.displayName||form.elements.namedItem('school_name').value;
-    const component=type=>components.find(part=>part.types?.includes(type))?.longText||'';
-    const addressRegion=component('administrative_area_level_1'),regionMatch=addressRegion?(PH_REGION_OPTIONS.find(region=>region.toLowerCase().includes(addressRegion.toLowerCase())||addressRegion.toLowerCase().includes(region.split(' (')[0].toLowerCase()))||(/metro manila/i.test(addressRegion)?PH_REGION_OPTIONS[0]:null)):null;
-    if(regionMatch)regionField.value=regionMatch;
-    if(regionField.value==='National Capital Region (NCR)')provinceField.value='Metro Manila';
-    else if(component('administrative_area_level_2'))provinceField.value=component('administrative_area_level_2');
-    const cityField=form.elements.namedItem('school_city'),addressCity=component('locality')||component('administrative_area_level_3')||component('sublocality_level_1')||(regionField.value==='National Capital Region (NCR)'?component('administrative_area_level_2'):'');
-    if(addressCity)cityField.value=addressCity;
-    syncProvinceRequirement();
-    map.panTo({lat:latitude,lng:longitude});map.setZoom(18);savePoint(latitude,longitude,`${place.displayName||'School'} selected. Check the location details and click the map to move the pin if needed.`);
-    results.hidden=true;
-  });
-  find.disabled=false;find.textContent='Find on Google Maps';
+  regionField.addEventListener('change',syncProvinceRequirement);syncProvinceRequirement();
+  form.dataset.schoolFieldsInitialized='true';
 }
 function heading(eyebrow,title,copy,side=''){
   return `<header class="page-heading"><div><span class="eyebrow">${esc(eyebrow)}</span><h1>${title}</h1><p>${esc(copy)}</p></div>${side}</header>`;
@@ -895,8 +842,6 @@ document.addEventListener('submit',async e=>{
       const result=await api('/api/profile',{method:'PATCH',body:json(profile)});state.user=result.user;state.sidebarProfileOpen=false;render();toast('Your profile has been updated.');return;
     }
     if(form.dataset.form==='signup'){
-      const rawLatitude=String(values.school_latitude||'').trim(),rawLongitude=String(values.school_longitude||'').trim();
-      if(rawLatitude||rawLongitude){const latitude=Number(rawLatitude),longitude=Number(rawLongitude);if(!rawLatitude||!rawLongitude||!Number.isFinite(latitude)||!Number.isFinite(longitude)||latitude<4||latitude>22.5||longitude<115||longitude>128)throw new Error('Choose a valid school pin in the Philippines, or leave the optional pin blank.');}
       if(!PH_REGION_OPTIONS.includes(values.school_region))throw new Error('Choose a region in the Philippines.');
     }
     if(form.dataset.form==='stall-logo'){

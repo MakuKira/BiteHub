@@ -68,9 +68,6 @@ button,input,select,textarea{max-width:100%}
   .role-home>.auth-card{padding:clamp(16px,4cqi,24px)}
   .role-home>.auth-card:has(.signup-form){padding:12px}
   .signup-school-section,.signup-person-section{padding:13px}
-  .school-search-row{grid-template-columns:minmax(0,1fr)}
-  .school-search-row .button{width:100%}
-  .school-signup-map{height:220px}
   .order-card-top{align-items:flex-start}
   .order-card-top,.order-card-body{gap:10px}
   .order-card-body{align-items:flex-start;flex-wrap:wrap}

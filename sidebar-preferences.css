@@ -554,31 +554,6 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover{background:#75618f}
 .signup-form>section>label{display:grid;gap:6px;color:#352451;font-size:11px;font-weight:800}
 .signup-form input,.signup-form select{width:100%;min-width:0;min-height:43px;padding:10px 12px;border:1px solid #ddd3ee;border-radius:11px;background:#fff;color:#322b3e;font:500 13px 'DM Sans',sans-serif}
 .signup-form input:focus,.signup-form select:focus{outline:0;border-color:#7854bd;box-shadow:0 0 0 4px #7854bd22}
-.school-search-row{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:10px}
-.school-search-row .button{min-height:40px;white-space:nowrap}
-.school-search-row>span{color:#766c81;font-size:10px;line-height:1.45}
-.school-place-results{display:grid;gap:7px;padding:9px;border:1px solid #dfd4f0;border-radius:14px;background:#fff}
-.school-place-results>p{margin:4px;color:#675c75;font-size:11px;line-height:1.5}
-.school-place-option{display:grid;gap:4px;width:100%;padding:10px 12px;border:1px solid #ece5f5;border-radius:10px;background:#fcfaff;color:#30214f;text-align:left;cursor:pointer}
-.school-place-option:hover,.school-place-option:focus-visible{border-color:#8e6bd0;background:#f4edff}
-.school-place-option strong{font-size:12px}.school-place-option small,.school-google-attribution{color:#716980;font-size:10px}
-.school-map-panel{display:grid;gap:9px;padding:12px;border:1px solid #ded4ee;border-radius:16px;background:#fff;box-shadow:0 9px 22px #3624540a}
-.school-map-heading{display:grid;gap:4px}.school-map-heading strong{color:#322153;font:800 12px Manrope,sans-serif}.school-map-heading small,.school-map-radius{color:#756d80;font-size:10px;line-height:1.45}
-.school-signup-map{height:260px;overflow:hidden;border:1px solid #e4dcf1;border-radius:12px;background:linear-gradient(145deg,#eee9fa,#faf7ed)}
-.school-map-status{margin:0;color:#6544a6;font-size:10px;font-weight:700;line-height:1.45}
-.school-map-radius{display:block}
-.school-coordinate-fallback{display:grid;gap:6px;padding:10px;border-radius:12px;background:#fff8e9;color:#59431c;font-size:10px;line-height:1.45}
-.school-coordinate-fallback p{margin:0}
-.school-location-optional{overflow:hidden;border:1px solid #ded4ee;border-radius:14px;background:#fcfaff}
-.school-location-optional>summary{display:grid;grid-template-columns:minmax(0,1fr) 22px;align-items:center;gap:4px 12px;padding:13px 14px;list-style:none;cursor:pointer}
-.school-location-optional>summary::-webkit-details-marker{display:none}
-.school-location-optional>summary::after{grid-column:2;grid-row:1/3;content:"+";display:grid;width:22px;height:22px;place-items:center;border-radius:50%;background:#eee6fb;color:#59399e;font-size:16px;font-weight:800}
-.school-location-optional[open]>summary::after{content:"−"}
-.school-location-optional>summary>span{color:#493274;font-size:11px;font-weight:800}
-.school-location-optional>summary>small{color:#766c81;font-size:10px;line-height:1.4}
-.school-location-optional[open]>.school-search-row{margin:0 12px 10px}
-.school-location-optional[open]>.school-place-results{margin:0 12px 10px}
-.school-location-optional[open]>.school-map-panel{margin:0 12px 12px}
 .fulfillment-choice.is-disabled{opacity:.62;cursor:not-allowed}
 .fulfillment-choice.is-disabled input{cursor:not-allowed}
 .school-country-lock{display:flex;align-items:center;gap:8px;margin:0;padding:10px 12px;border:1px solid #ece3f8;border-radius:11px;background:#f7f2ff;color:#4d367e;font-size:11px;font-weight:800}
@@ -586,17 +561,10 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover{background:#75618f}
 .signup-person-section .button-wide{margin-top:3px}
 html[data-theme="dark"] .signup-school-section,html[data-theme="dark"] .signup-person-section{border-color:#4c3d60;background:linear-gradient(155deg,#2a2037,#211b2b 75%,#302235);color:#f0e9fb}
 html[data-theme="dark"] .signup-step-heading h3,html[data-theme="dark"] .signup-form>section>label,html[data-theme="dark"] .school-map-heading strong{color:#f3eaff}
-html[data-theme="dark"] .signup-step-heading p,html[data-theme="dark"] .school-search-row>span,html[data-theme="dark"] .school-map-heading small,html[data-theme="dark"] .school-map-radius,html[data-theme="dark"] .confirm-school{color:#c1b5d0}
+html[data-theme="dark"] .signup-step-heading p,html[data-theme="dark"] .confirm-school{color:#c1b5d0}
 html[data-theme="dark"] .signup-form input,html[data-theme="dark"] .signup-form select{border-color:#544468;background:#211a2c;color:#f5effb}
-html[data-theme="dark"] .school-map-panel,html[data-theme="dark"] .school-place-results{border-color:#50405f;background:#292136}
-html[data-theme="dark"] .school-location-optional{border-color:#50405f;background:#292136}
-html[data-theme="dark"] .school-location-optional>summary>span{color:#e2d3ff}
-html[data-theme="dark"] .school-location-optional>summary>small{color:#c1b5d0}
-html[data-theme="dark"] .school-location-optional>summary::after{background:#3b2d50;color:#e2d3ff}
-html[data-theme="dark"] .school-place-option{border-color:#554469;background:#322742;color:#f3eaff}
-html[data-theme="dark"] .school-place-option small,html[data-theme="dark"] .school-google-attribution{color:#c1b5d0}
 html[data-theme="dark"] .school-country-lock{border-color:#50405f;background:#322742;color:#e4d7fc}
-@media(max-width:760px){.signup-form{grid-template-columns:minmax(0,1fr)}.signup-person-section{position:static}.role-home>.auth-card:has(.signup-form){padding:16px}.signup-school-section,.signup-person-section{padding:15px}.school-signup-map{height:235px}}
+@media(max-width:760px){.signup-form{grid-template-columns:minmax(0,1fr)}.signup-person-section{position:static}.role-home>.auth-card:has(.signup-form){padding:16px}.signup-school-section,.signup-person-section{padding:15px}}
 
 /* Give each menu item a small, deliberate food-photo stage. */
 .product-art.product-art-trigger{isolation:isolate;overflow:hidden;border:0;padding:0;background:radial-gradient(ellipse at 50% 45%,#fff2cf 0,#f3e8ff 55%,#e5d8f8 100%);color:#4e3289;cursor:pointer}

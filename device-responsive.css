@@ -61,9 +61,9 @@ button,input,select,textarea{max-width:100%}
 @container app-page (max-width: 520px){
   .product-grid{grid-template-columns:minmax(0,1fr)}
   .stats-grid,.stats-grid:has(.stat-card:nth-child(4)),.report-stat-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
-  .product-card{grid-template-columns:minmax(88px,.36fr) minmax(0,1fr)}
-  .product-art{min-height:142px}
-  .product-details{min-height:142px;padding:12px}
+  .product-card{grid-template-columns:minmax(110px,.42fr) minmax(0,1fr);min-height:168px}
+  .product-art{height:168px;min-height:168px}
+  .product-details{min-height:168px;padding:12px}
   .role-home{padding-inline:clamp(12px,4cqi,20px)}
   .role-home>.auth-card{padding:clamp(16px,4cqi,24px)}
   .role-home>.auth-card:has(.signup-form){padding:12px}
@@ -135,9 +135,9 @@ button,input,select,textarea{max-width:100%}
   .buyer-banner .banner-art{width:45%;height:71%;right:-4%;bottom:0}
   .buyer-banner .button{min-height:44px;padding:10px 13px}
   .product-grid{grid-template-columns:minmax(0,1fr);gap:10px}
-  .product-card{grid-template-columns:94px minmax(0,1fr);min-height:148px}
-  .product-art{min-height:148px}
-  .product-details{min-height:148px;padding:12px 10px}
+  .product-card{grid-template-columns:minmax(110px,.42fr) minmax(0,1fr);min-height:168px}
+  .product-art{height:168px;min-height:168px}
+  .product-details{min-height:168px;padding:12px 10px}
   .product-details h3{font-size:14px}
   .product-details>p{font-size:10px}
   .product-bottom .button{min-height:40px;padding:8px 10px;font-size:10px}

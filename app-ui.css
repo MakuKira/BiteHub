@@ -6,3 +6,4 @@
 
 .brand-copy{display:grid;grid-template-columns:auto;align-items:start;line-height:1}.brand-name{display:inline-flex;gap:0;white-space:nowrap}.brand-copy>small{grid-column:1;margin-top:5px}.topbar-school>span>strong{font-size:14px}
 
+.school-location-summary{display:grid;gap:4px;padding:12px 14px;border:1px solid #d9e5dc;border-radius:12px;background:#f4f8f3;color:#294638;font-size:13px}.school-location-summary span{color:#6a7b70;font-size:11px}.confirm-school{display:flex!important;align-items:flex-start;gap:9px}.confirm-school input{width:auto!important;margin-top:3px}.school-request{margin-top:18px;padding:15px;border:1px solid #dce5dd;border-radius:14px;background:#fbfcfa}.school-request summary{color:#315b43;font-size:13px;font-weight:800;cursor:pointer}.school-request>p{color:#697a70;font-size:12px}.school-request .stack-form{margin-top:13px}

@@ -1,0 +1,212 @@
+/* Device-aware layout rules shared by every BiteHub workspace. */
+html{scroll-padding-top:88px;overflow-x:clip}
+body{width:100%;min-width:320px;overflow-x:clip}
+img,svg,video,canvas{max-width:100%}
+button,input,select,textarea{max-width:100%}
+.main-content{box-sizing:border-box;width:min(1240px,calc(100% - clamp(28px,8vw,96px)));min-width:0;margin-inline:auto;padding:clamp(24px,4vw,48px) 0 clamp(46px,6vw,72px);container-type:inline-size;container-name:app-page}
+.main-content>*{min-width:0}
+.panel,.auth-card,.section-block,.workspace-page,.workspace-content{min-width:0}
+.page-heading{flex-wrap:wrap;min-width:0}
+.page-heading>div{min-width:0}
+.page-heading p,.helper-text,.report-definition{overflow-wrap:anywhere}
+.product-grid,.stats-grid,.owner-layout,.admin-overview-grid,.role-card-grid,.signup-form{min-width:0}
+.product-card,.stat-card,.owner-layout>*,.admin-overview-grid>*,.role-choice,.signup-form>section{min-width:0}
+.product-details,.inventory-copy,.order-card-top>div,.order-card-body>div{min-width:0}
+.report-table-wrap,.reach-table-wrap{max-width:100%;overflow-x:auto;overscroll-behavior-inline:contain;-webkit-overflow-scrolling:touch}
+.workspace-tabs,.workspace-nav{max-width:100%;overflow-x:auto;overscroll-behavior-inline:contain;-webkit-overflow-scrolling:touch;scrollbar-width:thin}
+.search-field,.report-actions select,.catalog-select select,.stack-form input,.stack-form select,.stack-form textarea{box-sizing:border-box;max-width:100%}
+.button,.workspace-tab,.filter-chip,.admin-shortcut,.sidebar-menu-button{touch-action:manipulation}
+
+/* Resize from the available page width, so split-screen windows adapt too. */
+@container app-page (max-width: 980px){
+  .owner-layout,.admin-overview-grid{grid-template-columns:minmax(0,1fr)}
+  .owner-layout>.panel,.admin-overview-grid>.panel{min-width:0}
+  .stats-grid,.stats-grid:has(.stat-card:nth-child(4)){grid-template-columns:repeat(2,minmax(0,1fr))}
+  .product-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .report-stat-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .role-choice{min-height:400px;padding:18px 14px}
+  .role-art{width:min(100%,195px);height:195px}
+  .role-choice>small{font-size:clamp(12px,1.5cqi,15px)}
+}
+@container app-page (max-width: 720px){
+  .role-card-grid{max-width:560px;grid-template-columns:minmax(0,1fr);gap:12px}
+  .role-choice{min-height:0;display:grid;grid-template-columns:clamp(76px,19cqi,112px) minmax(0,1fr);grid-template-rows:auto auto auto;align-items:center;gap:5px 14px;padding:14px;border-radius:20px;text-align:left}
+  .role-art{grid-column:1;grid-row:1/4;width:100%;height:auto;aspect-ratio:1}
+  .role-choice>strong{align-self:end;margin:0;text-align:left;font-size:clamp(17px,4.2cqi,21px)}
+  .role-choice>small{align-self:start;min-height:0;font-size:clamp(11px,3.1cqi,13px);line-height:1.5;text-align:left}
+  .role-choice-action{grid-column:2;width:100%;min-height:42px;margin:3px 0 0;padding:9px 12px;font-size:12px}
+  .role-heading{margin-bottom:20px}
+  .role-heading h1{font-size:clamp(36px,9cqi,58px)}
+  .role-heading>p{font-size:clamp(15px,3.8cqi,19px)}
+  .role-tagline{width:100%;margin-top:18px;border-radius:16px;font-size:clamp(12px,3.4cqi,16px)}
+  .section-title{align-items:stretch;flex-direction:column;gap:12px}
+  .section-title>.search-field,.section-title>.report-actions{width:100%}
+  .menu-controls{align-items:flex-start;flex-wrap:wrap;gap:10px}
+  .menu-controls>.result-count{margin-left:auto}
+  .buyer-banner{position:relative;height:auto;min-height:280px;grid-template-columns:minmax(0,1fr);padding:26px clamp(20px,5cqi,32px) 22px}
+  .buyer-banner .buyer-banner-copy{max-width:60%;z-index:2}
+  .buyer-banner .banner-art{position:absolute;right:-2%;bottom:0;top:auto;width:47%;height:90%;z-index:0}
+  .buyer-banner .buyer-banner-copy h2{font-size:clamp(32px,7cqi,45px)}
+  .buyer-banner .buyer-banner-copy p{font-size:12px}
+  .form-split{grid-template-columns:minmax(0,1fr)}
+  .report-heading{align-items:flex-start;flex-direction:column}
+  .report-actions{justify-content:flex-start}
+  .workspace-tabs{position:sticky;top:64px;z-index:5}
+  .report-table{min-width:620px}
+  .role-home>.auth-card:has(.signup-form){width:100%;padding:16px}
+  .signup-form{grid-template-columns:minmax(0,1fr)}
+  .signup-person-section{position:static}
+}
+
+@container app-page (max-width: 520px){
+  .product-grid{grid-template-columns:minmax(0,1fr)}
+  .stats-grid,.stats-grid:has(.stat-card:nth-child(4)),.report-stat-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+  .product-card{grid-template-columns:minmax(88px,.36fr) minmax(0,1fr)}
+  .product-art{min-height:142px}
+  .product-details{min-height:142px;padding:12px}
+  .role-home{padding-inline:clamp(12px,4cqi,20px)}
+  .role-home>.auth-card{padding:clamp(16px,4cqi,24px)}
+  .role-home>.auth-card:has(.signup-form){padding:12px}
+  .signup-school-section,.signup-person-section{padding:13px}
+  .school-search-row{grid-template-columns:minmax(0,1fr)}
+  .school-search-row .button{width:100%}
+  .school-signup-map{height:220px}
+  .order-card-top{align-items:flex-start}
+  .order-card-top,.order-card-body{gap:10px}
+  .order-card-body{align-items:flex-start;flex-wrap:wrap}
+  .order-actions{justify-content:stretch;flex-wrap:wrap}
+  .order-actions>.button{flex:1 1 120px;min-height:44px}
+  .inventory-item{min-width:0}
+  .filter-row{max-width:100%;overflow-x:auto;flex-wrap:nowrap;padding:2px 2px 7px;scrollbar-width:thin}
+  .filter-chip{min-height:38px;flex:0 0 auto}
+}
+
+@media(max-width:760px){
+  html{scroll-padding-top:72px}
+  .topbar{box-sizing:border-box;min-height:62px;height:auto;gap:10px;padding:8px clamp(12px,4vw,24px)}
+  .header-brand-group,.brand-copy,.account-tools{min-width:0}
+  .header-brand-group>.brand{gap:8px}
+  .header-brand-group>.brand .brand-mark{flex:none}
+  .brand-wordmark{width:clamp(70px,17vw,110px);height:auto}
+  .account-tools{gap:8px}
+  .account-chip{min-width:0;max-width:min(54vw,280px);gap:7px}
+  .account-chip>span:last-child{min-width:0;overflow:hidden}
+  .account-chip strong,.account-chip small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .account-chip small{max-width:42vw}
+  .main-content{width:calc(100% - 32px);padding-top:24px;padding-bottom:52px}
+  .page-heading{align-items:flex-start;gap:10px;margin:4px 0 20px}
+  .page-heading h1{font-size:clamp(25px,6vw,34px)}
+  .page-heading p{font-size:12px;line-height:1.55}
+  .page-heading>.live-pill{margin:4px 0 0 auto}
+  .workspace-nav{max-width:calc(100vw - 24px)}
+  .workspace-tabs{margin-inline:-16px;padding-inline:14px}
+  .panel{padding:clamp(14px,3.5vw,19px)}
+  .menu-controls{gap:10px}
+  .product-grid{gap:12px}
+  .section-block{margin-top:26px}
+  .admin-overview-grid,.owner-layout{grid-template-columns:minmax(0,1fr)}
+  .stats-grid,.stats-grid:has(.stat-card:nth-child(4)){grid-template-columns:repeat(2,minmax(0,1fr))}
+  .role-directory{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .map-google-link{max-width:100%;white-space:normal}
+  .google-campus-map{height:260px}
+  .modal{box-sizing:border-box;width:min(560px,calc(100vw - 24px));max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px - env(safe-area-inset-top));padding:clamp(16px,4vw,22px);overflow:auto;overscroll-behavior:contain}
+  .role-login{line-height:1.6}
+}
+
+@media(max-width:520px){
+  html{scroll-padding-top:64px}
+  .topbar{min-height:58px;padding:7px 12px}
+  .header-brand-group>.brand .brand-mark{width:34px;height:34px;border-radius:50%}
+  .brand-wordmark{width:74px}
+  .header-brand-group>.brand small{font-size:6px;letter-spacing:.08em}
+  .account-tools{gap:6px}
+  .account-chip{max-width:42vw;padding:5px 7px}
+  .account-chip .avatar{width:30px;height:30px;flex:none}
+  .account-chip small{font-size:9px}
+  .main-content{width:calc(100% - 24px);padding-top:19px;padding-bottom:42px}
+  .page-heading{margin-bottom:16px}
+  .page-heading h1{font-size:25px}
+  .page-heading>.live-pill{padding:7px 9px;font-size:9px}
+  .workspace-tabs{top:58px;margin-inline:-12px;padding:6px 10px}
+  .workspace-tab{min-height:44px}
+  .section-title h2{font-size:19px}
+  .search-field{box-sizing:border-box;width:100%;min-height:44px}
+  .buyer-banner{min-height:250px;margin-bottom:24px;border-radius:20px}
+  .buyer-banner .buyer-banner-copy{max-width:72%}
+  .buyer-banner .buyer-banner-copy h2{font-size:clamp(31px,9vw,39px)}
+  .buyer-banner .buyer-banner-copy p{font-size:11px;line-height:1.55}
+  .buyer-banner .banner-art{width:45%;height:71%;right:-4%;bottom:0}
+  .buyer-banner .button{min-height:44px;padding:10px 13px}
+  .product-grid{grid-template-columns:minmax(0,1fr);gap:10px}
+  .product-card{grid-template-columns:94px minmax(0,1fr);min-height:148px}
+  .product-art{min-height:148px}
+  .product-details{min-height:148px;padding:12px 10px}
+  .product-details h3{font-size:14px}
+  .product-details>p{font-size:10px}
+  .product-bottom .button{min-height:40px;padding:8px 10px;font-size:10px}
+  .stat-card{min-height:100px;padding:13px}
+  .stat-card strong{font-size:clamp(17px,5vw,21px)}
+  .order-card{padding:13px}
+  .order-card-top,.order-card-body{align-items:flex-start;flex-wrap:wrap}
+  .order-card-body{flex-direction:column}
+  .order-actions>.button{min-height:44px}
+  .role-home{padding:14px 12px 24px}
+  .auth-masthead{gap:9px;margin-bottom:20px}
+  .auth-masthead .brand-wordmark{width:clamp(72px,22vw,100px)}
+  .school-signature{gap:6px}
+  .school-seal{width:38px;height:38px}
+  .school-signature>span:last-child{max-width:42vw;padding-left:7px;font-size:10px;white-space:normal}
+  .school-signature>span>strong{white-space:normal!important;line-height:1.2}
+  .role-heading{margin-bottom:16px}
+  .role-heading h1{font-size:clamp(34px,10vw,44px)}
+  .role-heading>p{font-size:15px}
+  .role-heading .role-prompt{font-size:12px}
+  .role-choice{grid-template-columns:76px minmax(0,1fr);gap:4px 11px;padding:11px;border-radius:17px}
+  .role-art{width:76px;height:76px}
+  .role-choice>strong{font-size:16px}
+  .role-choice>small{font-size:11px}
+  .role-choice-action{min-height:42px;font-size:11px}
+  .role-tagline{margin-top:15px;padding:10px 8px;font-size:12px}
+  .role-home>.auth-card{padding:16px}
+  .signup-step-heading h3{font-size:15px}
+  .signup-school-section,.signup-person-section{padding:12px;border-radius:15px}
+  .signup-form input,.signup-form select{min-height:46px;font-size:16px}
+  .stack-form input,.stack-form select,.stack-form textarea,.search-field input,.report-actions select{font-size:16px}
+  .button,.filter-chip,.sidebar-nav-link,.sidebar-settings-trigger,.sidebar-logout{min-height:44px}
+  .workspace-tab{min-height:44px;padding-inline:10px}
+  .role-directory{grid-template-columns:minmax(0,1fr)}
+  .site-footer{flex-wrap:wrap;justify-content:center;text-align:center;padding:14px 12px}
+  .modal{width:100%;max-width:100%;max-height:92dvh;margin:auto 0 0;border-radius:22px 22px 0 0;padding-bottom:max(18px,env(safe-area-inset-bottom))}
+  #cart-dialog{inset:auto 0 0;width:100%;max-width:100%;max-height:92dvh;margin:0;border-radius:22px 22px 0 0;padding-bottom:max(18px,env(safe-area-inset-bottom))}
+}
+
+@media(max-width:360px){
+  .account-chip{max-width:38vw}
+  .account-chip small{max-width:31vw}
+  .header-brand-group>.brand{gap:6px}
+  .brand-wordmark{width:66px}
+  .role-choice{grid-template-columns:66px minmax(0,1fr);padding:10px}
+  .role-art{width:66px;height:66px}
+  .role-choice>strong{font-size:15px}
+  .role-choice-action{padding-inline:8px}
+  .report-stat-grid{grid-template-columns:minmax(0,1fr)}
+}
+
+@media(max-height:560px) and (orientation:landscape){
+  .main-content{padding-top:18px;padding-bottom:28px}
+  .role-home{padding-top:12px;padding-bottom:18px}
+  .role-heading{margin-bottom:14px}
+  .role-heading h1{font-size:38px}
+  .role-choice{min-height:0}
+  .role-art{height:90px}
+  .workspace-tabs{top:58px}
+}
+
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+}
+
+/* The chooser keeps its centered content width, while its backdrop fills the viewport. */
+#app.auth-open{position:relative;isolation:isolate;width:100%;max-width:none;min-height:100svh;background-color:#fcf9ff;background-image:radial-gradient(ellipse at 82% 24%,#e8dcff8c 0,transparent 31rem),radial-gradient(ellipse at 14% 82%,#fff0cd9c 0,transparent 24rem),linear-gradient(135deg,#fffdf7 0%,#fcf9ff 55%,#fffaf1 100%);background-position:center,center,center;background-size:auto,auto,100% 100%;background-repeat:no-repeat}
+#app.auth-open .role-home{background:transparent}
+html[data-theme="dark"] #app.auth-open{background-color:#171220;background-image:radial-gradient(ellipse at 82% 24%,#674ca533 0,transparent 31rem),radial-gradient(ellipse at 14% 82%,#bd84301c 0,transparent 24rem),linear-gradient(135deg,#191420 0%,#21192b 55%,#181421 100%)}

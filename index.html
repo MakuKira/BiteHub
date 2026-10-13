@@ -3,42 +3,45 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#244c39">
+  <meta name="theme-color" content="#5531a5">
   <link rel="manifest" href="/manifest.webmanifest">
-  <title>BiteHub · PNS campus food</title>
+  <title>BiteHub · food for your school</title>
   <link rel="icon" type="image/svg+xml" href="bitehub-mark.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
-  <link rel="stylesheet" href="app-ui.css?v=brand-school-header-20261003">
+  <link rel="stylesheet" href="app-ui.css?v=philippines-all-schools-20261013">
   <link rel="stylesheet" href="experience.css">
   <link rel="stylesheet" href="school-theme.css">
   <link rel="stylesheet" href="feature-ui.css?v=bag-redesign-20261007">
   <link rel="stylesheet" href="stall-profile.css?v=stall-pages-20261003">
   <link rel="stylesheet" href="opening-screen.css?v=school-name-size-20261003">
   <link rel="stylesheet" href="market-ui.css?v=role-workspaces-20261007">
+  <link rel="stylesheet" href="brand-refresh.css?v=header-wordmark-footer-cleanup-20261013">
+  <link rel="stylesheet" href="sidebar-preferences.css?v=owner-stall-setup-20261013">
+  <link rel="stylesheet" href="device-responsive.css?v=responsive-background-fullbleed-20261013">
 </head>
 <body>
   <div id="opening-splash" class="opening-splash" role="status" aria-label="Opening BiteHub">
     <div class="opening-splash-card">
       <div class="splash-brand-lockup">
-        <div class="splash-food-mark" aria-hidden="true"><img src="bitehub-mark.svg" alt=""><span>🥪</span><i>✦</i></div>
-        <div><small class="splash-kicker">YOUR CAMPUS FOOD HUB</small><h1>Bite<span>Hub</span></h1><p>Good breaks start here.</p></div>
+        <div class="splash-food-mark" aria-hidden="true"><img src="assets/bitehub-icon.png" alt=""></div>
+        <div class="splash-word-group"><img class="splash-wordmark" src="assets/bitehub-wordmark.png" alt="BiteHub"><small class="splash-kicker">FOOD FOR YOUR SCHOOL</small><p>Good breaks start here.</p></div>
       </div>
       <div class="splash-loading" aria-hidden="true"><i></i><i></i><i></i></div>
-      <div class="splash-school-lockup"><img src="assets/palawan-national-school-logo.webp" alt=""><span>Made for <strong>Palawan National School</strong></span></div>
+      <div class="splash-school-lockup"><span aria-hidden="true">✦</span><span>Made for <strong>every school community</strong></span></div>
     </div>
     <span class="splash-orb splash-orb-one" aria-hidden="true"></span><span class="splash-orb splash-orb-two" aria-hidden="true"></span>
   </div>
   <div id="app" class="app-shell">
     <header class="topbar">
-      <div class="header-brand-group"><a class="brand" href="#home" aria-label="BiteHub home"><img class="brand-mark" src="bitehub-mark.svg" alt=""><span class="brand-copy"><span class="brand-name">Bite<span class="brand-light">Hub</span></span><small>CAMPUS FOOD · MADE EASY</small></span></a><div class="school-signature topbar-school" aria-label="Palawan National School campus"><img class="school-seal" src="assets/palawan-national-school-logo.webp" alt="Palawan National School crest"><span><small>ON CAMPUS AT</small><strong>Palawan National School</strong></span></div></div>
+      <div class="header-brand-group"><a class="brand" href="#home" aria-label="BiteHub home"><img class="brand-mark" src="assets/bitehub-icon.png" alt=""><span class="brand-copy"><img class="brand-wordmark" src="assets/bitehub-wordmark.png" alt="BiteHub"><small>FOOD FOR YOUR SCHOOL</small></span></a></div>
       <div id="account-tools" class="account-tools" hidden></div>
     </header>
-    <main id="view-content" class="main-content" tabindex="-1"><div class="loading-state"><img class="brand-mark" src="bitehub-mark.svg" alt=""><p>Connecting to your campus hub…</p></div></main>
-    <footer class="site-footer"><span class="brand-light">BiteHub</span><span>Made for better campus breaks.</span><span>Local server · SQLite</span></footer>
+    <main id="view-content" class="main-content" tabindex="-1"><div class="loading-state"><img class="brand-mark" src="assets/bitehub-icon.png" alt=""><p>Connecting to your campus hub…</p></div></main>
+    <footer class="site-footer"><span>Made for better school breaks.</span></footer>
   </div>
   <dialog id="cart-dialog" class="modal cart-modal" aria-labelledby="cart-title"><form method="dialog" class="modal-dismiss"><button id="cart-close" class="icon-button" aria-label="Close bag">×</button></form><div id="cart-content"></div></dialog>
   <button id="cart-fab" class="cart-fab" type="button" data-action="open-cart" hidden></button>
@@ -47,16 +50,25 @@
   <dialog id="stall-dialog" class="modal stall-modal"><div id="stall-content"></div></dialog>
   <dialog id="auth-dialog" class="modal auth-modal"></dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <aside class="campus-music" aria-label="Background music">
-    <button id="music-toggle" class="music-toggle" type="button" aria-pressed="false" aria-label="Play soft background music">
-      <span class="music-toggle-icon" aria-hidden="true">♫</span>
-      <span id="music-label">Play soft music</span>
-    </button>
-    <label class="music-volume-label" for="music-volume">Volume</label>
-    <input id="music-volume" class="music-volume" type="range" min="0" max="16" value="8" aria-label="Background music volume">
-    <span id="music-track" class="music-track" aria-live="polite"></span>
+  <button id="sidebar-backdrop" class="sidebar-backdrop" type="button" data-action="close-sidebar" aria-label="Close menu" hidden></button>
+  <aside id="app-sidebar" class="app-sidebar" role="dialog" aria-modal="true" aria-labelledby="sidebar-title" aria-hidden="true" inert>
+    <header class="sidebar-header">
+      <a class="sidebar-brand" href="#home" aria-label="BiteHub home"><img src="assets/bitehub-icon.png" alt=""><span><strong id="sidebar-title">BiteHub</strong><small>YOUR SCHOOL HUB</small></span></a>
+      <button class="sidebar-close" type="button" data-action="close-sidebar" aria-label="Close menu">×</button>
+    </header>
+    <div id="sidebar-account" class="sidebar-account"></div>
+    <nav id="sidebar-navigation" class="sidebar-navigation" aria-label="Dashboard navigation"></nav>
+    <div class="sidebar-settings-wrap">
+      <button id="sidebar-settings-toggle" class="sidebar-settings-trigger" type="button" data-action="toggle-sidebar-settings" aria-expanded="false" aria-controls="sidebar-settings-panel"><span class="sidebar-link-icon" aria-hidden="true">⚙</span><span>Settings</span><span class="sidebar-chevron" aria-hidden="true">⌄</span></button>
+      <section id="sidebar-settings-panel" class="sidebar-settings-panel" aria-label="Settings and preferences" hidden>
+        <button id="theme-toggle" class="sidebar-preference" type="button" role="switch" aria-checked="false" data-action="toggle-theme"><span class="sidebar-preference-icon" aria-hidden="true">◐</span><span class="sidebar-preference-copy"><strong>Dark mode</strong><small id="theme-status">Off</small></span><span class="sidebar-switch" aria-hidden="true"><i></i></span></button>
+        <div id="sidebar-notification-setting" class="sidebar-notification-setting" aria-live="polite"></div>
+        <div class="sidebar-sound-setting"><div class="sidebar-sound-heading"><span class="sidebar-preference-icon" aria-hidden="true">♫</span><span class="sidebar-preference-copy"><strong>Background music</strong><small id="music-track" aria-live="polite">Off</small></span></div><button id="music-toggle" class="music-toggle" type="button" aria-pressed="false" aria-label="Play soft background music"><span class="music-toggle-icon" aria-hidden="true">♫</span><span id="music-label">Play soft music</span></button><label class="music-volume-label" for="music-volume">Volume</label><input id="music-volume" class="music-volume" type="range" min="0" max="16" value="8" aria-label="Background music volume"></div>
+      </section>
+    </div>
+    <footer class="sidebar-footer"><button class="sidebar-logout" type="button" data-action="logout"><span aria-hidden="true">↪</span>Sign out</button></footer>
   </aside>
-<script src="app.js?v=bag-redesign-20261007" defer></script>
+<script src="app.js?v=clean-role-footer-20261013" defer></script>
 </body>
 </html>
 

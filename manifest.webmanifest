@@ -1,9 +1,16 @@
 {
-  "name": "BiteHub · PNS campus food",
+  "name": "BiteHub · food for your school",
   "short_name": "BiteHub",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#f4f0e8",
-  "theme_color": "#244c39",
-  "icons": [{ "src": "/bitehub-mark.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+  "background_color": "#fffdf4",
+  "theme_color": "#5531a5",
+  "icons": [
+    {
+      "src": "/bitehub-mark.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
 }

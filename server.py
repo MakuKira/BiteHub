@@ -41,7 +41,21 @@ PICKUP_SLOT_MINUTES = 30
 CAMPUS_ZONE = timezone(timedelta(hours=8), "Asia/Manila")
 DIETARY_TAGS = {"vegetarian", "vegan", "halal", "gluten-free", "dairy-free", "nut-free"}
 ALLERGEN_TAGS = {"peanuts", "tree-nuts", "milk", "eggs", "soy", "wheat", "fish", "shellfish", "sesame"}
-CAMPUS_BOUNDS = {"south": 9.736753, "north": 9.740445, "west": 118.737108, "east": 118.740839}
+PHILIPPINES_BOUNDS = {"south": 4.0, "north": 22.5, "west": 115.0, "east": 128.0}
+DEFAULT_DELIVERY_RADIUS_METERS = 1500
+PHILIPPINE_REGIONS = {
+    "National Capital Region (NCR)", "Cordillera Administrative Region (CAR)",
+    "Region I (Ilocos Region)", "Region II (Cagayan Valley)", "Region III (Central Luzon)",
+    "Region IV-A (CALABARZON)", "MIMAROPA Region", "Region V (Bicol Region)",
+    "Region VI (Western Visayas)", "Negros Island Region (NIR)", "Region VII (Central Visayas)",
+    "Region VIII (Eastern Visayas)", "Region IX (Zamboanga Peninsula)",
+    "Region X (Northern Mindanao)", "Region XI (Davao Region)", "Region XII (SOCCSKSARGEN)",
+    "Region XIII (Caraga)", "Bangsamoro Autonomous Region in Muslim Mindanao (BARMM)",
+}
+PILOT_SCHOOLS = {
+    "pns": {"name": "Palawan National School", "type": "Secondary school", "region": "MIMAROPA Region", "province": "Palawan", "city": "Puerto Princesa City", "latitude": 9.738599, "longitude": 118.738974, "radius": DEFAULT_DELIVERY_RADIUS_METERS},
+    "psu": {"name": "Palawan State University", "type": "University", "region": "MIMAROPA Region", "province": "Palawan", "city": "Puerto Princesa City", "latitude": 9.77673, "longitude": 118.73353, "radius": DEFAULT_DELIVERY_RADIUS_METERS},
+}
 REACH_COOKIE_SECONDS = 60 * 60 * 24 * 365
 _rate_limit_lock = threading.Lock()
 _rate_limit_events = {}
@@ -64,6 +78,21 @@ def initialize():
           id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE,
           password_hash TEXT NOT NULL, password_salt TEXT NOT NULL,
           role TEXT NOT NULL CHECK(role IN ('buyer','owner','runner','admin')),
+          school_id TEXT NOT NULL DEFAULT 'pns', school_region TEXT NOT NULL DEFAULT 'MIMAROPA',
+          school_province TEXT NOT NULL DEFAULT 'Palawan', school_city TEXT NOT NULL DEFAULT 'Puerto Princesa',
+          school_zip TEXT NOT NULL DEFAULT '5300',
+          profile_photo_data BLOB, profile_photo_type TEXT, profile_photo_version INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS schools (
+          id TEXT PRIMARY KEY, name TEXT NOT NULL, school_type TEXT NOT NULL,
+          region TEXT NOT NULL, province TEXT NOT NULL, city TEXT NOT NULL,
+          latitude REAL NOT NULL, longitude REAL NOT NULL,
+          delivery_radius_m INTEGER NOT NULL DEFAULT 1500, created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS school_requests (
+          id INTEGER PRIMARY KEY, school_name TEXT NOT NULL, school_type TEXT NOT NULL,
+          region TEXT NOT NULL, province TEXT NOT NULL, city TEXT NOT NULL, zip TEXT NOT NULL DEFAULT '',
           created_at TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS sessions (
@@ -137,6 +166,22 @@ def initialize():
         CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions(expires_at);
         """)
         stall_columns = {row["name"] for row in db.execute("PRAGMA table_info(stalls)")}
+        user_columns = {row["name"] for row in db.execute("PRAGMA table_info(users)")}
+        for school_id, school in PILOT_SCHOOLS.items():
+            db.execute("""INSERT OR IGNORE INTO schools(id,name,school_type,region,province,city,latitude,longitude,delivery_radius_m,created_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?)""", (school_id,school["name"],school["type"],school["region"],school["province"],school["city"],school["latitude"],school["longitude"],school["radius"],now()))
+        for name, declaration in (
+            ("school_id", "TEXT NOT NULL DEFAULT 'pns'"),
+            ("school_region", "TEXT NOT NULL DEFAULT 'MIMAROPA'"),
+            ("school_province", "TEXT NOT NULL DEFAULT 'Palawan'"),
+            ("school_city", "TEXT NOT NULL DEFAULT 'Puerto Princesa'"),
+            ("school_zip", "TEXT NOT NULL DEFAULT '5300'"),
+            ("profile_photo_data", "BLOB"),
+            ("profile_photo_type", "TEXT"),
+            ("profile_photo_version", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            if name not in user_columns:
+                db.execute(f"ALTER TABLE users ADD COLUMN {name} {declaration}")
         if "status" not in stall_columns:
             db.execute("ALTER TABLE stalls ADD COLUMN status TEXT NOT NULL DEFAULT 'approved' CHECK(status IN ('pending','approved','paused'))")
         # Stall signup no longer requires an administrator's approval. Make
@@ -374,16 +419,40 @@ def parse_hours(opens_at, closes_at):
     return opens_at, closes_at
 
 
-def campus_point(latitude, longitude, label="Location"):
+def campus_point(latitude, longitude, label="Location", school=None):
     try:
         latitude, longitude = float(latitude), float(longitude)
     except (TypeError, ValueError):
-        raise ValueError(f"Choose {label.lower()} on the campus map.")
+        raise ValueError(f"Choose {label.lower()} on the school map.")
     if not math.isfinite(latitude) or not math.isfinite(longitude):
-        raise ValueError(f"Choose {label.lower()} on the campus map.")
-    if not CAMPUS_BOUNDS["south"] <= latitude <= CAMPUS_BOUNDS["north"] or not CAMPUS_BOUNDS["west"] <= longitude <= CAMPUS_BOUNDS["east"]:
-        raise ValueError(f"{label} must be inside the Palawan National School delivery area. Off-campus locations are not available.")
+        raise ValueError(f"Choose {label.lower()} on the school map.")
+    if not PHILIPPINES_BOUNDS["south"] <= latitude <= PHILIPPINES_BOUNDS["north"] or not PHILIPPINES_BOUNDS["west"] <= longitude <= PHILIPPINES_BOUNDS["east"]:
+        raise ValueError(f"{label} must be in the Philippines.")
+    if not school:
+        raise ValueError("Your school location is missing. Sign in again or contact your school administrator.")
+    school_lat = school.get("school_latitude")
+    school_lon = school.get("school_longitude")
+    try:
+        school_lat, school_lon = float(school_lat), float(school_lon)
+        radius = float(school.get("delivery_radius_m") or DEFAULT_DELIVERY_RADIUS_METERS)
+    except (TypeError, ValueError):
+        raise ValueError("Your school map location has not been set.")
+    lat1, lat2 = math.radians(school_lat), math.radians(latitude)
+    dlat, dlon = lat2-lat1, math.radians(longitude-school_lon)
+    haversine = math.sin(dlat/2)**2 + math.cos(lat1)*math.cos(lat2)*math.sin(dlon/2)**2
+    distance = 6_371_000 * 2 * math.atan2(math.sqrt(haversine), math.sqrt(1-haversine))
+    if distance > radius:
+        raise ValueError(f"{label} must be within {int(radius)} metres of {school.get('school_name', 'your school')}.")
     return latitude, longitude
+
+
+def make_school_id(name, region, province, city):
+    def normalize(value):
+        words = re.sub(r"[^a-z0-9]+", " ", str(value).casefold()).split()
+        return " ".join(word for word in words if word not in {"city", "municipality", "province"})
+    parts = (name, region, province, city)
+    normalized = "|".join(normalize(part) for part in parts)
+    return "ph-" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]
 
 
 def stall_is_open(opens_at, closes_at, moment=None):
@@ -567,12 +636,14 @@ class Handler(BaseHTTPRequestHandler):
                 row = db.execute("""SELECT u.id,u.name,u.email,u.role,s.id stall_id,s.name stall_name,s.description stall_description,s.status stall_status,
                     s.opens_at stall_opens_at,s.closes_at stall_closes_at,s.prep_minutes stall_prep_minutes,
                     s.pickup_slot_capacity stall_pickup_slot_capacity,s.pickup_lat stall_pickup_lat,
-                    s.pickup_lon stall_pickup_lon,s.logo_type stall_logo_type
+                    s.pickup_lon stall_pickup_lon,s.logo_type stall_logo_type,
+                    u.profile_photo_type,u.profile_photo_version
                     FROM sessions x JOIN users u ON u.id=x.user_id LEFT JOIN stalls s ON s.owner_id=u.id
                     WHERE x.token_hash=? AND x.expires_at>?""", (token_hash, int(time.time()))).fetchone()
             if row:
                 user = dict(row)
                 user["stall_logo_url"] = f"/api/stalls/{user['stall_id']}/logo" if user.get("stall_logo_type") else None
+                user["profile_photo_url"] = f"/api/profile/photo?v={user['profile_photo_version']}" if user.get("profile_photo_type") else None
                 return user
         if required:
             raise ApiError(401, "Please sign in to continue.")
@@ -643,6 +714,25 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(500, {"error": "The server could not complete that request."})
 
     def api_get(self, path):
+        if path == "/api/profile/photo":
+            user = self.current_user()
+            with connect() as db:
+                row = db.execute("SELECT profile_photo_data,profile_photo_type FROM users WHERE id=?", (user["id"],)).fetchone()
+            if not row or not row["profile_photo_data"] or not row["profile_photo_type"]:
+                raise ApiError(404, "Profile photo not found.")
+            self.send_response(200)
+            self.send_header("Content-Type", row["profile_photo_type"])
+            self.send_header("Content-Length", str(len(row["profile_photo_data"])))
+            self.send_header("Cache-Control", "private, no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(row["profile_photo_data"])
+            return
+        if path == "/api/maps/config":
+            # Google Maps JavaScript API keys are public client-side credentials.
+            # Restrict the configured key by referrer and enabled APIs in Google Cloud.
+            self.send_json(200, {"google_maps_api_key": os.environ.get("BITEHUB_GOOGLE_MAPS_API_KEY", "").strip()})
+            return
         if path == "/api/notifications/config":
             self.send_json(200, {"public_key": vapid_public_key(), "available": push_available()})
             return
@@ -1040,6 +1130,19 @@ class Handler(BaseHTTPRequestHandler):
                     (user["id"], endpoint, json.dumps(subscription), now(), now()))
             self.send_json(201, {"ok": True})
             return
+        if path == "/api/school-requests":
+            school_name = clean_text(data.get("school_name"), "School name", 120)
+            school_type = data.get("school_type")
+            if school_type not in ("Secondary school", "University", "Other school"): raise ValueError("Choose a school or university type.")
+            region = clean_text(data.get("region"), "Region", 80)
+            province = clean_text(data.get("province"), "Province", 80)
+            city = clean_text(data.get("city"), "City or municipality", 80)
+            zip_code = clean_text(data.get("zip", ""), "ZIP code", 10, required=False)
+            if zip_code and not re.fullmatch(r"[0-9]{4,10}", zip_code): raise ValueError("Enter a valid ZIP code using 4 to 10 digits.")
+            with connect() as db:
+                db.execute("INSERT INTO school_requests(school_name,school_type,region,province,city,zip,created_at) VALUES(?,?,?,?,?,?,?)", (school_name,school_type,region,province,city,zip_code,now()))
+            self.send_json(201, {"ok": True, "message": "Thanks! Your school request has been saved for review."})
+            return
         if path == "/api/signup":
             name = clean_text(data.get("name"), "Name", 80)
             email = clean_text(data.get("email"), "Email", 254).lower()
@@ -1049,11 +1152,40 @@ class Handler(BaseHTTPRequestHandler):
             if len(password) > 1024: raise ValueError("Password must be 1,024 characters or fewer.")
             role = data.get("role")
             if role not in ("buyer", "owner", "runner"): raise ApiError(400, "Choose a supported account type.")
+            school_name = clean_text(data.get("school_name"), "School or university name", 120)
+            school_type = data.get("school_type")
+            if school_type not in ("Secondary school", "University", "Other school"): raise ValueError("Choose a valid institution type.")
+            school_region = clean_text(data.get("school_region"), "Region", 80)
+            school_province = clean_text(data.get("school_province"), "Province", 80, required=school_region != "National Capital Region (NCR)")
+            if not school_province: school_province = "Metro Manila"
+            school_city = clean_text(data.get("school_city"), "City or municipality", 80)
+            if school_region not in PHILIPPINE_REGIONS: raise ValueError("Choose a region in the Philippines.")
+            try:
+                school_latitude = float(data.get("school_latitude"))
+                school_longitude = float(data.get("school_longitude"))
+            except (TypeError, ValueError):
+                raise ValueError("Search for your school and place its pin on the map.")
+            if not math.isfinite(school_latitude) or not math.isfinite(school_longitude) or not PHILIPPINES_BOUNDS["south"] <= school_latitude <= PHILIPPINES_BOUNDS["north"] or not PHILIPPINES_BOUNDS["west"] <= school_longitude <= PHILIPPINES_BOUNDS["east"]:
+                raise ValueError("Choose a school location in the Philippines.")
+            school_zip = clean_text(data.get("school_zip", ""), "ZIP code", 10, required=False)
+            if data.get("confirm_school") != "yes": raise ValueError("Confirm your school selection before creating an account.")
+            if school_zip and not re.fullmatch(r"[0-9]{4,10}", school_zip): raise ValueError("Enter a valid ZIP code using 4 to 10 digits.")
             stall_name = clean_text(data.get("stall_name"), "Stall name", 80) if role == "owner" else None
             salt = secrets.token_bytes(16)
             with connect() as db:
-                cur = db.execute("INSERT INTO users(name,email,password_hash,password_salt,role,created_at) VALUES(?,?,?,?,?,?)",
-                                 (name,email,password_digest(password,salt),salt.hex(),role,now()))
+                normalized_name = " ".join(school_name.casefold().split())
+                known_school = None
+                for pilot_id, pilot in PILOT_SCHOOLS.items():
+                    same_name = " ".join(pilot["name"].casefold().split()) == normalized_name
+                    distance = math.hypot((school_latitude-pilot["latitude"])*111_320, (school_longitude-pilot["longitude"])*111_320*math.cos(math.radians(school_latitude)))
+                    if same_name and distance <= 500:
+                        known_school = pilot_id
+                        break
+                school_id = known_school or make_school_id(school_name,school_region,school_province,school_city)
+                db.execute("""INSERT OR IGNORE INTO schools(id,name,school_type,region,province,city,latitude,longitude,delivery_radius_m,created_at)
+                    VALUES(?,?,?,?,?,?,?,?,?,?)""", (school_id,school_name,school_type,school_region,school_province,school_city,school_latitude,school_longitude,DEFAULT_DELIVERY_RADIUS_METERS,now()))
+                cur = db.execute("INSERT INTO users(name,email,password_hash,password_salt,role,school_id,school_region,school_province,school_city,school_zip,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                                 (name,email,password_digest(password,salt),salt.hex(),role,school_id,school_region,school_province,school_city,school_zip,now()))
                 user_id = cur.lastrowid
                 if role == "owner": db.execute("INSERT INTO stalls(owner_id,name,status,created_at) VALUES(?,?,'approved',?)", (user_id,stall_name,now()))
             self.send_json(201, {"user": self.current_user_from_id(user_id)}, self.create_session(user_id))
@@ -1083,7 +1215,7 @@ class Handler(BaseHTTPRequestHandler):
         if location_match:
             runner = self.require_role("runner")
             order_id = int(location_match.group(1))
-            latitude, longitude = campus_point(data.get("latitude"), data.get("longitude"), "Driver location")
+            latitude, longitude = campus_point(data.get("latitude"), data.get("longitude"), "Driver location", runner)
             accuracy = data.get("accuracy")
             heading = data.get("heading")
             try:
@@ -1138,15 +1270,15 @@ class Handler(BaseHTTPRequestHandler):
             delivery_lat = delivery_lon = None
             if data["fulfillment"] == "delivery":
                 point = data.get("delivery_location") or {}
-                delivery_lat, delivery_lon = campus_point(point.get("latitude"), point.get("longitude"), "Delivery location")
+                delivery_lat, delivery_lon = campus_point(point.get("latitude"), point.get("longitude"), "Delivery location", buyer)
             pickup_at=None
-            if data["fulfillment"]=="pickup":
+            if data["fulfillment"]=="pickup" and data.get("pickup_at"):
                 try:
-                    requested_pickup=datetime.fromisoformat(str(data.get("pickup_at") or ""))
+                    requested_pickup=datetime.fromisoformat(str(data["pickup_at"]))
                     if requested_pickup.tzinfo is None: raise ValueError()
                     pickup_at=requested_pickup.astimezone(CAMPUS_ZONE).isoformat(timespec="seconds")
                 except (TypeError,ValueError):
-                    raise ValueError("Choose an available pickup time.")
+                    raise ValueError("Choose a valid pickup time.")
             entries = data.get("items")
             if not isinstance(entries,list) or not entries or len(entries)>30: raise ValueError("Add at least one menu item.")
             ids, quantities = set(), {}
@@ -1221,6 +1353,25 @@ class Handler(BaseHTTPRequestHandler):
         raise ApiError(404, "That API route does not exist.")
 
     def api_patch(self, path, data):
+        if path == "/api/profile":
+            user = self.current_user()
+            name = clean_text(data.get("name", user["name"]), "Your name", 80)
+            remove_photo = data.get("remove_photo", False)
+            if not isinstance(remove_photo, bool): raise ValueError("Choose whether to remove your profile photo.")
+            if remove_photo and ("photo_data" in data or "photo_type" in data):
+                raise ValueError("Choose a new photo or remove the existing one, not both.")
+            with connect() as db:
+                existing = db.execute("SELECT profile_photo_data,profile_photo_type FROM users WHERE id=?", (user["id"],)).fetchone()
+                photo_data, photo_type = existing["profile_photo_data"], existing["profile_photo_type"]
+                if remove_photo:
+                    photo_data = photo_type = None
+                elif "photo_data" in data or "photo_type" in data:
+                    photo_data, photo_type = parse_product_photo(data.get("photo_data"), data.get("photo_type"), "profile photo")
+                version = time.time_ns() // 1_000_000 if photo_type else 0
+                db.execute("UPDATE users SET name=?,profile_photo_data=?,profile_photo_type=?,profile_photo_version=? WHERE id=?",
+                    (name, photo_data, photo_type, version, user["id"]))
+            self.send_json(200, {"user": self.current_user_from_id(user["id"])})
+            return
         if path == "/api/stall/feature":
             owner = self.require_role("owner")
             try: product_id = int(data.get("product_id"))
@@ -1278,16 +1429,11 @@ class Handler(BaseHTTPRequestHandler):
             except (TypeError,ValueError): raise ValueError("Prep time must be a whole number of minutes.")
             if isinstance(data.get("prep_minutes"),bool) or not 1 <= prep_minutes <= 180:
                 raise ValueError("Prep time must be between 1 and 180 minutes.")
-            try: pickup_slot_capacity=int(data.get("pickup_slot_capacity"))
-            except (TypeError,ValueError): raise ValueError("Pickup limit must be a whole number.")
-            if isinstance(data.get("pickup_slot_capacity"),bool) or not 1 <= pickup_slot_capacity <= 100:
-                raise ValueError("Pickup limit must be between 1 and 100 orders per time slot.")
             with connect() as db:
-                cur = db.execute("UPDATE stalls SET opens_at=?,closes_at=?,prep_minutes=?,pickup_slot_capacity=? WHERE owner_id=?",
-                    (opens_at,closes_at,prep_minutes,pickup_slot_capacity,owner["id"]))
+                cur = db.execute("UPDATE stalls SET opens_at=?,closes_at=?,prep_minutes=? WHERE owner_id=?",
+                    (opens_at,closes_at,prep_minutes,owner["id"]))
                 if not cur.rowcount: raise ApiError(404,"Stall not found.")
-            self.send_json(200,{"opens_at":opens_at,"closes_at":closes_at,"prep_minutes":prep_minutes,
-                "pickup_slot_capacity":pickup_slot_capacity}); return
+            self.send_json(200,{"opens_at":opens_at,"closes_at":closes_at,"prep_minutes":prep_minutes}); return
         stall_match = re.fullmatch(r"/api/admin/stalls/(\d+)", path)
         if stall_match:
             self.require_role("admin")
@@ -1417,9 +1563,10 @@ class Handler(BaseHTTPRequestHandler):
     @staticmethod
     def current_user_from_id(user_id):
         with connect() as db:
-            row = db.execute("SELECT u.id,u.name,u.email,u.role,s.id stall_id,s.name stall_name,s.description stall_description,s.status stall_status,s.opens_at stall_opens_at,s.closes_at stall_closes_at,s.prep_minutes stall_prep_minutes,s.pickup_slot_capacity stall_pickup_slot_capacity,s.logo_type stall_logo_type FROM users u LEFT JOIN stalls s ON s.owner_id=u.id WHERE u.id=?",(user_id,)).fetchone()
+            row = db.execute("SELECT u.id,u.name,u.email,u.role,u.school_id,sc.region school_region,sc.province school_province,sc.city school_city,u.school_zip,sc.name school_name,sc.school_type,sc.latitude school_latitude,sc.longitude school_longitude,sc.delivery_radius_m,s.id stall_id,s.name stall_name,s.description stall_description,s.status stall_status,s.opens_at stall_opens_at,s.closes_at stall_closes_at,s.prep_minutes stall_prep_minutes,s.pickup_slot_capacity stall_pickup_slot_capacity,s.logo_type stall_logo_type,u.profile_photo_type,u.profile_photo_version FROM users u LEFT JOIN schools sc ON sc.id=u.school_id LEFT JOIN stalls s ON s.owner_id=u.id WHERE u.id=?",(user_id,)).fetchone()
         user = dict(row)
         user["stall_logo_url"] = f"/api/stalls/{user['stall_id']}/logo" if user.get("stall_logo_type") else None
+        user["profile_photo_url"] = f"/api/profile/photo?v={user['profile_photo_version']}" if user.get("profile_photo_type") else None
         return user
 
     def serve_static(self, requested):
@@ -1430,9 +1577,9 @@ class Handler(BaseHTTPRequestHandler):
             "index.html", "styles.css", "app-ui.css", "experience.css",
             "school-theme.css", "feature-ui.css", "stall-profile.css",
             "opening-screen.css", "market-ui.css", "app.js", "sw.js", "manifest.webmanifest",
-            "bitehub-mark.svg",
-            "assets/palawan-campus-map.png",
-            "assets/palawan-national-school-logo.webp",
+            "bitehub-mark.svg", "brand-refresh.css", "sidebar-preferences.css", "device-responsive.css",
+            "assets/bitehub-food-mark.png", "assets/bitehub-logo.png",
+            "assets/bitehub-icon.png", "assets/bitehub-wordmark.png",
             "background music assets/Panaginip.mp3",
             "background music assets/pahina.mp3",
             "background music assets/life time.mp3",
@@ -1453,7 +1600,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length",str(len(data)))
         self.send_header("Cache-Control", "no-cache" if target.name == "index.html" or target.suffix in {".js", ".css", ".webmanifest"} else "public, max-age=3600")
         self.send_header("X-Content-Type-Options","nosniff")
-        self.send_header("Content-Security-Policy","default-src 'self'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self'; connect-src 'self'; base-uri 'self'; frame-ancestors 'none'")
+        self.send_header("Content-Security-Policy","default-src 'self'; img-src 'self' https: data: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://maps.googleapis.com https://maps.gstatic.com; font-src 'self' https://fonts.gstatic.com data:; script-src 'self' https://maps.googleapis.com https://maps.gstatic.com; connect-src 'self' https://maps.googleapis.com https://maps.gstatic.com https://*.googleapis.com https://*.gstatic.com; worker-src 'self' blob:; base-uri 'self'; frame-ancestors 'none'")
         self.end_headers(); self.wfile.write(data)
 
 

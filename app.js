@@ -1,4 +1,4 @@
-const state={user:null,publicBrowse:new URLSearchParams(location.search).has('stall'),products:[],featuredProducts:[],featuredScroll:0,featuredPaused:false,featuredTimer:null,orders:[],runners:[],overview:null,adminReports:null,reportRange:'30',reachAnalytics:null,paused:false,cart:new Map(),cartNote:'',pickupSlot:null,pickupSlots:[],pickupSlotRequest:0,fulfillment:'pickup',deliveryLocation:null,mapZoom:1,trackingWatch:null,lastLocationSent:0,filter:'All',query:'',sort:'featured',stallFilter:'All',dietaryFilter:'All',allergenFilter:'All',buyerView:'menu',ownerView:'dashboard',adminView:'overview',authRole:'buyer',pushEnabled:false,pushAvailable:false};
+const state={user:null,publicBrowse:new URLSearchParams(location.search).has('stall'),products:[],featuredProducts:[],heroFeaturedIndex:0,featuredScroll:0,featuredPaused:false,featuredTimer:null,orders:[],runners:[],overview:null,adminReports:null,reportRange:'30',reachAnalytics:null,paused:false,cart:new Map(),cartNote:'',fulfillment:'pickup',deliveryLocation:null,mapZoom:1,trackingWatch:null,lastLocationSent:0,filter:'All',query:'',sort:'featured',stallFilter:'All',dietaryFilter:'All',allergenFilter:'All',buyerView:'menu',ownerView:'dashboard',adminView:'overview',authRole:'buyer',pushEnabled:false,pushAvailable:false,sidebarOpen:false,sidebarSettingsOpen:false,sidebarProfileOpen:false};
 const $=s=>document.querySelector(s), root=$('#view-content'), toastNode=$('#toast'), openingSplash=$('#opening-splash');
 function dismissOpeningSplash(){
   if(!openingSplash?.isConnected)return;
@@ -8,10 +8,21 @@ function dismissOpeningSplash(){
 let refreshTimer;
 let orderBaselineUserId=null;
 let refreshInFlight=false;
+let googleMapsPromise=null;
+const googleCampusMaps=new WeakMap();
 let lastMenuRefresh=0,lastOverviewRefresh=0,lastReachRefresh=0,lastReportsRefresh=0;
 const money=n=>new Intl.NumberFormat('en-PH',{style:'currency',currency:'PHP',maximumFractionDigits:2}).format(n||0);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const roleLabel={buyer:'Campus customer',owner:'Stall owner',runner:'Campus runner',admin:'Administrator'};
+const roleLabel={buyer:'School customer',owner:'Stall owner',runner:'School runner',admin:'Administrator'};
+let themeMode='light';
+try{themeMode=localStorage.getItem('bitehub-theme')==='dark'?'dark':'light'}catch{}
+function applyTheme(){
+  document.documentElement.dataset.theme=themeMode;
+  const toggle=$('#theme-toggle'),status=$('#theme-status');
+  if(toggle)toggle.setAttribute('aria-checked',String(themeMode==='dark'));
+  if(status)status.textContent=themeMode==='dark'?'On':'Off';
+}
+applyTheme();
 const statusLabel={placed:'New order',confirmed:'Accepted',preparing:'Preparing',ready:'Ready',out:'On the way',completed:'Completed',declined:'Declined'};
 const dietaryLabels={vegetarian:'Vegetarian',vegan:'Vegan',halal:'Halal','gluten-free':'Gluten-free','dairy-free':'Dairy-free','nut-free':'Nut-free'};
 const allergenLabels={peanuts:'Peanuts','tree-nuts':'Tree nuts',milk:'Milk',eggs:'Eggs',soy:'Soy',wheat:'Wheat',fish:'Fish',shellfish:'Shellfish',sesame:'Sesame'};
@@ -43,12 +54,19 @@ $('#music-toggle').addEventListener('click',async()=>{
   $('#music-toggle').setAttribute('aria-pressed',String(campusMusicEnabled));
   $('#music-toggle').setAttribute('aria-label',campusMusicEnabled?'Pause soft background music':'Play soft background music');
   $('#music-label').textContent=campusMusicEnabled?'Pause music':'Play soft music';
-  if(!campusMusicEnabled){campusMusicAudio.pause();return}
+  if(!campusMusicEnabled){campusMusicAudio.pause();$('#music-track').textContent='Off';return}
   if(campusMusicAudio.src&&campusMusicAudio.currentTime>0){try{await campusMusicAudio.play()}catch{await playCampusMusic()}}
   else{shuffleCampusMusic();await playCampusMusic()}
 });
-const CAMPUS={south:9.736753,north:9.740445,west:118.737108,east:118.740839};
-function mapXY(latitude,longitude){return{x:((longitude-CAMPUS.west)/(CAMPUS.east-CAMPUS.west))*100,y:100-((latitude-CAMPUS.south)/(CAMPUS.north-CAMPUS.south))*100}}
+const LEGACY_SCHOOL_LOCATIONS={pns:{center:{latitude:9.738599,longitude:118.738974},radius:1500},psu:{center:{latitude:9.77673,longitude:118.73353},radius:1500}};
+function activeCampus(){
+  const legacy=LEGACY_SCHOOL_LOCATIONS[state.user?.school_id],latitude=Number(state.user?.school_latitude??legacy?.center.latitude??12.8797),longitude=Number(state.user?.school_longitude??legacy?.center.longitude??121.774),radius=Number(state.user?.delivery_radius_m)||legacy?.radius||1500;
+  const latSpan=radius/111320,lonSpan=radius/(111320*Math.max(.2,Math.cos(latitude*Math.PI/180)));
+  return{center:{latitude,longitude},radius,south:latitude-latSpan,north:latitude+latSpan,west:longitude-lonSpan,east:longitude+lonSpan};
+}
+function googleMapsPointUrl(point=null){const location=point||activeCampus().center;const params=new URLSearchParams({api:'1',query:`${location.latitude},${location.longitude}`});return `https://www.google.com/maps/search/?${params.toString()}`}
+function googleMapsRouteUrl(origin,destination){const params=new URLSearchParams({api:'1',destination:`${destination.latitude},${destination.longitude}`,travelmode:'walking'});if(origin)params.set('origin',`${origin.latitude},${origin.longitude}`);return `https://www.google.com/maps/dir/?${params.toString()}`}
+function mapXY(latitude,longitude){const campus=activeCampus();return{x:((longitude-campus.west)/(campus.east-campus.west))*100,y:100-((latitude-campus.south)/(campus.north-campus.south))*100}}
 function distanceMeters(from,to){
   const radians=value=>value*Math.PI/180,lat1=radians(from.latitude),lat2=radians(to.latitude),dLat=lat2-lat1,dLon=radians(to.longitude-from.longitude);
   const a=Math.sin(dLat/2)**2+Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLon/2)**2;
@@ -70,7 +88,8 @@ function campusMap(order,interactive=false){
   const stall=order?.stall_latitude!=null?{latitude:order.stall_latitude,longitude:order.stall_longitude}:null;
   const pin=(point,label,kind)=>{if(!point)return'';const p=mapXY(point.latitude,point.longitude);return `<circle class="map-pin map-pin-${kind}" cx="${p.x}" cy="${p.y}" r="3.1"><title>${label}</title></circle>`};
   const path=driver&&destination?(()=>{const a=mapXY(driver.latitude,driver.longitude),b=mapXY(destination.latitude,destination.longitude);return `<path class="map-route" d="M${a.x},${a.y} L${b.x},${b.y}"/>`})():'';
-  return `<div class="campus-map-shell"><svg class="campus-map ${interactive?'is-picker':''}" viewBox="${mapViewBox()}" preserveAspectRatio="none" role="${interactive?'button':'img'}" ${interactive?'data-map-picker tabindex="0" aria-label="Select delivery point on campus map"':'aria-label="Campus delivery map"'}><image href="assets/palawan-campus-map.png" x="0" y="0" width="100" height="100" preserveAspectRatio="none"/>${path}${pin(stall,'Stall pickup','stall')}${pin(destination,'Delivery point','destination')}${pin(driver,'Runner location','driver')}</svg><div class="map-zoom-controls" aria-label="Map zoom controls"><button type="button" data-map-zoom="in" aria-label="Zoom in">+</button><button type="button" data-map-zoom="out" aria-label="Zoom out">−</button><button type="button" data-map-zoom="reset" aria-label="Reset zoom">Reset</button></div></div>`;
+  const pointData=(point,name)=>point?`data-${name}-latitude="${point.latitude}" data-${name}-longitude="${point.longitude}"`:'';
+  return `<div class="campus-map-shell" data-campus-map="true" data-map-mode="${interactive?'picker':'tracking'}" ${pointData(stall,'stall')} ${pointData(destination,'destination')} ${pointData(driver,'driver')}><svg class="campus-map ${interactive?'is-picker':''}" viewBox="${mapViewBox()}" preserveAspectRatio="none" role="${interactive?'button':'img'}" ${interactive?'data-map-picker tabindex="0" aria-label="Select delivery point in your school area"':'aria-label="School delivery map"'}><rect width="100" height="100" fill="#edf2e7"/><path d="M-8 25 108 75M15-8 84 108M-8 78 108 28M70-8 28 108" stroke="#fff" stroke-width="8"/><path d="M-8 25 108 75M15-8 84 108M-8 78 108 28M70-8 28 108" stroke="#d4dfd0" stroke-width="1"/>${path}${pin(stall,'Stall pickup','stall')}${pin(destination,'Handoff point','destination')}${pin(driver,'Runner location','driver')}</svg><div class="map-zoom-controls" aria-label="Map zoom controls"><button type="button" data-map-zoom="in" aria-label="Zoom in">+</button><button type="button" data-map-zoom="out" aria-label="Zoom out">−</button><button type="button" data-map-zoom="reset" aria-label="Reset zoom">Reset</button></div></div>`;
 }
 function toast(message){toastNode.textContent=message;toastNode.classList.add('is-visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>toastNode.classList.remove('is-visible'),2800)}
 async function api(path,options={}){
@@ -80,6 +99,77 @@ async function api(path,options={}){
   return body;
 }
 const json=data=>JSON.stringify(data);
+async function loadGoogleMapsApi(){
+  if(window.google?.maps)return window.google.maps;
+  if(!googleMapsPromise){
+    googleMapsPromise=(async()=>{
+      const config=await api('/api/maps/config');
+      const key=String(config.google_maps_api_key||'').trim();
+      if(!key)return null;
+      return new Promise((resolve,reject)=>{
+        const callbackName='bitehubGoogleMapsReady';
+        const timeout=setTimeout(()=>reject(new Error('Google Maps did not finish loading.')),12000);
+        window[callbackName]=()=>{clearTimeout(timeout);delete window[callbackName];resolve(window.google?.maps||null)};
+        const script=document.createElement('script');
+        script.src=`https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&callback=${callbackName}&loading=async&v=weekly`;
+        script.async=true;script.defer=true;script.onerror=()=>{clearTimeout(timeout);delete window[callbackName];reject(new Error('Google Maps could not load.'))};
+        document.head.appendChild(script);
+      });
+    })().catch(()=>null);
+  }
+  return googleMapsPromise;
+}
+function googleCampusMarker(record,kind,point,title,color){
+  const previous=record.markers[kind];
+  if(!point){previous?.setMap(null);delete record.markers[kind];return}
+  const position={lat:Number(point.latitude),lng:Number(point.longitude)};
+  if(previous){previous.setPosition(position);return}
+  const marker=new record.maps.Marker({map:record.map,position,title,icon:{path:record.maps.SymbolPath.CIRCLE,scale:8,fillColor:color,fillOpacity:1,strokeColor:'#fff',strokeWeight:2}});
+  record.markers[kind]=marker;
+}
+function setDeliveryPoint(latitude,longitude,shell=null){
+  const campus=activeCampus();
+  if(distanceMeters(campus.center,{latitude,longitude})>campus.radius){toast(`Choose a handoff point within ${campus.radius.toLocaleString()} metres of your school.`);return}
+  state.deliveryLocation={latitude:Number(latitude),longitude:Number(longitude)};
+  const mapShell=shell||$('#delivery-map-wrap .campus-map-shell'),mapRecord=mapShell&&googleCampusMaps.get(mapShell);
+  if(mapRecord)googleCampusMarker(mapRecord,'destination',state.deliveryLocation,'Handoff point','#d95f7d');
+  else if(mapShell?.querySelector('.campus-map')){mapShell.outerHTML=campusMap(null,true);enhanceGoogleCampusMaps()}
+  const status=$('#delivery-map-status');if(status)status.textContent='Handoff point selected';
+  const googleLink=$('#delivery-google-link');if(googleLink){googleLink.href=googleMapsPointUrl(state.deliveryLocation);googleLink.innerHTML='Open handoff point in Google Maps <span aria-hidden="true">↗</span>'}
+  updateCartCheckoutButton();
+}
+async function enhanceGoogleCampusMaps(){
+  const shells=[...document.querySelectorAll('.campus-map-shell[data-campus-map]')].filter(shell=>!googleCampusMaps.has(shell)&&!shell.closest('[hidden]'));
+  if(!shells.length)return;
+  const maps=await loadGoogleMapsApi();
+  if(!maps)return;
+  for(const shell of shells){
+    if(!shell.isConnected||googleCampusMaps.has(shell))continue;
+    const fallback=shell.querySelector('.campus-map');if(!fallback)continue;
+    const mode=shell.dataset.mapMode,campus=activeCampus();
+    const pointFromData=(name)=>{const latitude=Number(shell.dataset[`${name}Latitude`]),longitude=Number(shell.dataset[`${name}Longitude`]);return Number.isFinite(latitude)&&Number.isFinite(longitude)?{latitude,longitude}:null};
+    const host=document.createElement('div');host.className='google-campus-map';host.setAttribute('role',mode==='picker'?'application':'img');host.setAttribute('aria-label',mode==='picker'?'Google Map. Click within your school delivery area to choose a handoff.':'Google Map showing the delivery handoff and runner.');
+    fallback.replaceWith(host);
+    const zoomControls=shell.querySelector('.map-zoom-controls');if(zoomControls)zoomControls.hidden=true;
+    const destination=mode==='picker'?state.deliveryLocation:pointFromData('destination');
+    const driver=pointFromData('driver'),stall=pointFromData('stall');
+    const center=destination||driver||stall||campus.center;
+    const map=new maps.Map(host,{center:{lat:center.latitude,lng:center.longitude},zoom:campus.radius<1000?17:16,minZoom:14,maxZoom:21,mapTypeId:'roadmap',mapTypeControl:false,streetViewControl:false,fullscreenControl:false,gestureHandling:'cooperative',restriction:{latLngBounds:{north:campus.north,south:campus.south,east:campus.east,west:campus.west},strictBounds:true}});
+    const record={map,maps,markers:{}};googleCampusMaps.set(shell,record);
+    new maps.Circle({map,center:{lat:campus.center.latitude,lng:campus.center.longitude},radius:campus.radius,fillColor:'#7650c9',fillOpacity:.055,strokeColor:'#7650c9',strokeOpacity:.65,strokeWeight:2,clickable:false});
+    if(mode==='picker'){
+      googleCampusMarker(record,'destination',state.deliveryLocation,'Handoff point','#d95f7d');
+      map.addListener('click',event=>{if(event.latLng)setDeliveryPoint(event.latLng.lat(),event.latLng.lng(),shell)});
+    }else{
+      googleCampusMarker(record,'stall',stall,'Stall pickup','#cd7b3e');
+      googleCampusMarker(record,'destination',destination,'Handoff point','#d95f7d');
+      googleCampusMarker(record,'driver',driver,'Runner location','#3b77bd');
+      if(driver&&destination)new maps.Polyline({map,path:[{lat:driver.latitude,lng:driver.longitude},{lat:destination.latitude,lng:destination.longitude}],strokeColor:'#7049b2',strokeOpacity:.8,strokeWeight:4});
+      const points=[stall,driver,destination].filter(Boolean);
+      if(points.length>1){const bounds=new maps.LatLngBounds();points.forEach(point=>bounds.extend({lat:point.latitude,lng:point.longitude}));map.fitBounds(bounds,32)}
+    }
+  }
+}
 function fileAsBase64(file){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onerror=()=>reject(new Error('Could not read the image.'));reader.onload=()=>resolve(String(reader.result).split(',')[1]||'');reader.readAsDataURL(file)})}
 function productMetadataFields(product={}){
   const stock=product.stock_count??'';
@@ -107,7 +197,7 @@ function decorateProductCards(){
     const trigger=card.querySelector('[data-product-details]');
     const product=state.products.find(item=>item.id===Number(trigger?.dataset.productDetails));
     if(!product)return;
-    if(product.photo_url){const art=card.querySelector('.product-art-trigger');art?.querySelector('span')?.remove();art?.insertAdjacentHTML('afterbegin',`<img class="product-photo" src="${esc(product.photo_url)}" alt="Photo of ${esc(product.name)}" loading="lazy" decoding="async">`)}
+    if(product.photo_url){const art=card.querySelector('.product-art-trigger');art?.classList.add('has-photo');art?.querySelector('span')?.remove();art?.insertAdjacentHTML('afterbegin',`<img class="product-photo" src="${esc(product.photo_url)}" alt="Photo of ${esc(product.name)}" loading="lazy" decoding="async">`)}
     const stall=card.querySelector('.product-stall');
     if(stall){stall.setAttribute('role','button');stall.setAttribute('tabindex','0');stall.setAttribute('data-stall-profile',product.stall_id);stall.setAttribute('aria-label',`Open ${product.stall_name} stall profile`);stall.innerHTML=`<span class="stall-mini-logo">${product.stall_logo_url?`<img src="${esc(product.stall_logo_url)}" alt="">`:`${esc(product.stall_name.trim().charAt(0).toUpperCase())}`}</span><span>${esc(product.stall_name)}</span>`;stall.insertAdjacentHTML('afterend',`<small class="product-service-note">${product.stall_open?`Open now · ${esc(product.opens_at)}–${esc(product.closes_at)} PHT`:`Closed · opens ${esc(product.opens_at)} PHT`}</small>`)}
     const footer=card.querySelector('.product-bottom');
@@ -126,13 +216,15 @@ function decorateProductCards(){
 function renderFeaturedPicks(){
   const picks=state.featuredProducts;
   if(!picks.length)return'';
-  return `<section class="featured-section" aria-labelledby="featured-title"><div class="featured-heading"><div><span class="eyebrow">FRESH FINDS AROUND PNS</span><h2 id="featured-title">Today’s Campus Picks <span aria-hidden="true">✦</span></h2><p>Stall-owner favorites, featured for the next 24 hours.</p></div><div class="featured-controls"><button type="button" class="featured-control" data-feature-move="-1" aria-label="Previous campus picks">←</button><button type="button" class="featured-control" data-feature-move="1" aria-label="Next campus picks">→</button><button type="button" class="featured-motion" data-feature-pause aria-pressed="${state.featuredPaused}">${state.featuredPaused?'Play':'Pause'} motion</button></div></div><div class="featured-rail" aria-label="Featured campus menu items">${picks.map(item=>`<article class="featured-card"><div class="featured-photo">${item.photo_url?`<img src="${esc(item.photo_url)}" alt="${esc(item.name)}" loading="lazy">`:`<span aria-hidden="true">${esc(item.emoji)}</span>`}<span class="featured-ribbon">✦ TODAY’S PICK</span></div><div class="featured-copy"><button class="featured-stall featured-stall-link" data-stall-profile="${item.stall_id}"><span class="stall-mini-logo">${item.stall_logo_url?`<img src="${esc(item.stall_logo_url)}" alt="">`:`${esc(item.stall_name.trim().charAt(0).toUpperCase())}`}</span>${esc(item.stall_name)}</button><h3>${esc(item.name)}</h3><p>${esc(item.description||'A fresh campus favorite, ready for your break.')}</p><div class="featured-buy"><strong>${money(item.price)}</strong><button class="button button-primary button-small" data-add="${item.id}" ${state.paused||!item.stall_open||!item.available?'disabled':''}>${state.paused?'Paused':!item.stall_open?'Closed':!item.available?'Sold out':'Add to bag +'}</button></div></div></article>`).join('')}</div><small class="featured-fairness">Featured stalls rotate daily · Each stall can feature one item at a time</small></section>`;
+  return `<section class="featured-section" aria-labelledby="featured-title"><div class="featured-heading"><div><span class="eyebrow">FRESH FINDS AROUND CAMPUS</span><h2 id="featured-title">Today’s Campus Picks <span aria-hidden="true">✦</span></h2><p>Stall-owner favorites, featured for the next 24 hours.</p></div><div class="featured-controls"><button type="button" class="featured-control" data-feature-move="-1" aria-label="Previous campus picks">←</button><button type="button" class="featured-control" data-feature-move="1" aria-label="Next campus picks">→</button><button type="button" class="featured-motion" data-feature-pause aria-pressed="${state.featuredPaused}">${state.featuredPaused?'Play':'Pause'} rotation</button></div></div><div class="featured-rail" aria-label="Featured campus menu items">${picks.map(item=>`<article class="featured-card"><div class="featured-photo">${item.photo_url?`<img src="${esc(item.photo_url)}" alt="${esc(item.name)}" loading="lazy">`:`<span aria-hidden="true">${esc(item.emoji)}</span>`}<span class="featured-ribbon">✦ TODAY’S PICK</span></div><div class="featured-copy"><button class="featured-stall featured-stall-link" data-stall-profile="${item.stall_id}"><span class="stall-mini-logo">${item.stall_logo_url?`<img src="${esc(item.stall_logo_url)}" alt="">`:`${esc(item.stall_name.trim().charAt(0).toUpperCase())}`}</span>${esc(item.stall_name)}</button><h3>${esc(item.name)}</h3><p>${esc(item.description||'A fresh campus favorite, ready for your break.')}</p><div class="featured-buy"><strong>${money(item.price)}</strong><button class="button button-primary button-small" data-add="${item.id}" ${state.paused||!item.stall_open||!item.available?'disabled':''}>${state.paused?'Paused':!item.stall_open?'Closed':!item.available?'Sold out':'Add to bag +'}</button></div></div></article>`).join('')}</div><small class="featured-fairness">Featured stalls rotate daily · Each stall can feature one item at a time</small></section>`;
 }
+function buyerHeroItems(){return state.featuredProducts.length?state.featuredProducts:state.products}
 function startFeaturedMotion(){
   if(state.featuredTimer){clearInterval(state.featuredTimer);state.featuredTimer=null}
-  if(!state.featuredProducts.length||window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)return;
+  if(!buyerHeroItems().length||window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)return;
   state.featuredTimer=setInterval(()=>{
-    if(state.featuredPaused||document.visibilityState!=='visible'||$('.featured-rail:hover')||(document.activeElement?.closest('.featured-section')&&!document.activeElement?.matches('[data-feature-pause]')))return;
+    if(state.featuredPaused||document.visibilityState!=='visible'||$('.featured-rail:hover')||$('.buyer-banner .banner-art:hover')||(document.activeElement?.closest('.featured-section')&&!document.activeElement?.matches('[data-feature-pause]'))||document.activeElement?.closest('.buyer-banner .banner-art'))return;
+    if(buyerHeroItems().length>1)setBuyerHeroFeature(state.heroFeaturedIndex+1);
     const rail=$('.featured-rail'),card=rail?.querySelector('.featured-card');if(!rail||!card)return;
     const step=card.getBoundingClientRect().width+12,max=rail.scrollWidth-rail.clientWidth;
     if(max<4)return;
@@ -142,14 +234,53 @@ function startFeaturedMotion(){
 }
 function accountTools(){
   const tools=$('#account-tools');
-  if(!state.user){tools.hidden=!state.publicBrowse;tools.innerHTML=state.publicBrowse?`<button class="button button-outline button-compact" data-action="open-cart">Your bag${cartCount()?` (${cartCount()})`:''}</button><button class="button button-primary button-compact" data-action="guest-signin">Sign in to order</button>`:'';updateCartShortcut();return}
+  if(!state.user){tools.hidden=!state.publicBrowse;tools.innerHTML=state.publicBrowse?`<button class="button button-outline button-compact" data-action="open-cart">Your bag${cartCount()?` (${cartCount()})`:''}</button><button class="button button-primary button-compact" data-action="guest-signin">Sign in to order</button>`:'';closeSidebar();updateCartShortcut();return}
   tools.hidden=false;
-  tools.innerHTML=`${state.user.role==='buyer'?`<button class="button button-outline button-compact" data-action="open-cart">Your bag${cartCount()?` (${cartCount()})`:''}</button>`:''}<div class="account-chip"><span class="avatar">${esc(state.user.name.trim().charAt(0).toUpperCase())}</span><span><strong>${esc(state.user.name)}</strong><small>${esc(roleLabel[state.user.role])}${state.user.stall_name?` · ${esc(state.user.stall_name)}`:''}</small></span></div><button class="button button-outline button-compact" data-action="logout">Sign out</button>`;
+  const school=state.user.school_name||(state.user.school_id==='psu'?'Palawan State University':state.user.school_id==='pns'?'Palawan National School':'Your school');
+  tools.innerHTML=`<button class="sidebar-menu-button" type="button" data-action="open-sidebar" aria-label="Open dashboard menu" aria-expanded="${state.sidebarOpen}"><span></span><span></span><span></span></button>${state.user.role==='buyer'?`<button class="button button-outline button-compact header-bag" data-action="open-cart">Your bag${cartCount()?` (${cartCount()})`:''}</button>`:''}<div class="account-chip"><span class="avatar">${state.user.profile_photo_url?`<img src="${esc(state.user.profile_photo_url)}" alt="">`:esc(state.user.name.trim().charAt(0).toUpperCase())}</span><span><strong>${esc(state.user.name)}</strong><small>${esc(roleLabel[state.user.role])} · ${esc(school)}${state.user.stall_name?` · ${esc(state.user.stall_name)}`:''}</small></span></div>`;
+  renderSidebar();
   updateCartShortcut();
 }
-function renderNotificationBanner(){
-  const message=state.pushEnabled?'Order alerts are on for this device.':state.pushAvailable?'Get a phone or desktop alert when a new order arrives or your order changes.':'Device alerts need the server notification package. In-page updates will still work.';
-  root.insertAdjacentHTML('afterbegin',`<aside class="notification-banner"><span class="notification-icon" aria-hidden="true">♧</span><div><strong>${state.pushEnabled?'Notifications enabled':'Order notifications'}</strong><p>${message}</p></div>${state.pushEnabled?'<button class="button button-outline button-small" data-action="disable-notifications">Turn off</button>':`<button class="button button-primary button-small" data-action="enable-notifications" ${state.pushAvailable?'':'disabled'}>Enable alerts</button>`}</aside>`);
+function renderSidebar(){
+  const user=state.user,account=$('#sidebar-account'),navigation=$('#sidebar-navigation');
+  if(!user||!account||!navigation)return;
+  const school=user.school_name||(user.school_id==='psu'?'Palawan State University':user.school_id==='pns'?'Palawan National School':'Your school');
+  const initial=esc(user.name.trim().charAt(0).toUpperCase()),profilePhoto=user.profile_photo_url?`<img src="${esc(user.profile_photo_url)}" alt="">`:initial;
+  account.innerHTML=`<div class="sidebar-account-main"><span class="sidebar-avatar">${profilePhoto}</span><span class="sidebar-account-copy"><strong>${esc(user.name)}</strong><small>${esc(roleLabel[user.role])} · ${esc(school)}</small></span><button type="button" class="sidebar-profile-trigger" data-action="toggle-profile" aria-expanded="${state.sidebarProfileOpen}">${state.sidebarProfileOpen?'Close':'Edit profile'}</button></div><section class="sidebar-profile-editor" ${state.sidebarProfileOpen?'':'hidden'} aria-label="Edit your profile"><form class="sidebar-profile-form" data-form="user-profile"><div class="sidebar-profile-photo-row"><span class="sidebar-profile-avatar">${profilePhoto}</span><label class="sidebar-photo-picker"><input name="photo_file" type="file" accept="image/jpeg,image/png,image/webp"><span>Choose photo</span><small>JPG, PNG, WebP · max 2 MB</small></label></div><label class="sidebar-profile-name">Display name<input name="name" autocomplete="name" maxlength="80" required value="${esc(user.name)}"></label>${user.profile_photo_url?'<label class="sidebar-profile-remove"><input name="remove_photo" type="checkbox" value="true"><span>Remove current photo</span></label>':''}<button class="button button-primary button-small" type="submit">Save profile</button></form></section>`;
+  const dashboard={buyer:['buyer','menu','Browse food'],owner:['owner','dashboard','Today'],admin:['admin','overview','Overview']}[user.role];
+  const orders={buyer:['buyer','orders','My orders','↗'],owner:['owner','orders','Orders','↗'],admin:['admin','orders','Orders','↗']}[user.role];
+  const navButton=([role,view,label,icon],active)=>`<button type="button" class="sidebar-nav-link ${active?'is-active':''}" data-workspace-role="${role}" data-workspace-view="${view}" ${active?'aria-current="page"':''}><span class="sidebar-link-icon" aria-hidden="true">${icon}</span><span>${label}</span></button>`;
+  const activeView={buyer:state.buyerView,owner:state.ownerView,admin:state.adminView}[user.role];
+  let links='';
+  if(dashboard)links+=navButton([dashboard[0],dashboard[1],'Dashboard','⌂'],activeView===dashboard[1]);
+  if(orders)links+=navButton([orders[0],orders[1],orders[2],orders[3]],activeView===orders[1]);
+  if(user.role==='runner')links=`<button type="button" class="sidebar-nav-link is-active" data-sidebar-scroll="runner-summary" aria-current="page"><span class="sidebar-link-icon" aria-hidden="true">⌂</span><span>Dashboard</span></button><button type="button" class="sidebar-nav-link" data-sidebar-scroll="runner-queue"><span class="sidebar-link-icon" aria-hidden="true">↗</span><span>Delivery queue</span></button>`;
+  navigation.innerHTML=links;
+  const settings=$('#sidebar-settings-panel'),settingsButton=$('#sidebar-settings-toggle');
+  if(settings)settings.hidden=!state.sidebarSettingsOpen;
+  if(settingsButton)settingsButton.setAttribute('aria-expanded',String(state.sidebarSettingsOpen));
+  renderNotificationSettings();
+  applyTheme();
+  syncSidebarState();
+}
+function syncSidebarState(){
+  const sidebar=$('#app-sidebar'),backdrop=$('#sidebar-backdrop'),button=$('.sidebar-menu-button');
+  if(!sidebar||!backdrop)return;
+  const open=Boolean(state.sidebarOpen&&state.user);
+  sidebar.classList.toggle('is-open',open);
+  sidebar.setAttribute('aria-hidden',String(!open));
+  sidebar.inert=!open;
+  backdrop.hidden=!open;
+  document.body.classList.toggle('sidebar-open',open);
+  const appShell=$('#app');if(appShell)appShell.inert=open;
+  if(button)button.setAttribute('aria-expanded',String(open));
+}
+function closeSidebar(){state.sidebarOpen=false;syncSidebarState()}
+function renderNotificationSettings(){
+  const setting=$('#sidebar-notification-setting');if(!setting)return;
+  const message=state.pushEnabled?'Order updates will appear as device alerts.':state.pushAvailable?'Get an alert when an order arrives or its status changes.':'Device alerts need the server notification package. In-page updates will still work.';
+  const status=state.pushEnabled?'On for this device':state.pushAvailable?'Ready to enable':'Unavailable';
+  setting.innerHTML=`<div class="sidebar-notification-heading"><span class="sidebar-preference-icon" aria-hidden="true">♧</span><span class="sidebar-preference-copy"><strong>Order notifications</strong><small>${status}</small></span></div><p class="sidebar-notification-description">${message}</p>${state.pushEnabled?'<button class="button button-outline button-small" data-action="disable-notifications">Turn off alerts</button>':`<button class="button button-primary button-small" data-action="enable-notifications" ${state.pushAvailable?'':'disabled'}>Enable alerts</button>`}`;
 }
 async function loadNotificationState(){
   if(!state.user)return;
@@ -263,18 +394,74 @@ function renderAuthWall(mode='choose',role=state.authRole){
   document.querySelector('#app')?.classList.add('auth-open');
   updateCartShortcut();
   const choosing=mode==='choose';
-  const masthead=`<div class="auth-masthead"><a class="brand auth-brand" href="#home" aria-label="BiteHub home"><img class="brand-mark" src="bitehub-mark.svg" alt=""><span>Bite<span class="brand-light">Hub</span><small>GOOD FOOD. BETTER DAYS.</small></span></a><div class="school-signature"><img class="school-seal" src="assets/palawan-national-school-logo.webp" alt="Palawan National School logo"><span><strong>Palawan National School</strong></span></div></div>`;
+  const masthead=`<div class="auth-masthead"><a class="brand auth-brand" href="#home" aria-label="BiteHub home"><img class="brand-mark auth-round-logo" src="assets/bitehub-icon.png" alt=""><img class="auth-wordmark" src="assets/bitehub-wordmark.png" alt="BiteHub"><span class="brand-tagline">Food for every school community</span></a></div>`;
   const buyerArt=`<svg viewBox="0 0 220 170" aria-hidden="true"><circle cx="108" cy="86" r="67" fill="#acd3ff"/><path d="M35 155c8-38 34-57 73-57s65 19 75 57" fill="#3678d3"/><path d="M80 104l28 25 27-25 12 51H67z" fill="#fff"/><path d="M90 78h38v34c-9 13-27 13-38 0z" fill="#f2ad85"/><ellipse cx="109" cy="63" rx="32" ry="37" fill="#f5bd96"/><path d="M77 65c-3-31 10-47 34-47 21 0 34 17 31 43-8-5-13-16-15-23-13 13-30 18-50 17z" fill="#263247"/><circle cx="97" cy="65" r="2.7" fill="#20384d"/><circle cx="120" cy="65" r="2.7" fill="#20384d"/><path d="M99 81q10 8 20 0" fill="none" stroke="#b65a4a" stroke-width="2.5" stroke-linecap="round"/><rect x="147" y="77" width="27" height="46" rx="6" fill="#20384d" transform="rotate(9 147 77)"/><rect x="151" y="83" width="19" height="31" rx="2" fill="#d8e9ff" transform="rotate(9 151 83)"/><path d="M45 58l5 10 11 2-9 7 1 11-8-7-10 4 4-10-6-8 11 1z" fill="#fff"/></svg>`;
   const ownerArt=`<svg viewBox="0 0 220 170" aria-hidden="true"><circle cx="110" cy="91" r="67" fill="#ffe0ad"/><rect x="42" y="47" width="136" height="98" rx="9" fill="#fff"/><path d="M35 53l14-29h122l14 29z" fill="#f58228"/><path d="M49 24h27L65 53H35zM76 24h27V53H65zM103 24h27V53h-27zM130 24h27l16 29h-27z" fill="#fff4e7"/><path d="M35 53h29v15c0 16-29 16-29 0zM64 53h29v15c0 16-29 16-29 0zM93 53h29v15c0 16-29 16-29 0zM122 53h29v15c0 16-29 16-29 0zM151 53h29v15c0 16-29 16-29 0z" fill="#f58228"/><path d="M61 145c7-27 24-39 49-39 26 0 43 12 50 39" fill="#263f63"/><path d="M96 105h29v25l-15 13-14-13z" fill="#fff"/><ellipse cx="111" cy="82" rx="25" ry="29" fill="#f2b28b"/><path d="M86 81c-2-24 8-36 27-36 18 0 27 13 26 33-9-2-18-10-22-18-9 11-18 17-31 21z" fill="#302a30"/><path d="M99 84h4m17 0h4" stroke="#23384d" stroke-width="3" stroke-linecap="round"/><path d="M103 96q8 6 16 0" fill="none" stroke="#b65a4a" stroke-width="2" stroke-linecap="round"/><rect x="79" y="119" width="64" height="27" rx="5" fill="#fff" stroke="#d6e1e9"/><path d="M91 133h40" stroke="#e8793d" stroke-width="4" stroke-linecap="round"/></svg>`;
   const adminArt=`<svg viewBox="0 0 220 170" aria-hidden="true"><circle cx="108" cy="82" r="66" fill="#bfe8ce"/><path d="M47 151c8-32 29-48 62-48s54 16 63 48" fill="#267c59"/><path d="M90 99h39v25l-19 14-20-14z" fill="#fff"/><ellipse cx="109" cy="68" rx="30" ry="34" fill="#f1b58e"/><path d="M79 68c-3-28 9-42 31-42 21 0 32 14 30 40-8-2-14-9-18-17-12 10-26 15-43 14z" fill="#1f2f44"/><circle cx="97" cy="69" r="3" fill="#20384d"/><circle cx="121" cy="69" r="3" fill="#20384d"/><path d="M88 64h18m9 0h18m-27 0h9" stroke="#20384d" stroke-width="3"/><path d="M101 84q8 6 16 0" fill="none" stroke="#ad574d" stroke-width="2" stroke-linecap="round"/><rect x="65" y="120" width="94" height="38" rx="5" fill="#263d59"/><rect x="73" y="125" width="78" height="25" rx="2" fill="#dceeff"/><path d="M54 159h116l-9 7H63z" fill="#4276a3"/><circle cx="147" cy="40" r="21" fill="#fff"/><path d="M147 27l4 6 7 1-4 6 1 7-7-3-6 3 1-7-5-5 7-2z" fill="#24845c"/><circle cx="54" cy="47" r="5" fill="#fff"/><path d="M177 85l5 5m-5 0 5-5" stroke="#35a16c" stroke-width="3" stroke-linecap="round"/></svg>`;
-  root.innerHTML=`<section class="role-home">${masthead}<header class="role-heading"><span class="eyebrow">${choosing?'WELCOME TO':'YOUR CAMPUS FOOD HUB'}</span><h1>${choosing?'Bite<span>Hub</span>':mode==='login'?'Welcome back':'Join BiteHub'}</h1><p>${choosing?'Your campus food hub, made for you.':mode==='login'?'Sign in to continue to your campus workspace.':'Create an account for your campus workspace.'}</p>${choosing?'<small class="role-prompt">Choose your role to get started.</small>':''}</header>${choosing?`<div class="role-card-grid"><button class="role-choice role-buyer" data-signup-role="buyer"><span class="role-art">${buyerArt}</span><strong>Buyer / Customer</strong><small>Browse food, place orders,<br>and track your delivery.</small><span class="role-choice-action">Sign up <b>→</b></span></button><button class="role-choice role-owner" data-signup-role="owner"><span class="role-art">${ownerArt}</span><strong>Stall Owner</strong><small>Manage your stall, menu,<br>and incoming orders.</small><span class="role-choice-action">Sign up <b>→</b></span></button><button class="role-choice role-admin" data-auth-mode="login" data-auth-role="admin"><span class="role-art">${adminArt}</span><strong>Admin</strong><small>Oversee campus stalls<br>and keep the hub running.</small><span class="role-choice-action">Admin sign in <b>→</b></span></button></div><p class="role-login">Already have an account? <button class="text-button" data-auth-mode="login">Sign in</button></p><p class="role-tagline"><span aria-hidden="true">✳</span> Eat <i>·</i> Support <i>·</i> Grow <span aria-hidden="true">✳</span></p>`:`<section class="auth-card"><button class="text-button auth-back" data-auth-mode="choose">← Choose a role</button><div id="auth-form-slot"></div><p class="auth-footnote">Accounts, orders, and menus are saved to this server.</p></section>`}</section>`;
+  root.innerHTML=`<section class="role-home">${masthead}<header class="role-heading"><span class="eyebrow">${choosing?'WELCOME TO BITEHUB':'YOUR SCHOOL FOOD HUB'}</span><h1>${choosing?'Choose your <span>role</span>':mode==='login'?'Welcome back':'Join BiteHub'}</h1><p>${choosing?"Your school’s food hub starts here.":mode==='login'?'Sign in to continue to your school workspace.':'Create an account for your school’s BiteHub.'}</p>${choosing?'<small class="role-prompt">Choose how you’d like to get started.</small>':''}</header>${choosing?`<div class="role-card-grid"><button class="role-choice role-buyer" data-signup-role="buyer"><span class="role-kicker">Discover &amp; order</span><span class="role-art">${buyerArt}</span><strong>Buyer / Customer</strong><small>Browse school menus, place orders,<br>and follow your delivery.</small><span class="role-choice-action">Sign up <b>→</b></span></button><button class="role-choice role-owner" data-signup-role="owner"><span class="role-kicker">Grow your stall</span><span class="role-art">${ownerArt}</span><strong>Stall Owner</strong><small>Publish your menu and manage<br>your stall orders.</small><span class="role-choice-action">Sign up <b>→</b></span></button><button class="role-choice role-admin" data-auth-mode="login" data-auth-role="admin"><span class="role-kicker">School team</span><span class="role-art">${adminArt}</span><strong>Admin</strong><small>Manage school stalls and<br>keep ordering on track.</small><span class="role-choice-action">Admin sign in <b>→</b></span></button></div><p class="role-login">Already have an account? <button class="text-button" data-auth-mode="login">Sign in</button></p>`:`<section class="auth-card"><button class="text-button auth-back" data-auth-mode="choose">← Choose a role</button><div id="auth-form-slot"></div><p class="auth-footnote">Accounts, orders, and menus are saved to this server.</p></section>`}</section>`;
   if(!choosing)renderAuthForm(mode,role);
-}function renderAuthForm(mode,role=state.authRole){
+}const PH_REGION_OPTIONS=['National Capital Region (NCR)','Cordillera Administrative Region (CAR)','Region I (Ilocos Region)','Region II (Cagayan Valley)','Region III (Central Luzon)','Region IV-A (CALABARZON)','MIMAROPA Region','Region V (Bicol Region)','Region VI (Western Visayas)','Negros Island Region (NIR)','Region VII (Central Visayas)','Region VIII (Eastern Visayas)','Region IX (Zamboanga Peninsula)','Region X (Northern Mindanao)','Region XI (Davao Region)','Region XII (SOCCSKSARGEN)','Region XIII (Caraga)','Bangsamoro Autonomous Region in Muslim Mindanao (BARMM)'];
+function renderAuthForm(mode,role=state.authRole){
   const slot=$('#auth-form-slot');if(!slot)return;
-  const roleName=role==='owner'?'stall owner':role==='runner'?'campus runner':role==='admin'?'administrator':'campus customer';
-  const roleCopy=role==='owner'?'Set up your stall and start publishing menu items.':role==='runner'?'Create your account to receive assigned campus deliveries.':role==='admin'?'Manage campus stalls and keep ordering on track.':'Browse campus menus and follow your orders.';
-  const loginCopy=role==='owner'?'Manage your stall, menu, and incoming orders.':role==='runner'?'See assigned runs and delivery details.':role==='admin'?'Manage campus stalls and ordering.':'Browse campus menus and follow your orders.';
-  slot.innerHTML=mode==='login'?`<span class="eyebrow">${esc(roleName)} workspace</span><h2>Welcome back.</h2><p class="form-intro">${esc(loginCopy)}</p><form class="stack-form" data-form="login"><label>Email address<input name="email" type="email" autocomplete="username" maxlength="254" required placeholder="you@school.edu"></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button class="button button-primary button-wide">Sign in <span>→</span></button></form><p class="auth-switch">New to BiteHub? <button class="text-button" data-auth-mode="choose">Choose your role</button></p>`:`<span class="eyebrow">${esc(roleName)}</span><h2>Create your ${esc(roleName)} account</h2><p class="form-intro">${esc(roleCopy)}</p><form class="stack-form" data-form="signup"><input type="hidden" name="role" value="${esc(role)}"><label>Your name<input name="name" autocomplete="name" maxlength="80" required placeholder="Full name"></label><label>Email address<input name="email" type="email" autocomplete="email" maxlength="254" required placeholder="you@school.edu"></label>${role==='owner'?'<label>Stall name<input name="stall_name" maxlength="80" required placeholder="Your stall name"></label>':''}<label>Password <span class="field-hint">At least 10 characters</span><input name="password" type="password" autocomplete="new-password" minlength="10" required></label><button class="button button-primary button-wide">Create account <span>→</span></button></form><p class="auth-switch">Already have an account? <button class="text-button" data-auth-mode="login">Sign in</button></p>`;
+  const roleName=role==='owner'?'stall owner':role==='runner'?'school runner':role==='admin'?'administrator':'school customer';
+  const roleCopy=role==='owner'?'Set up your stall and start publishing menu items.':role==='runner'?'Create your account to receive assigned school deliveries.':role==='admin'?'Manage school stalls and keep ordering on track.':'Browse school menus and follow your orders.';
+  const loginCopy=role==='owner'?'Manage your stall, menu, and incoming orders.':role==='runner'?'See assigned runs and delivery details.':role==='admin'?'Manage school stalls and ordering.':'Browse school menus and follow your orders.';
+  slot.innerHTML=mode==='login'?`<span class="eyebrow">${esc(roleName)} workspace</span><h2>Welcome back.</h2><p class="form-intro">${esc(loginCopy)}</p><form class="stack-form" data-form="login"><label>Email address<input name="email" type="email" autocomplete="username" maxlength="254" required placeholder="you@school.edu"></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button class="button button-primary button-wide">Sign in <span>→</span></button></form><p class="auth-switch">New to BiteHub? <button class="text-button" data-auth-mode="choose">Choose your role</button></p>`:`<span class="eyebrow">${esc(roleName)}</span><h2>Create your ${esc(roleName)} account</h2><p class="form-intro">${esc(roleCopy)}</p><form class="stack-form signup-form" data-form="signup"><input type="hidden" name="role" value="${esc(role)}"><section class="signup-school-section"><div class="signup-step-heading"><span>01</span><div><h3>Your school community</h3><p>Choose any secondary school or university in the Philippines.</p></div></div><label>Institution type<select name="school_type" required><option value="">Choose type</option><option>Secondary school</option><option>University</option><option>Other school</option></select></label><label>School or university name<input name="school_name" maxlength="120" required placeholder="Search the official school name"></label><div class="school-search-row"><button class="button button-outline" type="button" data-school-find>Find on Google Maps</button><span>Palawan National School and Palawan State University are the first pilot examples. Other Philippine schools can join too.</span></div><div class="school-place-results" aria-live="polite" hidden></div><div class="school-map-panel"><div class="school-map-heading"><strong>Set your school location</strong><small>Search for the school, then click the map to adjust its pin.</small></div><div class="school-signup-map" data-school-map aria-label="Google Map to choose your school location"></div><p class="school-map-status" data-school-map-status>Search by school name and location to find it on the map.</p><div class="school-coordinate-fallback" data-school-coordinate-fallback hidden><p>Map search is unavailable. You can still enter the coordinates shown in Google Maps.</p><div><label>Latitude<input name="school_latitude_manual" type="number" step="any" min="4" max="22.5" placeholder="e.g. 9.7386"></label><label>Longitude<input name="school_longitude_manual" type="number" step="any" min="115" max="128" placeholder="e.g. 118.7390"></label></div></div><input type="hidden" name="school_latitude"><input type="hidden" name="school_longitude"><small class="school-map-radius">The delivery map will open around this pin, with a 1.5 km delivery area.</small></div><label>Region<select name="school_region" required><option value="">Choose region</option>${PH_REGION_OPTIONS.map(region=>`<option>${esc(region)}</option>`).join('')}</select></label><label>Province<input name="school_province" maxlength="80" required placeholder="Province"></label><label>City or municipality<input name="school_city" maxlength="80" required placeholder="City or municipality"></label><p class="school-country-lock"><span aria-hidden="true">🇵🇭</span> Country is set to Philippines</p><label class="confirm-school"><input type="checkbox" name="confirm_school" value="yes" required><span>I confirm this is the correct school and location.</span></label></section><section class="signup-person-section"><div class="signup-step-heading"><span>02</span><div><h3>Your account</h3><p>Your account will belong to the school you selected.</p></div></div><label>Your name<input name="name" autocomplete="name" maxlength="80" required placeholder="Full name"></label><label>Email address<input name="email" type="email" autocomplete="email" maxlength="254" required placeholder="you@example.com"></label>${role==='owner'?'<label>Stall name<input name="stall_name" maxlength="80" required placeholder="Your stall name"></label>':''}<label>Password <span class="field-hint">At least 10 characters</span><input name="password" type="password" autocomplete="new-password" minlength="10" required></label><button class="button button-primary button-wide">Create account <span>→</span></button></section></form><p class="auth-switch">Already have an account? <button class="text-button" data-auth-mode="login">Sign in</button></p>`;
+  if(mode==='signup')initializeSignupSchoolMap(slot.querySelector('[data-form="signup"]'));
+}
+async function initializeSignupSchoolMap(form){
+  if(!form)return;
+  const schoolNameLabel=form.elements.namedItem('school_name').closest('label');
+  schoolNameLabel.after(form.elements.namedItem('school_region').closest('label'),form.elements.namedItem('school_province').closest('label'),form.elements.namedItem('school_city').closest('label'));
+  const regionField=form.elements.namedItem('school_region'),provinceField=form.elements.namedItem('school_province');
+  const syncProvinceRequirement=()=>{const isNcr=regionField.value==='National Capital Region (NCR)';provinceField.required=!isNcr;provinceField.closest('label').firstChild.textContent=isNcr?'Province (if applicable)':'Province'};
+  regionField.addEventListener('change',syncProvinceRequirement);syncProvinceRequirement();
+  const host=form.querySelector('[data-school-map]'),status=form.querySelector('[data-school-map-status]'),find=form.querySelector('[data-school-find]'),results=form.querySelector('.school-place-results'),fallback=form.querySelector('[data-school-coordinate-fallback]');
+  const latitudeField=form.elements.namedItem('school_latitude'),longitudeField=form.elements.namedItem('school_longitude');
+  find.disabled=true;find.textContent='Loading map…';
+  let maps=null,map=null,marker=null,deliveryCircle=null,places=[];
+  const savePoint=(latitude,longitude,message='School pin saved. Click the map to fine-tune it.')=>{
+    latitudeField.value=Number(latitude).toFixed(7);longitudeField.value=Number(longitude).toFixed(7);status.textContent=message;
+    if(map){const point={lat:Number(latitude),lng:Number(longitude)};if(marker)marker.setPosition(point);else marker=new maps.Marker({map,position:point,title:'School location'});if(deliveryCircle)deliveryCircle.setCenter(point);else deliveryCircle=new maps.Circle({map,center:point,radius:1500,fillColor:'#7650c9',fillOpacity:.055,strokeColor:'#7650c9',strokeOpacity:.65,strokeWeight:2,clickable:false});}
+  };
+  try{
+    maps=await loadGoogleMapsApi();
+    if(maps){
+      map=new maps.Map(host,{center:{lat:12.8797,lng:121.774},zoom:6,minZoom:5,maxZoom:21,mapTypeId:'roadmap',mapTypeControl:false,streetViewControl:false,fullscreenControl:false,gestureHandling:'cooperative',restriction:{latLngBounds:{south:4,north:22.5,west:115,east:128},strictBounds:true}});
+      map.addListener('click',event=>{if(event.latLng)savePoint(event.latLng.lat(),event.latLng.lng())});
+    }else{status.textContent='Google Maps could not load. Use the coordinate fields below to pin the school.';fallback.hidden=false;}
+  }catch{status.textContent='Google Maps could not load. Use the coordinate fields below to pin the school.';fallback.hidden=false;}
+  for(const input of form.querySelectorAll('[name="school_latitude_manual"],[name="school_longitude_manual"]'))input.addEventListener('input',()=>{const lat=Number(form.elements.namedItem('school_latitude_manual').value),lng=Number(form.elements.namedItem('school_longitude_manual').value);if(Number.isFinite(lat)&&Number.isFinite(lng)&&lat&&lng)savePoint(lat,lng,'School coordinates saved.')});
+  find.addEventListener('click',async()=>{
+    const name=form.elements.namedItem('school_name').value.trim(),region=form.elements.namedItem('school_region').value,province=form.elements.namedItem('school_province').value.trim(),city=form.elements.namedItem('school_city').value.trim();
+    if(!name){form.elements.namedItem('school_name').focus();status.textContent='Enter the school or university name first.';return}
+    if(!maps||!map){status.textContent='Google Maps is unavailable. Use the coordinate fields below, or try again when the map loads.';fallback.hidden=false;return}
+    find.disabled=true;find.textContent='Searching…';results.hidden=false;results.innerHTML='<p>Looking for your school…</p>';
+    try{
+      const {Place}=await maps.importLibrary('places');
+      const query=[name,city,province,region,'Philippines'].filter(Boolean).join(', ');
+      const response=await Place.searchByText({textQuery:query,fields:['displayName','formattedAddress','location','addressComponents'],maxResultCount:5});
+      places=response.places||[];
+      results.innerHTML=places.length?`${places.map((place,index)=>`<button type="button" class="school-place-option" data-school-place="${index}"><strong>${esc(place.displayName||name)}</strong><small>${esc(place.formattedAddress||'Philippines')}</small></button>`).join('')}<small class="school-google-attribution">Google Maps results</small>`:'<p>No matching place was found. Try the school’s full name and city, or click its location on the map.</p>';
+    }catch{results.innerHTML='<p>Could not search right now. Try the full official school name with its city, or click the school location on the map.</p>';}
+    finally{find.disabled=false;find.textContent='Find on Google Maps'}
+  });
+  results.addEventListener('click',event=>{
+    const button=event.target.closest('[data-school-place]');if(!button)return;const place=places[Number(button.dataset.schoolPlace)],location=place?.location;if(!location)return;
+    const latitude=typeof location.lat==='function'?location.lat():Number(location.lat),longitude=typeof location.lng==='function'?location.lng():Number(location.lng),components=place.addressComponents||[];
+    form.elements.namedItem('school_name').value=place.displayName||form.elements.namedItem('school_name').value;
+    const component=type=>components.find(part=>part.types?.includes(type))?.longText||'';
+    const addressRegion=component('administrative_area_level_1'),regionMatch=addressRegion?(PH_REGION_OPTIONS.find(region=>region.toLowerCase().includes(addressRegion.toLowerCase())||addressRegion.toLowerCase().includes(region.split(' (')[0].toLowerCase()))||(/metro manila/i.test(addressRegion)?PH_REGION_OPTIONS[0]:null)):null;
+    if(regionMatch)regionField.value=regionMatch;
+    if(regionField.value==='National Capital Region (NCR)')provinceField.value='Metro Manila';
+    else if(component('administrative_area_level_2'))provinceField.value=component('administrative_area_level_2');
+    const cityField=form.elements.namedItem('school_city'),addressCity=component('locality')||component('administrative_area_level_3')||component('sublocality_level_1')||(regionField.value==='National Capital Region (NCR)'?component('administrative_area_level_2'):'');
+    if(addressCity)cityField.value=addressCity;
+    syncProvinceRequirement();
+    map.panTo({lat:latitude,lng:longitude});map.setZoom(18);savePoint(latitude,longitude,`${place.displayName||'School'} selected. Check the location details and click the map to move the pin if needed.`);
+    results.hidden=true;
+  });
+  find.disabled=false;find.textContent='Find on Google Maps';
 }
 function heading(eyebrow,title,copy,side=''){
   return `<header class="page-heading"><div><span class="eyebrow">${esc(eyebrow)}</span><h1>${title}</h1><p>${esc(copy)}</p></div>${side}</header>`;
@@ -312,10 +499,32 @@ function orderCard(order){
   const eta=deliveryEta(order,gpsAge);
   const locationAccuracy=Number.isFinite(order.driver_accuracy)?`GPS accuracy ±${Math.round(order.driver_accuracy)} m`:'';
   const gpsUpdated=Number.isFinite(gpsAge)?gpsAge<60000?'Updated just now':`Updated ${Math.floor(gpsAge/60000)} min ago`:'';
-  const tracking=order.fulfillment==='delivery'&&order.status==='out'&&['buyer','runner','owner'].includes(state.user.role)?`<section class="tracking-panel"><div><strong>${state.user.role==='runner'?(gpsAge<45000?'Sharing your live location':gpsAge===Infinity?'Waiting for GPS fix':gpsText):gpsAge===Infinity?'Waiting for runner location':gpsText}</strong><small>PNS campus delivery · GPS can pause indoors or when signal is weak.</small>${eta?`<p class="tracking-eta">${eta}</p>`:''}${locationAccuracy||gpsUpdated?`<small class="tracking-meta">${[locationAccuracy,gpsUpdated].filter(Boolean).join(' · ')}</small>`:''}</div>${campusMap(order)}<small class="map-key"><i class="map-key-runner"></i>Runner <i class="map-key-destination"></i>Handoff <i class="map-key-stall"></i>Stall</small><small class="tracking-note">Approximate direction only. Follow campus walkways around buildings and obstacles.</small></section>`:'';
-  return `<article class="order-card"><div class="order-card-top"><div><span class="order-number">ORDER #${order.id} · ${new Date(order.created_at).toLocaleString([], {dateStyle:'medium',timeStyle:'short'})}</span><h3>${esc(order.stall)}</h3></div><span class="status-badge status-${esc(order.status)}">${esc(statusLabel[order.status]||order.status)}</span></div>${progress}<div class="order-card-body"><div><p class="order-items-summary">${itemText}</p><p class="order-subline">${order.fulfillment==='delivery'?'PNS campus delivery only':pickupTime?`Pickup · ${pickupTime}`:'Pickup'}${order.runner?` · Runner: ${esc(order.runner)}`:''}${order.buyer_note?` · “${esc(order.buyer_note)}”`:''}</p>${state.user.role!=='buyer'?`<p class="order-subline">Placed by ${esc(order.buyer)}${order.buyer_email?` · ${esc(order.buyer_email)}`:''}</p>`:''}</div><strong class="order-total">${money(order.total)}</strong></div>${tracking}${estimate}${actions?`<div class="order-actions">${actions}</div>`:''}${feedback}${feedbackForm}</article>`;
+  const trackingDestination=order.delivery_latitude!=null?{latitude:order.delivery_latitude,longitude:order.delivery_longitude}:null;
+  const trackingOrigin=gpsAge<180000&&order.driver_latitude!=null?{latitude:order.driver_latitude,longitude:order.driver_longitude}:order.stall_latitude!=null?{latitude:order.stall_latitude,longitude:order.stall_longitude}:null;
+  const trackingGoogleLink=trackingDestination?`<a class="button button-outline button-small map-google-link" href="${googleMapsRouteUrl(trackingOrigin,trackingDestination)}" target="_blank" rel="noopener noreferrer">${trackingOrigin?'Open walking route in Google Maps':'Open handoff point in Google Maps'} <span aria-hidden="true">↗</span></a>`:'';
+  const tracking=order.fulfillment==='delivery'&&order.status==='out'&&['buyer','runner','owner'].includes(state.user.role)?`<section class="tracking-panel"><div><strong>${state.user.role==='runner'?(gpsAge<45000?'Sharing your live location':gpsAge===Infinity?'Waiting for GPS fix':gpsText):gpsAge===Infinity?'Waiting for runner location':gpsText}</strong><small>School delivery · GPS can pause indoors or when signal is weak.</small>${eta?`<p class="tracking-eta">${eta}</p>`:''}${locationAccuracy||gpsUpdated?`<small class="tracking-meta">${[locationAccuracy,gpsUpdated].filter(Boolean).join(' · ')}</small>`:''}</div>${campusMap(order)}<small class="map-key"><i class="map-key-runner"></i>Runner <i class="map-key-destination"></i>Handoff <i class="map-key-stall"></i>Stall</small>${trackingGoogleLink}<small class="tracking-note">Google Maps opens the location or walking route. Follow school walkways around buildings and obstacles.</small></section>`:'';
+  return `<article class="order-card"><div class="order-card-top"><div><span class="order-number">ORDER #${order.id} · ${new Date(order.created_at).toLocaleString([], {dateStyle:'medium',timeStyle:'short'})}</span><h3>${esc(order.stall)}</h3></div><span class="status-badge status-${esc(order.status)}">${esc(statusLabel[order.status]||order.status)}</span></div>${progress}<div class="order-card-body"><div><p class="order-items-summary">${itemText}</p><p class="order-subline">${order.fulfillment==='delivery'?'School delivery only':pickupTime?`Pickup · ${pickupTime}`:'Pickup'}${order.runner?` · Runner: ${esc(order.runner)}`:''}${order.buyer_note?` · “${esc(order.buyer_note)}”`:''}</p>${state.user.role!=='buyer'?`<p class="order-subline">Placed by ${esc(order.buyer)}${order.buyer_email?` · ${esc(order.buyer_email)}`:''}</p>`:''}</div><strong class="order-total">${money(order.total)}</strong></div>${tracking}${estimate}${actions?`<div class="order-actions">${actions}</div>`:''}${feedback}${feedbackForm}</article>`;
 }
 function emptyState(icon,title,copy){return `<div class="empty-state"><span>${icon}</span><h3>${esc(title)}</h3><p>${esc(copy)}</p></div>`}
+function buyerHeroArt(item){
+  const items=buyerHeroItems();
+  if(items.length){state.heroFeaturedIndex=((state.heroFeaturedIndex%items.length)+items.length)%items.length;if(item===undefined)item=items[state.heroFeaturedIndex]}
+  else item=null;
+  if(!item)return `<span class="banner-art-stamp">FRESH · LOCAL · YOURS</span>${buyerHeroFallbackArt()}<i class="banner-art-sparkle">✦</i><b>MADE FOR<br>YOUR BREAK</b>`;
+  const total=items.length,index=state.heroFeaturedIndex+1;
+  const food=item.photo_url?`<img src="${esc(item.photo_url)}" alt="" loading="eager" decoding="async">`:`<span aria-hidden="true">${esc(item.emoji||'🍽️')}</span>`;
+  const badge=state.featuredProducts.length?'TODAY’S STALL PICK':'SCHOOL MENU FAVORITE';
+  return `<span class="banner-art-stamp">${total>1?`PICK ${index} OF ${total}`:badge}</span><button class="banner-featured-food" type="button" data-product-details="${item.id}" aria-label="View ${esc(item.name)} from ${esc(item.stall_name)}">${food}</button>${total>1?`<button class="banner-feature-arrow is-previous" type="button" data-hero-feature="-1" aria-label="Previous featured dish">‹</button><button class="banner-feature-arrow is-next" type="button" data-hero-feature="1" aria-label="Next featured dish">›</button>`:''}<span class="banner-featured-note"><small>${esc(item.stall_name)}</small><strong>${esc(item.name)}</strong><span class="banner-featured-price">${money(item.price)}</span></span>`;
+}
+function buyerHeroFallbackArt(){return `<svg class="banner-food-illustration" viewBox="0 0 520 420" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><ellipse cx="260" cy="316" rx="168" ry="28" fill="#21133e" opacity=".24"/><ellipse cx="260" cy="286" rx="171" ry="43" fill="#fff8e9"/><ellipse cx="260" cy="283" rx="134" ry="26" fill="#ffd45a"/><path d="M146 228h228l-25 92c-5 19-42 31-89 31s-84-12-89-31l-25-92Z" fill="#56339b"/><path d="M165 251h190l-17 61c-15 11-43 17-78 17s-63-6-78-17l-17-61Z" fill="#704bb8"/><path d="M135 222c0-10 8-18 18-18h214c10 0 18 8 18 18s-8 17-18 17H153c-10 0-18-7-18-17Z" fill="#a98bf4"/><path d="M153 219h214" stroke="#fff8e9" stroke-width="7" stroke-linecap="round"/><path d="m307 188 25-70c2-7 11-8 15-1l22 59-15 43-47-31Z" fill="#f4b63e" stroke="#fff8e9" stroke-width="7" stroke-linejoin="round"/><path d="m320 185 20-55" stroke="#fff8e9" stroke-width="6" stroke-linecap="round"/><path d="M317 198c12 5 25 5 38 0" stroke="#c95749" stroke-width="7" stroke-linecap="round"/><path d="m294 202-12-67c-1-7 7-11 12-5l23 26-23 46Z" fill="#f7cd54" stroke="#fff8e9" stroke-width="6" stroke-linejoin="round"/><path d="m279 201-8-52c-1-7 7-11 12-5l19 20-23 37Z" fill="#ee8b31" stroke="#fff8e9" stroke-width="6" stroke-linejoin="round"/><path d="M162 190c4-38 31-66 68-66h22c33 0 60 24 63 60l-10 22H170l-8-16Z" fill="#f39b31" stroke="#fff8e9" stroke-width="7" stroke-linejoin="round"/><ellipse cx="210" cy="148" rx="4" ry="6" transform="rotate(24 210 148)" fill="#fff8e9"/><ellipse cx="234" cy="138" rx="4" ry="6" transform="rotate(24 234 138)" fill="#fff8e9"/><ellipse cx="257" cy="148" rx="4" ry="6" transform="rotate(24 257 148)" fill="#fff8e9"/><ellipse cx="197" cy="170" rx="4" ry="6" transform="rotate(24 197 170)" fill="#fff8e9"/><ellipse cx="242" cy="166" rx="4" ry="6" transform="rotate(24 242 166)" fill="#fff8e9"/><path d="M170 190c18 11 35-8 53 0s35-8 53 0 29-5 39-12v21H171l-1-9Z" fill="#69bc79"/><path d="M171 196c18 10 36-8 54 0s36-8 54 0 27-4 36-10l6 17c-20 10-42 13-64 12l-77-5-9-14Z" fill="#57329b" stroke="#fff8e9" stroke-width="6" stroke-linejoin="round"/><path d="M184 216c24 11 48 11 72 4s45-7 66 1" stroke="#e9822d" stroke-width="8" stroke-linecap="round"/><path d="M207 284h106m-84 19h62" stroke="#d8c6ff" stroke-width="8" stroke-linecap="round" opacity=".8"/><path d="M100 111v28m-14-14h28m294 150v21m-10-10h20" stroke="#ffe178" stroke-width="5" stroke-linecap="round"/></svg>`}
+function setBuyerHeroFeature(index){
+  const items=buyerHeroItems();
+  if(!items.length)return;
+  const count=items.length;
+  state.heroFeaturedIndex=((index%count)+count)%count;
+  const art=$('.buyer-banner .banner-art');
+  if(art)art.innerHTML=buyerHeroArt(items[state.heroFeaturedIndex]);
+}
 function renderBuyer(){
   const q=state.query.trim().toLowerCase();
   const products=state.products.filter(p=>(state.filter==='All'||p.category===state.filter)&&(state.stallFilter==='All'||p.stall_id===Number(state.stallFilter))&&(state.dietaryFilter==='All'||p.dietary_tags.includes(state.dietaryFilter))&&(state.allergenFilter==='All'||!p.allergen_tags.includes(state.allergenFilter))&&(!q||`${p.name} ${p.stall_name} ${p.category} ${p.description} ${p.dietary_tags.join(' ')} ${p.allergen_tags.join(' ')}`.toLowerCase().includes(q)));
@@ -325,26 +534,25 @@ function renderBuyer(){
   const categories=['All',...new Set(state.products.map(p=>p.category))];
   const ordersView=state.user?.role==='buyer'&&state.buyerView==='orders';
   const orderCount=state.orders.filter(order=>!['completed','declined'].includes(order.status)).length;
-  root.innerHTML=`${heading('BITEHUB · PNS CAMPUS','A good break starts here.','Campus favorites, made fresh by the stalls you love.',`<span class="live-pill ${state.paused?'is-paused':''}"><i></i>${state.paused?'Ordering paused':'Open for orders'}</span>`)}${workspaceNav('buyer',state.user?.role==='buyer'?[['menu','Browse food','⌕'],['orders','My orders','↗',orderCount]]:[['menu','Browse food','⌕']],ordersView?'orders':'menu')}
-  ${ordersView?`<section class="workspace-page customer-orders-page" id="buyer-orders"><div class="section-title"><div><span class="eyebrow">YOUR RECENT ACTIVITY</span><h2>Order updates</h2><p class="helper-text">Check progress, pickup details, and feedback for your campus orders.</p></div><span class="result-count">${state.orders.length} ${state.orders.length===1?'order':'orders'}</span></div>${state.orders.length?`<div class="order-list">${state.orders.slice(0,12).map(orderCard).join('')}</div>`:emptyState('↗','Your first order starts here','Browse the menu and place an order. Its progress will appear here.')}</section>`:`<section class="buyer-banner"><div><span class="eyebrow">MADE FRESH, RIGHT HERE</span><h2>Your break,<br>well spent.</h2><p>Find a campus favorite and we’ll get your order to the right stall.</p><a class="button button-light" href="#menu">Explore the menu <span>↓</span></a></div><div class="banner-art" aria-hidden="true"><div class="banner-sun"></div><span>🥙</span><i>✳</i><b>Good food<br>close by</b></div></section>${renderFeaturedPicks()}
-  <section class="section-block customer-menu-page" id="menu"><div class="section-title"><div><span class="eyebrow">THE CAMPUS MENU</span><h2>Find your next favorite</h2></div><label class="search-field"><span aria-hidden="true">⌕</span><input type="search" id="menu-search" value="${esc(state.query)}" placeholder="Dish, stall, or craving" aria-label="Search menu"></label></div><div class="menu-controls"><div class="filter-row" role="group" aria-label="Filter menu by category">${categories.map(c=>`<button class="filter-chip ${state.filter===c?'is-active':''}" data-filter="${esc(c)}" aria-pressed="${state.filter===c}">${esc(c)}</button>`).join('')}</div><label class="sort-field">Sort<select id="menu-sort"><option value="featured" ${state.sort==='featured'?'selected':''}>Featured</option><option value="price-low" ${state.sort==='price-low'?'selected':''}>Price: low to high</option><option value="price-high" ${state.sort==='price-high'?'selected':''}>Price: high to low</option><option value="name" ${state.sort==='name'?'selected':''}>Name</option></select></label><span class="result-count" role="status" aria-live="polite">${products.length} ${products.length===1?'item':'items'}</span></div><div class="product-grid">${products.length?products.map(p=>`<article class="product-card"><button class="product-art product-art-trigger" data-product-details="${p.id}" aria-label="View details for ${esc(p.name)}"><span>${esc(p.emoji)}</span><small>${esc(p.category)}</small></button><div class="product-details"><div class="product-stall">${esc(p.stall_name)}</div><button class="product-name-trigger" data-product-details="${p.id}"><h3>${esc(p.name)}</h3></button><p>${esc(p.description||'Fresh from the stall, ready for your break.')}</p><div class="product-bottom"><strong>${money(p.price)}</strong><button class="button button-primary button-small" data-add="${p.id}" ${state.paused?'disabled':''}>${state.paused?'Paused':'Add +'}</button></div></div></article>`).join(''):state.products.length===0?emptyState('⌂','No campus menus yet','Stall owners can create an account and publish a menu. New items will appear here automatically.'):emptyState('⌕','No menu items found','Try another search or category.')}</div></section>`}`;
+  root.innerHTML=`${heading('BITEHUB · YOUR SCHOOL','A good break starts here.','Campus favorites, made fresh by the stalls you love.',`<span class="live-pill ${state.paused?'is-paused':''}"><i></i>${state.paused?'Ordering paused':'Open for orders'}</span>`)}${workspaceNav('buyer',state.user?.role==='buyer'?[['menu','Browse food','⌕'],['orders','My orders','↗',orderCount]]:[['menu','Browse food','⌕']],ordersView?'orders':'menu')}
+  ${ordersView?`<section class="workspace-page customer-orders-page" id="buyer-orders"><div class="section-title"><div><span class="eyebrow">YOUR RECENT ACTIVITY</span><h2>Order updates</h2><p class="helper-text">Check progress, pickup details, and feedback for your school orders.</p></div><span class="result-count">${state.orders.length} ${state.orders.length===1?'order':'orders'}</span></div>${state.orders.length?`<div class="order-list">${state.orders.slice(0,12).map(orderCard).join('')}</div>`:emptyState('↗','Your first order starts here','Browse the menu and place an order. Its progress will appear here.')}</section>`:`<section class="buyer-banner" aria-labelledby="buyer-banner-title"><div class="buyer-banner-copy"><span class="eyebrow">BITEHUB · YOUR SCHOOL</span><h2 id="buyer-banner-title">Good food,<br><span>better breaks.</span></h2><p>Explore the stalls in your school community and find a favorite for your next break.</p><a class="button button-light" href="#menu">Explore the menu <span aria-hidden="true">↗</span></a></div><div class="banner-art" aria-live="polite" aria-label="Featured food from school stalls">${buyerHeroArt()}</div></section>${renderFeaturedPicks()}
+  <section class="section-block customer-menu-page" id="menu"><div class="section-title"><div><span class="eyebrow">THE CAMPUS MENU</span><h2>Find your next favorite</h2></div><label class="search-field"><span aria-hidden="true">⌕</span><input type="search" id="menu-search" value="${esc(state.query)}" placeholder="Dish, stall, or craving" aria-label="Search menu"></label></div><div class="menu-controls"><div class="filter-row" role="group" aria-label="Filter menu by category">${categories.map(c=>`<button class="filter-chip ${state.filter===c?'is-active':''}" data-filter="${esc(c)}" aria-pressed="${state.filter===c}">${esc(c)}</button>`).join('')}</div><label class="sort-field">Sort<select id="menu-sort"><option value="featured" ${state.sort==='featured'?'selected':''}>Featured</option><option value="price-low" ${state.sort==='price-low'?'selected':''}>Price: low to high</option><option value="price-high" ${state.sort==='price-high'?'selected':''}>Price: high to low</option><option value="name" ${state.sort==='name'?'selected':''}>Name</option></select></label><span class="result-count" role="status" aria-live="polite">${products.length} ${products.length===1?'item':'items'}</span></div><div class="product-grid">${products.length?products.map(p=>`<article class="product-card"><button class="product-art product-art-trigger" data-product-details="${p.id}" aria-label="View details for ${esc(p.name)}"><span>${esc(p.emoji)}</span><small>${esc(p.category)}</small></button><div class="product-details"><div class="product-stall">${esc(p.stall_name)}</div><button class="product-name-trigger" data-product-details="${p.id}"><h3>${esc(p.name)}</h3></button><p>${esc(p.description||'Fresh from the stall, ready for your break.')}</p><div class="product-bottom"><strong>${money(p.price)}</strong><button class="button button-primary button-small" data-add="${p.id}" ${state.paused?'disabled':''}>${state.paused?'Paused':'Add +'}</button></div></div></article>`).join(''):state.products.length===0?emptyState('⌂','No school menus yet','Stall owners can create an account and publish a menu. New items will appear here automatically.'):emptyState('⌕','No menu items found','Try another search or category.')}</div></section>`}`;
 }
 function renderBuyerView(){renderBuyer();addCatalogControls();decorateProductCards();const rail=$('.featured-rail');if(rail)rail.scrollLeft=state.featuredScroll;startFeaturedMotion()}
 function renderOwnerHoursPanel(){
   const opens=state.user.stall_opens_at||'00:00',closes=state.user.stall_closes_at||'23:59';
   const prep=state.user.stall_prep_minutes||15;
-  const capacity=state.user.stall_pickup_slot_capacity||4;
-  return `<section class="panel stall-hours-panel"><div><span class="eyebrow">STALL SCHEDULE · PHILIPPINE TIME</span><h2>Opening hours</h2><p>Orders pause outside these hours. Set a typical prep time and a fair limit for each 30-minute pickup window.</p></div><form class="stall-hours-form" data-form="stall-hours"><label>Opens<input name="opens_at" type="time" required value="${esc(opens)}"></label><span>to</span><label>Closes<input name="closes_at" type="time" required value="${esc(closes)}"></label><label>Prep minutes<input name="prep_minutes" type="number" min="1" max="180" step="1" required value="${prep}"></label><label>Orders per slot<input name="pickup_slot_capacity" type="number" min="1" max="100" step="1" required value="${capacity}"></label><button class="button button-outline button-small">Save hours</button></form></section>`;
+  return `<section class="panel stall-hours-panel"><div><span class="eyebrow">YOUR HOURS · PHILIPPINE TIME</span><h2>Opening hours</h2><p>Choose when customers can place orders. Your stall pauses automatically outside these hours.</p></div><form class="stall-hours-form" data-form="stall-hours"><label>Opens<input name="opens_at" type="time" required value="${esc(opens)}"></label><span class="hours-range-separator" aria-hidden="true">to</span><label>Closes<input name="closes_at" type="time" required value="${esc(closes)}"></label><label>Prep time (minutes)<input name="prep_minutes" type="number" min="1" max="180" step="1" required value="${prep}"></label><button class="button button-outline button-small">Save hours</button></form></section>`;
 }
 function renderOwnerProfilePanel(){
   const logo=state.user.stall_logo_url;
-  return `<section class="panel stall-profile-editor"><div><span class="eyebrow">YOUR PUBLIC STALL PAGE</span><h2>Build your stall profile</h2><p>Add your shop logo and a warm introduction. Customers can tap your logo or stall name to visit this page.</p><div class="owner-stall-preview"><span class="stall-mini-logo">${logo?`<img src="${esc(logo)}" alt="">`:esc((state.user.stall_name||'S').trim().charAt(0).toUpperCase())}</span><strong>${esc(state.user.stall_name||'Your stall')}</strong><small>Profile customers will see</small><button type="button" class="button button-outline button-small" data-action="share-stall" data-stall-id="${state.user.stall_id}">Share stall link</button></div></div><div class="owner-profile-forms"><form class="stack-form" data-form="stall-profile"><label>Stall name<input name="name" maxlength="80" required value="${esc(state.user.stall_name||'')}"></label><label>About your shop<textarea name="description" maxlength="500" rows="4" placeholder="Your story, specialties, and what makes your food special">${esc(state.user.stall_description||'')}</textarea><small class="field-hint">A short, friendly introduction shown on your public profile.</small></label><button class="button button-outline button-small">Save stall details</button></form><form class="stack-form stall-logo-form" data-form="stall-logo"><label>Shop logo <span class="field-hint">JPG, PNG, or WebP · up to 2 MB</span><input name="logo_file" type="file" accept="image/jpeg,image/png,image/webp"></label><div class="stall-logo-preview"><img ${logo?`src="${esc(logo)}"`:''} alt="Stall logo preview" ${logo?'':'hidden'}><span ${logo?'hidden':''}>Your logo preview</span></div>${logo?'<label class="photo-remove"><input name="remove_logo" type="checkbox" value="true"><span>Remove current logo</span></label>':''}<button class="button button-primary button-small">Save shop logo</button></form></div></section>`;
+  return `<section class="panel stall-profile-editor"><div class="stall-profile-intro"><span class="eyebrow">YOUR PUBLIC STALL PAGE</span><h2>Your stall profile</h2><p>Set your stall name, add a short welcome, and upload a logo customers will recognize.</p><div class="owner-stall-preview"><span class="stall-mini-logo">${logo?`<img src="${esc(logo)}" alt="">`:esc((state.user.stall_name||'S').trim().charAt(0).toUpperCase())}</span><strong>${esc(state.user.stall_name||'Your stall')}</strong><small>Preview of your public profile</small><button type="button" class="button button-outline button-small" data-action="share-stall" data-stall-id="${state.user.stall_id}">Share stall link</button></div></div><div class="owner-profile-forms"><form class="stack-form" data-form="stall-profile"><label>Stall name<input name="name" maxlength="80" required value="${esc(state.user.stall_name||'')}"></label><label>About your shop<textarea name="description" maxlength="500" rows="4" placeholder="Tell customers what you serve and what makes your stall special">${esc(state.user.stall_description||'')}</textarea><small class="field-hint">A short introduction customers see on your stall page.</small></label><button class="button button-outline button-small">Save stall details</button></form><form class="stack-form stall-logo-form" data-form="stall-logo"><label>Shop logo <span class="field-hint">Choose a JPG, PNG, or WebP image (up to 2 MB).</span><input name="logo_file" type="file" accept="image/jpeg,image/png,image/webp"></label><div class="stall-logo-preview"><img ${logo?`src="${esc(logo)}"`:''} alt="Stall logo preview" ${logo?'':'hidden'}><span ${logo?'hidden':''}>Your logo preview</span></div>${logo?'<label class="photo-remove"><input name="remove_logo" type="checkbox" value="true"><span>Remove current logo</span></label>':''}<button class="button button-primary button-small">Save shop logo</button></form></div></section>`;
 }
 async function renderStallProfile(id){
   const stall=await api(`/api/stalls/${Number(id)}`);
   if(!(state.user?.role==='owner'&&state.user.stall_id===stall.id)&&state.user?.role!=='admin')recordReachView(stall.id);
   const logo=stall.logo_url?`<img src="${esc(stall.logo_url)}" alt="${esc(stall.name)} logo">`:`<span>${esc(stall.name.trim().charAt(0).toUpperCase())}</span>`;
-  $('#stall-content').innerHTML=`<form method="dialog" class="modal-dismiss"><button class="icon-button" aria-label="Close stall profile">×</button></form><header class="stall-social-header"><div class="stall-cover-art"><span>PALAWAN NATIONAL SCHOOL · CAMPUS STALL</span></div><div class="stall-social-identity"><div class="stall-profile-avatar">${logo}</div><div class="stall-social-title"><h2>${esc(stall.name)}</h2><p>${esc(stall.owner_name||'PNS stall owner')} · ${stall.menu_count} menu ${stall.menu_count===1?'item':'items'}</p>${stall.rating?`<span class="stall-rating">★ ${Number(stall.rating).toFixed(1)} <small>from ${stall.review_count} verified order ${stall.review_count===1?'review':'reviews'}</small></span>`:'<small class="stall-rating-new">New campus stall</small>'}</div><span class="stall-open-badge ${stall.is_open?'is-open':''}"><i></i>${stall.is_open?'Open now':'Closed'}</span></div></header><section class="stall-about-card"><span class="eyebrow">ABOUT THIS STALL</span><p class="stall-profile-description">${esc(stall.description||'Welcome! We are serving fresh breaks at Palawan National School.')}</p><div class="stall-profile-facts"><span><small>HOURS</small><strong>${esc(stall.opens_at)}–${esc(stall.closes_at)}</strong></span><span><small>MENU</small><strong>${stall.menu_count} ${stall.menu_count===1?'item':'items'}</strong></span><span><small>LOCATION</small><strong>Palawan National School</strong></span></div></section><section class="stall-profile-menu"><div class="stall-menu-heading"><div><span class="eyebrow">FROM THE KITCHEN</span><h3>Explore the menu</h3></div><span class="stall-menu-count">${stall.menu_count} ${stall.menu_count===1?'choice':'choices'}</span></div>${stall.products.length?`<div class="stall-menu-grid">${stall.products.map((item,index)=>`<article class="stall-menu-item" style="--menu-index:${index}"><button class="stall-menu-photo" data-product-details="${item.id}" aria-label="View details for ${esc(item.name)}">${item.photo_url?`<img src="${esc(item.photo_url)}" alt="Photo of ${esc(item.name)}" loading="lazy">`:`<span aria-hidden="true">${esc(item.emoji)}</span>`}<small>${esc(item.category)}</small></button><div class="stall-menu-copy"><button class="stall-product-title" data-product-details="${item.id}">${esc(item.name)}</button><small>${esc(item.description||'Freshly made for your break.')}</small><div><b>${money(item.price)}</b><button class="button button-primary button-small" data-add="${item.id}" ${state.paused||!stall.is_open||item.stock_count===0?'disabled':''}>${item.stock_count===0?'Sold out':'Add +'}</button></div></div></article>`).join('')}</div>`:emptyState('⌂','No menu items available','This stall has not published any available items.')}</section>`;
+  $('#stall-content').innerHTML=`<form method="dialog" class="modal-dismiss"><button class="icon-button" aria-label="Close stall profile">×</button></form><header class="stall-social-header"><div class="stall-cover-art"><span>SCHOOL COMMUNITY · CAMPUS STALL</span></div><div class="stall-social-identity"><div class="stall-profile-avatar">${logo}</div><div class="stall-social-title"><h2>${esc(stall.name)}</h2><p>${esc(stall.owner_name||'Campus stall owner')} · ${stall.menu_count} menu ${stall.menu_count===1?'item':'items'}</p>${stall.rating?`<span class="stall-rating">★ ${Number(stall.rating).toFixed(1)} <small>from ${stall.review_count} verified order ${stall.review_count===1?'review':'reviews'}</small></span>`:'<small class="stall-rating-new">New campus stall</small>'}</div><span class="stall-open-badge ${stall.is_open?'is-open':''}"><i></i>${stall.is_open?'Open now':'Closed'}</span></div></header><section class="stall-about-card"><span class="eyebrow">ABOUT THIS STALL</span><p class="stall-profile-description">${esc(stall.description||'Welcome! We are serving fresh breaks at your school.')}</p><div class="stall-profile-facts"><span><small>HOURS</small><strong>${esc(stall.opens_at)}–${esc(stall.closes_at)}</strong></span><span><small>MENU</small><strong>${stall.menu_count} ${stall.menu_count===1?'item':'items'}</strong></span><span><small>LOCATION</small><strong>Your school</strong></span></div></section><section class="stall-profile-menu"><div class="stall-menu-heading"><div><span class="eyebrow">FROM THE KITCHEN</span><h3>Explore the menu</h3></div><span class="stall-menu-count">${stall.menu_count} ${stall.menu_count===1?'choice':'choices'}</span></div>${stall.products.length?`<div class="stall-menu-grid">${stall.products.map((item,index)=>`<article class="stall-menu-item" style="--menu-index:${index}"><button class="stall-menu-photo" data-product-details="${item.id}" aria-label="View details for ${esc(item.name)}">${item.photo_url?`<img src="${esc(item.photo_url)}" alt="Photo of ${esc(item.name)}" loading="lazy">`:`<span aria-hidden="true">${esc(item.emoji)}</span>`}<small>${esc(item.category)}</small></button><div class="stall-menu-copy"><button class="stall-product-title" data-product-details="${item.id}">${esc(item.name)}</button><small>${esc(item.description||'Freshly made for your break.')}</small><div><b>${money(item.price)}</b><button class="button button-primary button-small" data-add="${item.id}" ${state.paused||!stall.is_open||item.stock_count===0?'disabled':''}>${item.stock_count===0?'Sold out':'Add +'}</button></div></div></article>`).join('')}</div>`:emptyState('⌂','No menu items available','This stall has not published any available items.')}</section>`;
   const shareButton=document.createElement('button');shareButton.type='button';shareButton.className='button button-outline button-small stall-share-button';shareButton.dataset.action='share-stall';shareButton.dataset.stallId=String(stall.id);shareButton.textContent='Share this stall';
   $('#stall-content .stall-about-card').append(shareButton);
   if(!$('#stall-dialog').open)$('#stall-dialog').showModal();
@@ -373,7 +581,7 @@ function renderOwner(){
   if(view==='menu')page=renderOwnerMenu(items);
   if(view==='stall')page=`<div class="owner-settings-grid workspace-page" id="owner-stall">${renderOwnerProfilePanel()}${renderOwnerHoursPanel()}</div>`;
   if(view==='insights')page=`<div class="workspace-page">${renderOwnerReach()}<section class="panel owner-feedback" id="owner-feedback"><div class="section-title"><div><span class="eyebrow">HEAR FROM YOUR CUSTOMERS</span><h2>Recent feedback</h2></div><span class="result-count">${feedback.length} reviews</span></div>${feedback.length?`<div class="feedback-list">${feedback.map(order=>`<article class="feedback-entry"><div><strong>Order #${order.id} · ${esc(order.buyer)}</strong><small>${new Date(order.created_at).toLocaleDateString()}</small></div><span class="feedback-stars">${'★'.repeat(order.feedback.rating)}${'☆'.repeat(5-order.feedback.rating)}</span>${order.feedback.comment?`<p>${esc(order.feedback.comment)}</p>`:'<p class="muted-feedback">No written comment.</p>'}</article>`).join('')}</div>`:emptyState('★','No customer feedback yet','Reviews arrive here after completed orders.')}</section></div>`;
-  root.innerHTML=`${heading('STALL WORKSPACE',`Welcome, ${esc(state.user.name.split(' ')[0])}.`,`Run ${state.user.stall_name||'your stall'} from one clear workspace.`,`<span class="live-pill"><i></i>Owner account</span>`)}${workspaceNav('owner',tabs,view)}<main class="workspace-content owner-workspace-content" id="owner-workspace">${page}</main>`;
+  root.innerHTML=`${heading('STALL WORKSPACE',`Welcome, ${esc(state.user.name.split(' ')[0])}.`,'Manage your menu, orders, and stall details in one place.',`<span class="live-pill"><i></i>Owner account</span>`)}${workspaceNav('owner',tabs,view)}<main class="workspace-content owner-workspace-content" id="owner-workspace">${page}</main>`;
   root.querySelectorAll('.inventory-item').forEach(item=>{const id=Number(item.querySelector('[data-edit-product]')?.dataset.editProduct),product=state.products.find(entry=>entry.id===id);if(product?.photo_url){const art=item.querySelector('.inventory-emoji');if(art)art.innerHTML=`<img src="${esc(product.photo_url)}" alt="">`}});
 }
 function renderOwnerOrders(orders,total,preview){
@@ -389,7 +597,7 @@ function renderOwnerReach(){
 function renderRunner(){
   const active=state.orders.filter(o=>!['completed','declined'].includes(o.status));
   const delivered=state.orders.filter(o=>o.status==='completed').length;
-  root.innerHTML=`${heading('CAMPUS RUNNER WORKSPACE','Every handoff, in sync.','Your assigned campus deliveries, from stall pickup to buyer handoff.',`<span class="live-pill"><i></i>Runner account</span>`)}${workspaceNav('runner',[['runner-summary','Today','◷'],['runner-queue','Delivery queue','↗']])}<section class="stats-grid" id="runner-summary">${stat('Active deliveries',active.length,'Assigned to you','↗')}${stat('Delivered',delivered,'Completed handoffs','✓')}${stat('Next up',active[0]?.status==='ready'?'Pick up':'—',active[0]?.stall||'No pending pickup','⌖')}</section><section class="panel" id="runner-queue"><div class="section-title"><div><span class="eyebrow">YOUR DELIVERY QUEUE</span><h2>Assigned runs</h2></div><span class="result-count">${active.length} active</span></div>${active.length?`<div class="order-list">${active.map(orderCard).join('')}</div>`:emptyState('⌖','No assigned deliveries','When a stall assigns you an order, it will appear here.')}</section>`;
+  root.innerHTML=`${heading('CAMPUS RUNNER WORKSPACE','Every handoff, in sync.','Your assigned school deliveries, from stall pickup to buyer handoff.',`<span class="live-pill"><i></i>Runner account</span>`)}${workspaceNav('runner',[['runner-summary','Today','◷'],['runner-queue','Delivery queue','↗']])}<section class="stats-grid" id="runner-summary">${stat('Active deliveries',active.length,'Assigned to you','↗')}${stat('Delivered',delivered,'Completed handoffs','✓')}${stat('Next up',active[0]?.status==='ready'?'Pick up':'—',active[0]?.stall||'No pending pickup','⌖')}</section><section class="panel" id="runner-queue"><div class="section-title"><div><span class="eyebrow">YOUR DELIVERY QUEUE</span><h2>Assigned runs</h2></div><span class="result-count">${active.length} active</span></div>${active.length?`<div class="order-list">${active.map(orderCard).join('')}</div>`:emptyState('⌖','No assigned deliveries','When a stall assigns you an order, it will appear here.')}</section>`;
   ensureLocationSharing();
 }
 function ensureLocationSharing(){
@@ -467,16 +675,14 @@ function render(){
   accountTools();
   if(!state.user){if(state.publicBrowse){document.querySelector('#app')?.classList.remove('auth-open');renderBuyerView();return}return renderAuthWall()}
   document.querySelector('#app')?.classList.remove('auth-open');
-  if(state.user.role==='buyer'){renderBuyerView();renderNotificationBanner();return}
+  if(state.user.role==='buyer'){renderBuyerView();enhanceGoogleCampusMaps();return}
   if(state.user.role==='owner'){
     renderOwner();renderOwnerStallNotice();
     addProductMetadataFields(root.querySelector('form[data-form="product"]'));
-    renderNotificationBanner();
-    return;
+    enhanceGoogleCampusMaps();return;
   }
-  if(state.user.role==='runner'){renderRunner();renderNotificationBanner();return}
+  if(state.user.role==='runner'){renderRunner();enhanceGoogleCampusMaps();return}
   renderAdmin();
-  renderNotificationBanner();
 }
 function renderError(message){root.innerHTML=`${heading('CONNECTION ISSUE','The hub could not load.','Check the local server, then try again.')}<section class="panel error-panel"><p>${esc(message)}</p><button class="button button-primary" data-action="retry">Try again</button></section>`}
 async function showAuth(mode='login'){$('#auth-dialog').close?.();renderAuthForm(mode);$('#auth-dialog').showModal()}
@@ -500,30 +706,17 @@ function renderCart(){
   const dialog=$('#cart-dialog'),content=$('#cart-content'),wasOpen=dialog.open,body=$('#bag-scroll'),previousScroll=body?.scrollTop||0;
   const focused=document.activeElement,quantity=focused?.closest('[data-quantity]'),remove=focused?.closest('[data-remove-cart]');
   const focusState=quantity?{kind:'quantity',id:quantity.dataset.id,delta:quantity.dataset.quantity}:remove?{kind:'remove',id:remove.dataset.removeCart}:focused?.closest('[data-action="clear-cart"]')?{kind:'clear'}:null;
-  const guest=!state.user,first=items[0],pickupOptions=state.pickupSlots.map(slot=>`<option value="${esc(slot.pickup_at)}" ${state.pickupSlot===slot.pickup_at?'selected':''}>${esc(slot.label)} · ${slot.remaining} ${slot.remaining===1?'place':'places'} left</option>`).join('');
-  const controls=items.length&&!guest?`<section class="bag-section" aria-labelledby="bag-fulfillment-title"><h3 id="bag-fulfillment-title">How do you want to get it?</h3><div class="fulfillment-options" role="radiogroup" aria-label="Choose pickup or campus delivery"><label class="fulfillment-choice ${state.fulfillment==='pickup'?'is-selected':''}"><input type="radio" id="fulfillment" name="fulfillment" value="pickup" ${state.fulfillment==='pickup'?'checked':''}><span><strong>Pick up</strong><small>Collect from the stall</small></span></label><label class="fulfillment-choice ${state.fulfillment==='delivery'?'is-selected':''}"><input type="radio" id="fulfillment-delivery" name="fulfillment" value="delivery" ${state.fulfillment==='delivery'?'checked':''}><span><strong>Campus delivery</strong><small>Meet your runner at school</small></span></label></div><label class="pickup-slot-label" id="pickup-slot-label" ${state.fulfillment==='delivery'?'hidden':''}>Choose a pickup time<select id="pickup-slot"><option value="">${state.pickupSlots.length?'Select an available time':'Loading available times…'}</option>${pickupOptions}</select><small>Pickup windows are 30 minutes. Each has limited places.</small></label><div class="delivery-map-wrap" id="delivery-map-wrap" ${state.fulfillment!=='delivery'?'hidden':''}><strong>Choose a handoff point inside campus</strong><small>Tap the map where you’d like to meet the runner.</small>${campusMap(null,true)}<span class="map-key"><i class="map-key-destination"></i>Handoff point</span><span id="delivery-map-status">${state.deliveryLocation?'Delivery point selected':'No delivery point selected'}</span></div><label class="bag-note">Note for the stall <small>Optional · allergies or pickup details</small><textarea id="order-note" maxlength="240" rows="2" placeholder="Add a note for the stall">${esc(state.cartNote)}</textarea></label></section>`:'';
-  content.innerHTML=`<div class="bag-layout"><header class="bag-header"><div><span class="eyebrow">YOUR CAMPUS ORDER</span><h2 id="cart-title">${items.length?'Review your bag':'Your bag'}</h2><p>${items.length?`${cartCount()} ${cartCount()===1?'item':'items'} · ${esc(first.stall_name)}`:'Pick something good for your break.'}</p></div>${items.length?`<button type="button" class="bag-clear" data-action="clear-cart">Clear bag</button>`:''}</header><div class="bag-scroll" id="bag-scroll">${items.length?`<div class="bag-stall-note"><span aria-hidden="true">⌂</span><span><strong>${esc(first.stall_name)}</strong><small>One stall per order · review your items below</small></span></div><div class="bag-lines">${items.map(renderBagLine).join('')}</div>${controls}`:`<div class="bag-empty"><span aria-hidden="true">🥡</span><h3>Your bag is empty</h3><p>Browse the campus menu and add something for your break.</p><button type="button" class="button button-primary" data-action="continue-shopping">Browse food <span>→</span></button></div>`}</div>${items.length?`<footer class="bag-footer"><div class="bag-total"><span>${cartCount()} ${cartCount()===1?'item':'items'} · total</span><strong>${money(cartTotal())}</strong></div>${guest?`<small class="bag-payment-note">Sign in to choose pickup or delivery and place your order.</small><button type="button" class="button button-primary button-wide" data-action="guest-checkout">Sign in to order <span>→</span></button>`:`<small class="bag-payment-note">Pay the stall directly at pickup or handoff.</small><button type="button" class="button button-primary button-wide" data-action="place-order" ${state.paused||(state.fulfillment==='pickup'&&!state.pickupSlot)||(state.fulfillment==='delivery'&&!state.deliveryLocation)?'disabled':''}>${state.paused?'Ordering paused':`Place order · ${money(cartTotal())}`} <span>→</span></button>`}</footer>`:''}</div>`;
+  const guest=!state.user,first=items[0];
+  const controls=items.length&&!guest?`<section class="bag-section" aria-labelledby="bag-fulfillment-title"><h3 id="bag-fulfillment-title">How do you want to get it?</h3><div class="fulfillment-options" role="radiogroup" aria-label="Choose pickup or school delivery"><label class="fulfillment-choice ${state.fulfillment==='pickup'?'is-selected':''}"><input type="radio" id="fulfillment" name="fulfillment" value="pickup" ${state.fulfillment==='pickup'?'checked':''}><span><strong>Pick up</strong><small>Collect from the stall</small></span></label><label class="fulfillment-choice ${state.fulfillment==='delivery'?'is-selected':''}"><input type="radio" id="fulfillment-delivery" name="fulfillment" value="delivery" ${state.fulfillment==='delivery'?'checked':''}><span><strong>School delivery</strong><small>Meet your runner at school</small></span></label></div><div class="delivery-map-wrap" id="delivery-map-wrap" ${state.fulfillment!=='delivery'?'hidden':''}><strong>Choose a handoff point within your school area</strong><small>Choose any point within 1.5 km of your school to meet the runner.</small>${campusMap(null,true)}<span class="map-key"><i class="map-key-destination"></i>Handoff point</span><span id="delivery-map-status" role="status">${state.deliveryLocation?'Delivery point selected':'No delivery point selected'}</span><a class="button button-outline button-small map-google-link" id="delivery-google-link" href="${googleMapsPointUrl(state.deliveryLocation)}" target="_blank" rel="noopener noreferrer">${state.deliveryLocation?'Check handoff point':'View school map'} in Google Maps <span aria-hidden="true">↗</span></a></div><label class="bag-note">Note for the stall <small>Optional · allergies or pickup details</small><textarea id="order-note" maxlength="240" rows="2" placeholder="Add a note for the stall">${esc(state.cartNote)}</textarea></label></section>`:'';
+  content.innerHTML=`<div class="bag-layout"><header class="bag-header"><div><span class="eyebrow">YOUR CAMPUS ORDER</span><h2 id="cart-title">${items.length?'Review your bag':'Your bag'}</h2><p>${items.length?`${cartCount()} ${cartCount()===1?'item':'items'} · ${esc(first.stall_name)}`:'Pick something good for your break.'}</p></div>${items.length?`<button type="button" class="bag-clear" data-action="clear-cart">Clear bag</button>`:''}</header><div class="bag-scroll" id="bag-scroll">${items.length?`<div class="bag-stall-note"><span aria-hidden="true">⌂</span><span><strong>${esc(first.stall_name)}</strong><small>One stall per order · review your items below</small></span></div><div class="bag-lines">${items.map(renderBagLine).join('')}</div>${controls}`:`<div class="bag-empty"><span aria-hidden="true">🥡</span><h3>Your bag is empty</h3><p>Browse the campus menu and add something for your break.</p><button type="button" class="button button-primary" data-action="continue-shopping">Browse food <span>→</span></button></div>`}</div>${items.length?`<footer class="bag-footer"><div class="bag-total"><span>${cartCount()} ${cartCount()===1?'item':'items'} · total</span><strong>${money(cartTotal())}</strong></div>${guest?`<small class="bag-payment-note">Sign in to choose pickup or delivery and place your order.</small><button type="button" class="button button-primary button-wide" data-action="guest-checkout">Sign in to order <span>→</span></button>`:`<small class="bag-payment-note">Pay the stall directly at pickup or handoff.</small><button type="button" class="button button-primary button-wide" data-action="place-order" ${state.paused||(state.fulfillment==='delivery'&&!state.deliveryLocation)?'disabled':''}>${state.paused?'Ordering paused':`Place order · ${money(cartTotal())}`} <span>→</span></button>`}</footer>`:''}</div>`;
   accountTools();
   if(!dialog.open)dialog.showModal();
   if(wasOpen){const nextBody=$('#bag-scroll');if(nextBody)nextBody.scrollTop=previousScroll;let target=null;if(focusState?.kind==='quantity')target=content.querySelector(`[data-quantity="${focusState.delta}"][data-id="${focusState.id}"]`);if(focusState?.kind==='remove')target=content.querySelector(`[data-quantity="-1"]`)||content.querySelector('[data-action="continue-shopping"]');if(focusState?.kind==='clear')target=content.querySelector('[data-action="continue-shopping"]');(target||content.querySelector('[data-action="continue-shopping"]')||$('#cart-close'))?.focus({preventScroll:true});if(nextBody)nextBody.scrollTop=previousScroll}
-  if(items.length&&!guest)loadPickupSlots();
-}
-async function loadPickupSlots(){
-  const first=cartEntries()[0];if(!first)return;
-  const request=++state.pickupSlotRequest;
-  try{
-    const result=await api(`/api/pickup-slots?stall_id=${first.stall_id}`);
-    if(request!==state.pickupSlotRequest||!$('#cart-dialog').open)return;
-    state.pickupSlots=result.slots;
-    if(!result.slots.some(slot=>slot.pickup_at===state.pickupSlot))state.pickupSlot=null;
-    const select=$('#pickup-slot');
-    if(select){select.innerHTML=`<option value="">${result.slots.length?'Choose a time':'No pickup windows available'}</option>${result.slots.map(slot=>`<option value="${esc(slot.pickup_at)}" ${state.pickupSlot===slot.pickup_at?'selected':''}>${esc(slot.label)} · ${slot.remaining} ${slot.remaining===1?'place':'places'} left</option>`).join('')}`}
-  }catch(error){if(request===state.pickupSlotRequest)toast(error.message)}
-  updateCartCheckoutButton();
+  enhanceGoogleCampusMaps();
 }
 function updateCartCheckoutButton(){
   const place=$('#cart-content [data-action="place-order"]');
-  if(place)place.disabled=state.paused||(state.fulfillment==='pickup'&&!state.pickupSlot)||(state.fulfillment==='delivery'&&!state.deliveryLocation);
+  if(place)place.disabled=state.paused||(state.fulfillment==='delivery'&&!state.deliveryLocation);
 }
 function cartCount(){return cartEntries().reduce((count,item)=>count+item.quantity,0)}
 function addToCart(product){
@@ -538,7 +731,7 @@ function addToCart(product){
   if($('#cart-dialog').open)renderCart();
   toast(`${product.name} added to your bag.`);
 }
-function resetEmptyBag(){if(state.cart.size)return;state.cartNote='';state.pickupSlot=null;state.pickupSlots=[];state.pickupSlotRequest++;state.fulfillment='pickup';state.deliveryLocation=null}
+function resetEmptyBag(){if(state.cart.size)return;state.cartNote='';state.fulfillment='pickup';state.deliveryLocation=null}
 function changeQuantity(id,delta){const item=state.cart.get(Number(id));if(!item)return;const limit=item.stock_count===null||item.stock_count===undefined?50:Math.min(50,item.stock_count);if(item.quantity+delta>limit){toast(item.stock_count===null||item.stock_count===undefined?'You can order up to 50 of each item.':`Only ${item.stock_count} available.`);return}item.quantity+=delta;if(item.quantity<=0)state.cart.delete(Number(id));resetEmptyBag();accountTools();renderCart()}
 function renderProductDetails(id){
   const product=state.products.find(item=>item.id===Number(id));if(!product)return;
@@ -601,6 +794,7 @@ root.addEventListener('change',e=>{
 document.addEventListener('click',async e=>{
   const workspaceTab=e.target.closest('[data-workspace-role][data-workspace-view]');
   if(workspaceTab){
+    if(workspaceTab.closest('#sidebar-navigation'))closeSidebar();
     const role=workspaceTab.dataset.workspaceRole,view=workspaceTab.dataset.workspaceView;
     if(role==='buyer'&&(state.user?.role==='buyer'||(!state.user&&state.publicBrowse))||state.user?.role===role){
       if(state[`${role}View`]===view)return;
@@ -612,14 +806,18 @@ document.addEventListener('click',async e=>{
     }
     return;
   }
+  const sidebarScroll=e.target.closest('[data-sidebar-scroll]');
+  if(sidebarScroll){closeSidebar();document.getElementById(sidebarScroll.dataset.sidebarScroll)?.scrollIntoView({behavior:window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'start'});return}
+  if(e.target.closest('#app-sidebar a[href]'))closeSidebar();
   const stallProfile=e.target.closest('[data-stall-profile]');if(stallProfile){try{await renderStallProfile(stallProfile.dataset.stallProfile)}catch(error){toast(error.message)}return}
   const feature=e.target.closest('[data-feature-product]');if(feature){feature.disabled=true;const active=feature.dataset.featureActive==='true';try{await api('/api/stall/feature',{method:'PATCH',body:json({product_id:Number(feature.dataset.featureProduct),featured:!active})});toast(active?'Campus pick removed.':'Featured on Today’s Campus Picks for 24 hours!');await refresh()}catch(error){toast(error.message);feature.disabled=false}return}
+  const moveHeroFeature=e.target.closest('[data-hero-feature]');if(moveHeroFeature){setBuyerHeroFeature(state.heroFeaturedIndex+Number(moveHeroFeature.dataset.heroFeature));return}
   const moveFeatured=e.target.closest('[data-feature-move]');if(moveFeatured){const rail=$('.featured-rail'),card=rail?.querySelector('.featured-card');if(rail&&card)rail.scrollBy({left:(card.getBoundingClientRect().width+12)*Number(moveFeatured.dataset.featureMove),behavior:window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});return}
-  const pauseFeatured=e.target.closest('[data-feature-pause]');if(pauseFeatured){state.featuredPaused=!state.featuredPaused;pauseFeatured.setAttribute('aria-pressed',String(state.featuredPaused));pauseFeatured.textContent=state.featuredPaused?'Play motion':'Pause motion';return}
+  const pauseFeatured=e.target.closest('[data-feature-pause]');if(pauseFeatured){state.featuredPaused=!state.featuredPaused;pauseFeatured.setAttribute('aria-pressed',String(state.featuredPaused));pauseFeatured.textContent=state.featuredPaused?'Play rotation':'Pause rotation';return}
   const enableAlerts=e.target.closest('[data-action="enable-notifications"]');if(enableAlerts){enableAlerts.disabled=true;try{await enablePushNotifications()}catch(error){toast(error.message);enableAlerts.disabled=false}return}
   const disableAlerts=e.target.closest('[data-action="disable-notifications"]');if(disableAlerts){disableAlerts.disabled=true;try{await disablePushNotifications()}catch(error){toast(error.message);disableAlerts.disabled=false}return}
   const zoom=e.target.closest('[data-map-zoom]');if(zoom){setMapZoom(zoom.dataset.mapZoom);return}
-  const mapPicker=e.target.closest('[data-map-picker]');if(mapPicker){const rect=mapPicker.getBoundingClientRect(),x=e.detail===0?0.5:Math.max(0,Math.min(1,(e.clientX-rect.left)/rect.width)),y=e.detail===0?0.5:Math.max(0,Math.min(1,(e.clientY-rect.top)/rect.height)),span=100/state.mapZoom,origin=50-span/2,mapX=origin+x*span,mapY=origin+y*span;state.deliveryLocation={latitude:CAMPUS.south+(100-mapY)/100*(CAMPUS.north-CAMPUS.south),longitude:CAMPUS.west+mapX/100*(CAMPUS.east-CAMPUS.west)};mapPicker.closest('.campus-map-shell').outerHTML=campusMap(null,true);$('#delivery-map-status').textContent='Delivery point selected';updateCartCheckoutButton();return}
+  const mapPicker=e.target.closest('[data-map-picker]');if(mapPicker){const rect=mapPicker.getBoundingClientRect(),x=e.detail===0?0.5:Math.max(0,Math.min(1,(e.clientX-rect.left)/rect.width)),y=e.detail===0?0.5:Math.max(0,Math.min(1,(e.clientY-rect.top)/rect.height)),span=100/state.mapZoom,origin=50-span/2,mapX=origin+x*span,mapY=origin+y*span,campus=activeCampus(),latitude=campus.south+(100-mapY)/100*(campus.north-campus.south),longitude=campus.west+mapX/100*(campus.east-campus.west);setDeliveryPoint(latitude,longitude,mapPicker.closest('.campus-map-shell'));return}
   const authTab=e.target.closest('[data-auth-mode]');if(authTab){state.authRole=authTab.dataset.authRole||state.authRole;renderAuthWall(authTab.dataset.authMode==='choose'?'choose':'login',state.authRole);return}
   const roleChoice=e.target.closest('[data-signup-role]');if(roleChoice){renderAuthWall('signup',roleChoice.dataset.signupRole);return}
   const details=e.target.closest('[data-product-details]');if(details){renderProductDetails(details.dataset.productDetails);return}
@@ -632,6 +830,15 @@ document.addEventListener('click',async e=>{
   const stallStatus=e.target.closest('[data-stall-status]');if(stallStatus){stallStatus.disabled=true;try{await api(`/api/admin/stalls/${stallStatus.dataset.stallStatus}`,{method:'PATCH',body:json({status:stallStatus.dataset.nextStatus})});toast(stallStatus.dataset.nextStatus==='paused'?'Stall paused; customers can’t order from it.':'Stall resumed and visible to customers.');await refresh()}catch(error){toast(error.message);stallStatus.disabled=false}return}
   const remove=e.target.closest('[data-delete-product]');if(remove){if(!confirm('Remove this item from your menu?'))return;try{await api(`/api/products/${remove.dataset.deleteProduct}`,{method:'DELETE'});toast('Menu item removed.');await refresh()}catch(error){toast(error.message)}return}
   const action=e.target.closest('[data-action]');if(!action)return;
+  if(action.dataset.action==='open-sidebar'){state.sidebarOpen=true;syncSidebarState();$('.sidebar-close')?.focus({preventScroll:true});return}
+  if(action.dataset.action==='close-sidebar'){closeSidebar();$('.sidebar-menu-button')?.focus({preventScroll:true});return}
+  if(action.dataset.action==='toggle-profile'){state.sidebarProfileOpen=!state.sidebarProfileOpen;renderSidebar();return}
+  if(action.dataset.action==='toggle-sidebar-settings'){state.sidebarSettingsOpen=!state.sidebarSettingsOpen;renderSidebar();return}
+  if(action.dataset.action==='toggle-theme'){
+    themeMode=themeMode==='dark'?'light':'dark';
+    try{localStorage.setItem('bitehub-theme',themeMode)}catch{}
+    applyTheme();return;
+  }
   if(action.dataset.action==='export-report'){downloadAdminReport();return}
   if(action.dataset.action==='guest-signin'||action.dataset.action==='guest-checkout'){if($('#cart-dialog').open)$('#cart-dialog').close();if($('#stall-dialog').open)$('#stall-dialog').close();renderAuthWall('login','buyer');return}
   if(action.dataset.action==='continue-shopping'){
@@ -641,16 +848,19 @@ document.addEventListener('click',async e=>{
   }
   if(action.dataset.action==='share-stall'){
     const url=stallShareUrl(action.dataset.stallId);
-    if(navigator.share){try{await navigator.share({title:'BiteHub stall',text:'Explore this PNS campus food stall on BiteHub.',url});return}catch(error){if(error.name==='AbortError')return}}
+    if(navigator.share){try{await navigator.share({title:'BiteHub stall',text:'Explore this school food stall on BiteHub.',url});return}catch(error){if(error.name==='AbortError')return}}
     try{await navigator.clipboard.writeText(url);toast('Stall link copied. Share it with your customers.')}catch(_){window.prompt('Copy this stall link:',url)}
     return;
   }
   if(action.dataset.action==='open-cart'){renderCart();return}
-  if(action.dataset.action==='logout'){await api('/api/logout',{method:'POST',body:'{}'});clearTimeout(refreshTimer);if(state.trackingWatch!==null)navigator.geolocation?.clearWatch(state.trackingWatch);state.trackingWatch=null;state.user=null;state.cart.clear();resetEmptyBag();renderAuthWall();toast('You are signed out.');return}
+  if(action.dataset.action==='logout'){closeSidebar();await api('/api/logout',{method:'POST',body:'{}'});clearTimeout(refreshTimer);if(state.trackingWatch!==null)navigator.geolocation?.clearWatch(state.trackingWatch);state.trackingWatch=null;state.user=null;state.cart.clear();resetEmptyBag();renderAuthWall();toast('You are signed out.');return}
   if(action.dataset.action==='clear-cart'){state.cart.clear();resetEmptyBag();accountTools();renderCart();return}
   if(action.dataset.action==='retry'){await boot();return}
   if(action.dataset.action==='toggle-pause'){try{const result=await api('/api/admin/pause',{method:'POST',body:json({paused:!state.paused})});state.paused=result.ordering_paused;toast(state.paused?'Ordering paused.':'Ordering is open.');await refresh()}catch(error){toast(error.message)}return}
-  if(action.dataset.action==='place-order'){action.disabled=true;try{const result=await api('/api/orders',{method:'POST',body:json({fulfillment:state.fulfillment,pickup_at:state.fulfillment==='pickup'?state.pickupSlot:null,delivery_location:state.fulfillment==='delivery'?state.deliveryLocation:null,note:$('#order-note').value,items:cartEntries().map(p=>({product_id:p.id,quantity:p.quantity}))})});state.cart.clear();resetEmptyBag();accountTools();$('#cart-dialog').close();toast(`Order #${result.order_id} sent to the stall.`);await refresh()}catch(error){toast(error.message);action.disabled=false}}
+  if(action.dataset.action==='place-order'){action.disabled=true;try{const result=await api('/api/orders',{method:'POST',body:json({fulfillment:state.fulfillment,delivery_location:state.fulfillment==='delivery'?state.deliveryLocation:null,note:$('#order-note').value,items:cartEntries().map(p=>({product_id:p.id,quantity:p.quantity}))})});state.cart.clear();resetEmptyBag();accountTools();$('#cart-dialog').close();toast(`Order #${result.order_id} sent to the stall.`);await refresh()}catch(error){toast(error.message);action.disabled=false}}
+});
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'&&state.sidebarOpen){closeSidebar();$('.sidebar-menu-button')?.focus({preventScroll:true})}
 });
 document.addEventListener('scroll',e=>{if(e.target.matches?.('.featured-rail'))state.featuredScroll=e.target.scrollLeft},{capture:true,passive:true});
 $('#cart-dialog').addEventListener('click',e=>{if(e.target===$('#cart-dialog'))$('#cart-dialog').close()});
@@ -658,14 +868,9 @@ $('#cart-dialog').addEventListener('input',e=>{if(e.target.id==='order-note')sta
 $('#cart-dialog').addEventListener('change',e=>{
   if(e.target.name==='fulfillment'){
     state.fulfillment=e.target.value;
-    $('#pickup-slot-label').hidden=state.fulfillment==='delivery';
     $('#delivery-map-wrap').hidden=state.fulfillment!=='delivery';
     document.querySelectorAll('.fulfillment-choice').forEach(choice=>choice.classList.toggle('is-selected',choice.querySelector('input')===e.target));
-    if(state.fulfillment==='pickup')loadPickupSlots();
-    updateCartCheckoutButton();
-  }
-  if(e.target.id==='pickup-slot'){
-    state.pickupSlot=e.target.value||null;
+    if(state.fulfillment==='delivery')enhanceGoogleCampusMaps();
     updateCartCheckoutButton();
   }
 });
@@ -674,6 +879,17 @@ document.addEventListener('submit',async e=>{
   const form=e.target.closest('[data-form]');if(!form)return;e.preventDefault();const submit=form.querySelector('button[type="submit"],button:not([type])');if(submit)submit.disabled=true;
   try{
     const formData=new FormData(form),values=Object.fromEntries(formData.entries());
+    if(form.dataset.form==='user-profile'){
+      const photoFile=formData.get('photo_file'),profile={name:String(values.name||'').trim()};
+      if(photoFile instanceof File&&photoFile.size){if(photoFile.size>2*1024*1024||!['image/jpeg','image/png','image/webp'].includes(photoFile.type))throw new Error('Choose a JPG, PNG, or WebP profile photo under 2 MB.');profile.photo_data=await fileAsBase64(photoFile);profile.photo_type=photoFile.type}
+      else if(formData.get('remove_photo'))profile.remove_photo=true;
+      const result=await api('/api/profile',{method:'PATCH',body:json(profile)});state.user=result.user;state.sidebarProfileOpen=false;render();toast('Your profile has been updated.');return;
+    }
+    if(form.dataset.form==='signup'){
+      const latitude=Number(values.school_latitude),longitude=Number(values.school_longitude);
+      if(!Number.isFinite(latitude)||!Number.isFinite(longitude)||latitude<4||latitude>22.5||longitude<115||longitude>128)throw new Error('Search for your school on Google Maps and choose its location pin.');
+      if(!PH_REGION_OPTIONS.includes(values.school_region))throw new Error('Choose a region in the Philippines.');
+    }
     if(form.dataset.form==='stall-logo'){
       const logoFile=formData.get('logo_file');delete values.logo_file;delete values.remove_logo;
       if(logoFile instanceof File&&logoFile.size){if(logoFile.size>2*1024*1024||!['image/jpeg','image/png','image/webp'].includes(logoFile.type))throw new Error('Choose a JPG, PNG, or WebP logo under 2 MB.');values.logo_data=await fileAsBase64(logoFile);values.logo_type=logoFile.type}
@@ -688,6 +904,9 @@ document.addEventListener('submit',async e=>{
       values.dietary_tags=formData.getAll('dietary_tags');
       values.allergen_tags=formData.getAll('allergen_tags');
     }
+    if(form.dataset.form==='school-request'){
+      const result=await api('/api/school-requests',{method:'POST',body:json(values)});form.reset();toast(result.message);return;
+    }
     if(form.dataset.form==='login'||form.dataset.form==='signup'){
       const result=await api(`/api/${form.dataset.form}`,{method:'POST',body:json(values)});state.user=result.user;if(state.user.role!=='buyer'){state.cart.clear();resetEmptyBag()}applyWorkspaceHash();startAutoRefresh();$('#auth-dialog').close();toast(form.dataset.form==='signup'&&result.user.role==='owner'?'Stall account created. Your stall is now open to customers.':form.dataset.form==='signup'?'Your account is ready.':'Welcome back.');await refresh();loadNotificationState();await openSharedStall();return;
     }
@@ -701,12 +920,26 @@ document.addEventListener('submit',async e=>{
       values.rating=Number(values.rating);await api(`/api/orders/${form.dataset.orderId}/feedback`,{method:'POST',body:json(values)});toast('Thanks for sharing your feedback.');await refresh();return;
     }
     if(form.dataset.form==='stall-hours'){
-      values.prep_minutes=Number(values.prep_minutes);values.pickup_slot_capacity=Number(values.pickup_slot_capacity);const result=await api('/api/stall/hours',{method:'PATCH',body:json(values)});state.user.stall_opens_at=result.opens_at;state.user.stall_closes_at=result.closes_at;state.user.stall_prep_minutes=result.prep_minutes;state.user.stall_pickup_slot_capacity=result.pickup_slot_capacity;toast('Stall hours and pickup limit saved.');await refresh();return;
+      values.prep_minutes=Number(values.prep_minutes);const result=await api('/api/stall/hours',{method:'PATCH',body:json(values)});state.user.stall_opens_at=result.opens_at;state.user.stall_closes_at=result.closes_at;state.user.stall_prep_minutes=result.prep_minutes;toast('Stall hours and prep time saved.');await refresh();return;
     }
     if(form.dataset.form==='stall-profile'){
       const result=await api('/api/stall/profile',{method:'PATCH',body:json(values)});state.user.stall_name=result.name;state.user.stall_description=result.description;toast('Public stall profile saved.');await refresh();return;
     }
   }catch(error){toast(error.message)}finally{if(submit)submit.disabled=false}
+});
+document.addEventListener('change',e=>{
+  const form=e.target.closest('.sidebar-profile-form');if(!form)return;
+  const avatar=form.querySelector('.sidebar-profile-avatar');
+  if(e.target.matches('input[name="photo_file"]')&&e.target.files?.[0]){
+    const file=e.target.files[0];
+    if(file.size>2*1024*1024||!['image/jpeg','image/png','image/webp'].includes(file.type)){toast('Choose a JPG, PNG, or WebP profile photo under 2 MB.');e.target.value='';return}
+    const url=URL.createObjectURL(file);avatar.innerHTML=`<img src="${url}" alt="Photo preview">`;avatar.querySelector('img').addEventListener('load',()=>URL.revokeObjectURL(url),{once:true});
+    const remove=form.querySelector('input[name="remove_photo"]');if(remove)remove.checked=false;
+  }
+  if(e.target.matches('input[name="remove_photo"]')&&e.target.checked){
+    avatar.textContent=state.user?.name?.trim().charAt(0).toUpperCase()||'?';
+    const photo=form.querySelector('input[name="photo_file"]');if(photo)photo.value='';
+  }
 });
 async function boot(){
   try{const session=await api('/api/session');state.user=session.user;if(state.user){applyWorkspaceHash();startAutoRefresh();await refresh();loadNotificationState();await openSharedStall()}else if(state.publicBrowse){applyWorkspaceHash();await refresh();await openSharedStall();startAutoRefresh()}else renderAuthWall()}

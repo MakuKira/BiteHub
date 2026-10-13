@@ -87,7 +87,7 @@ def initialize():
         CREATE TABLE IF NOT EXISTS schools (
           id TEXT PRIMARY KEY, name TEXT NOT NULL, school_type TEXT NOT NULL,
           region TEXT NOT NULL, province TEXT NOT NULL, city TEXT NOT NULL,
-          latitude REAL NOT NULL, longitude REAL NOT NULL,
+          latitude REAL, longitude REAL,
           delivery_radius_m INTEGER NOT NULL DEFAULT 1500, created_at TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS school_requests (
@@ -165,6 +165,22 @@ def initialize():
         CREATE INDEX IF NOT EXISTS products_stall_idx ON products(stall_id, available);
         CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions(expires_at);
         """)
+        school_columns = {row["name"]: row for row in db.execute("PRAGMA table_info(schools)")}
+        if school_columns["latitude"]["notnull"] or school_columns["longitude"]["notnull"]:
+            # School pins are optional during sign-up. Rebuild the legacy table
+            # with nullable coordinates while preserving every existing school.
+            db.execute("DROP TABLE IF EXISTS schools_optional_location_migration")
+            db.execute("""CREATE TABLE schools_optional_location_migration (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, school_type TEXT NOT NULL,
+                region TEXT NOT NULL, province TEXT NOT NULL, city TEXT NOT NULL,
+                latitude REAL, longitude REAL,
+                delivery_radius_m INTEGER NOT NULL DEFAULT 1500, created_at TEXT NOT NULL
+            )""")
+            db.execute("""INSERT INTO schools_optional_location_migration
+                (id,name,school_type,region,province,city,latitude,longitude,delivery_radius_m,created_at)
+                SELECT id,name,school_type,region,province,city,latitude,longitude,delivery_radius_m,created_at FROM schools""")
+            db.execute("DROP TABLE schools")
+            db.execute("ALTER TABLE schools_optional_location_migration RENAME TO schools")
         stall_columns = {row["name"] for row in db.execute("PRAGMA table_info(stalls)")}
         user_columns = {row["name"] for row in db.execute("PRAGMA table_info(users)")}
         for school_id, school in PILOT_SCHOOLS.items():
@@ -1160,15 +1176,20 @@ class Handler(BaseHTTPRequestHandler):
             if not school_province: school_province = "Metro Manila"
             school_city = clean_text(data.get("school_city"), "City or municipality", 80)
             if school_region not in PHILIPPINE_REGIONS: raise ValueError("Choose a region in the Philippines.")
-            try:
-                school_latitude = float(data.get("school_latitude"))
-                school_longitude = float(data.get("school_longitude"))
-            except (TypeError, ValueError):
-                raise ValueError("Search for your school and place its pin on the map.")
-            if not math.isfinite(school_latitude) or not math.isfinite(school_longitude) or not PHILIPPINES_BOUNDS["south"] <= school_latitude <= PHILIPPINES_BOUNDS["north"] or not PHILIPPINES_BOUNDS["west"] <= school_longitude <= PHILIPPINES_BOUNDS["east"]:
-                raise ValueError("Choose a school location in the Philippines.")
+            raw_school_latitude = str(data.get("school_latitude") or "").strip()
+            raw_school_longitude = str(data.get("school_longitude") or "").strip()
+            school_latitude = school_longitude = None
+            if raw_school_latitude or raw_school_longitude:
+                if not raw_school_latitude or not raw_school_longitude:
+                    raise ValueError("Add both parts of the optional school pin, or leave it blank.")
+                try:
+                    school_latitude, school_longitude = float(raw_school_latitude), float(raw_school_longitude)
+                except (TypeError, ValueError):
+                    raise ValueError("Choose a valid school pin, or leave the optional pin blank.")
+                if not math.isfinite(school_latitude) or not math.isfinite(school_longitude) or not PHILIPPINES_BOUNDS["south"] <= school_latitude <= PHILIPPINES_BOUNDS["north"] or not PHILIPPINES_BOUNDS["west"] <= school_longitude <= PHILIPPINES_BOUNDS["east"]:
+                    raise ValueError("Choose a school location in the Philippines, or leave the optional pin blank.")
             school_zip = clean_text(data.get("school_zip", ""), "ZIP code", 10, required=False)
-            if data.get("confirm_school") != "yes": raise ValueError("Confirm your school selection before creating an account.")
+            if data.get("confirm_school") != "yes": raise ValueError("Confirm your school details before creating an account.")
             if school_zip and not re.fullmatch(r"[0-9]{4,10}", school_zip): raise ValueError("Enter a valid ZIP code using 4 to 10 digits.")
             stall_name = clean_text(data.get("stall_name"), "Stall name", 80) if role == "owner" else None
             salt = secrets.token_bytes(16)
@@ -1177,13 +1198,21 @@ class Handler(BaseHTTPRequestHandler):
                 known_school = None
                 for pilot_id, pilot in PILOT_SCHOOLS.items():
                     same_name = " ".join(pilot["name"].casefold().split()) == normalized_name
-                    distance = math.hypot((school_latitude-pilot["latitude"])*111_320, (school_longitude-pilot["longitude"])*111_320*math.cos(math.radians(school_latitude)))
-                    if same_name and distance <= 500:
-                        known_school = pilot_id
-                        break
+                    if not same_name:
+                        continue
+                    if school_latitude is not None:
+                        distance = math.hypot((school_latitude-pilot["latitude"])*111_320, (school_longitude-pilot["longitude"])*111_320*math.cos(math.radians(school_latitude)))
+                        if distance > 500:
+                            continue
+                    else:
+                        school_latitude, school_longitude = pilot["latitude"], pilot["longitude"]
+                    known_school = pilot_id
+                    break
                 school_id = known_school or make_school_id(school_name,school_region,school_province,school_city)
-                db.execute("""INSERT OR IGNORE INTO schools(id,name,school_type,region,province,city,latitude,longitude,delivery_radius_m,created_at)
-                    VALUES(?,?,?,?,?,?,?,?,?,?)""", (school_id,school_name,school_type,school_region,school_province,school_city,school_latitude,school_longitude,DEFAULT_DELIVERY_RADIUS_METERS,now()))
+                db.execute("""INSERT INTO schools(id,name,school_type,region,province,city,latitude,longitude,delivery_radius_m,created_at)
+                    VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+                    latitude=COALESCE(schools.latitude,excluded.latitude),
+                    longitude=COALESCE(schools.longitude,excluded.longitude)""", (school_id,school_name,school_type,school_region,school_province,school_city,school_latitude,school_longitude,DEFAULT_DELIVERY_RADIUS_METERS,now()))
                 cur = db.execute("INSERT INTO users(name,email,password_hash,password_salt,role,school_id,school_region,school_province,school_city,school_zip,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                                  (name,email,password_digest(password,salt),salt.hex(),role,school_id,school_region,school_province,school_city,school_zip,now()))
                 user_id = cur.lastrowid

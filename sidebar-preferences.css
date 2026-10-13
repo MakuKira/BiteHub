@@ -641,7 +641,10 @@ html[data-theme="dark"] #owner-stall .stall-logo-preview span,html[data-theme="d
   #owner-stall .stall-hours-form .button{grid-column:2/3;white-space:normal}
 }
 /* Account deletion uses a separate, explicit confirmation with password re-entry. */
-.sidebar-delete-account{width:100%;min-height:40px;margin-top:10px;padding:9px 11px;border:1px solid #edc9c7;border-radius:11px;background:#fff4f2;color:#9d3736;text-align:left;font-size:11px;font-weight:850;cursor:pointer}
+.sidebar-danger-zone{display:grid;gap:6px;margin-top:4px;padding:12px;border:1px solid #efdcdb;border-radius:14px;background:linear-gradient(145deg,#fff9f7,#fff2ef)}
+.sidebar-danger-zone>strong{color:#4d3a4a;font-size:11px;font-weight:850}
+.sidebar-danger-zone>small{color:#82727f;font-size:9px;line-height:1.45}
+.sidebar-delete-account{width:100%;min-height:40px;margin-top:2px;padding:9px 11px;border:1px solid #edc9c7;border-radius:11px;background:#fff4f2;color:#9d3736;text-align:left;font-size:11px;font-weight:850;cursor:pointer}
 .sidebar-delete-account:hover{border-color:#d99794;background:#ffe9e6}
 .delete-account-modal{box-sizing:border-box;width:min(520px,calc(100vw - 32px));max-width:calc(100vw - 32px);padding:0;border:1px solid #ead7d5;border-radius:22px;background:#fffdfa;color:#32253a;box-shadow:0 24px 80px #160d1e42}
 .delete-account-modal::backdrop{background:#21182999;backdrop-filter:blur(5px)}
@@ -659,6 +662,9 @@ html[data-theme="dark"] #owner-stall .stall-logo-preview span,html[data-theme="d
 .button-danger{border-color:#a72f31;background:linear-gradient(135deg,#c94c49,#a82d34);color:#fff;box-shadow:0 7px 18px #a832322b}
 .button-danger:hover:not(:disabled){background:linear-gradient(135deg,#b83d40,#93232d)}
 .sidebar-delete-account:focus-visible,.button-danger:focus-visible,.delete-account-actions .button:focus-visible{outline:3px solid #855bc158;outline-offset:2px}
+html[data-theme="dark"] .sidebar-danger-zone{border-color:#64434c;background:linear-gradient(145deg,#34232c,#2d202a)}
+html[data-theme="dark"] .sidebar-danger-zone>strong{color:#f4e2e6}
+html[data-theme="dark"] .sidebar-danger-zone>small{color:#bdaab8}
 html[data-theme="dark"] .sidebar-delete-account{border-color:#744849;background:#3a242b;color:#ffc7c0}
 html[data-theme="dark"] .sidebar-delete-account:hover{border-color:#a86162;background:#492a32}
 html[data-theme="dark"] .delete-account-modal{border-color:#65444f;background:#241b31;color:#f4eaf6}

@@ -20,7 +20,7 @@
   <link rel="stylesheet" href="opening-screen.css?v=school-name-size-20261003">
   <link rel="stylesheet" href="market-ui.css?v=role-workspaces-20261007">
   <link rel="stylesheet" href="brand-refresh.css?v=header-wordmark-footer-cleanup-20261013">
-  <link rel="stylesheet" href="sidebar-preferences.css?v=account-deletion-confirmation-20261014">
+  <link rel="stylesheet" href="sidebar-preferences.css?v=account-deletion-dashboard-20261014">
   <link rel="stylesheet" href="device-responsive.css?v=signup-without-school-pin-20261014">
 </head>
 <body>
@@ -75,11 +75,12 @@
         <button id="theme-toggle" class="sidebar-preference" type="button" role="switch" aria-checked="false" data-action="toggle-theme"><span class="sidebar-preference-icon" aria-hidden="true">◐</span><span class="sidebar-preference-copy"><strong>Dark mode</strong><small id="theme-status">Off</small></span><span class="sidebar-switch" aria-hidden="true"><i></i></span></button>
         <div id="sidebar-notification-setting" class="sidebar-notification-setting" aria-live="polite"></div>
         <div class="sidebar-sound-setting"><div class="sidebar-sound-heading"><span class="sidebar-preference-icon" aria-hidden="true">♫</span><span class="sidebar-preference-copy"><strong>Background music</strong><small id="music-track" aria-live="polite">Off</small></span></div><button id="music-toggle" class="music-toggle" type="button" aria-pressed="false" aria-label="Play soft background music"><span class="music-toggle-icon" aria-hidden="true">♫</span><span id="music-label">Play soft music</span></button><label class="music-volume-label" for="music-volume">Volume</label><input id="music-volume" class="music-volume" type="range" min="0" max="16" value="8" aria-label="Background music volume"></div>
+        <section class="sidebar-danger-zone" aria-labelledby="sidebar-account-actions-title"><strong id="sidebar-account-actions-title">Account actions</strong><small>These actions affect your BiteHub account.</small><button type="button" class="sidebar-delete-account" data-action="show-delete-account">Delete account</button></section>
       </section>
     </div>
     <footer class="sidebar-footer"><button class="sidebar-logout" type="button" data-action="logout"><span aria-hidden="true">↪</span>Sign out</button></footer>
   </aside>
-<script src="app.js?v=account-deletion-confirmation-20261014" defer></script>
+<script src="app.js?v=account-deletion-dashboard-20261014" defer></script>
 </body>
 </html>
 

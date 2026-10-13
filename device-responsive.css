@@ -113,7 +113,7 @@ button,input,select,textarea{max-width:100%}
 @media(max-width:520px){
   html{scroll-padding-top:64px}
   .topbar{min-height:58px;padding:7px 12px}
-  .header-brand-group>.brand .brand-mark{width:34px;height:34px;border-radius:50%}
+  .header-brand-group>.brand .brand-mark{width:42px;height:42px;border-radius:50%}
   .brand-wordmark{width:74px}
   .header-brand-group>.brand small{font-size:6px;letter-spacing:.08em}
   .account-tools{gap:6px}

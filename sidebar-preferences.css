@@ -640,3 +640,31 @@ html[data-theme="dark"] #owner-stall .stall-logo-preview span,html[data-theme="d
   #owner-stall .stall-hours-form label:nth-of-type(3){grid-column:1/2}
   #owner-stall .stall-hours-form .button{grid-column:2/3;white-space:normal}
 }
+/* Account deletion uses a separate, explicit confirmation with password re-entry. */
+.sidebar-delete-account{width:100%;min-height:40px;margin-top:10px;padding:9px 11px;border:1px solid #edc9c7;border-radius:11px;background:#fff4f2;color:#9d3736;text-align:left;font-size:11px;font-weight:850;cursor:pointer}
+.sidebar-delete-account:hover{border-color:#d99794;background:#ffe9e6}
+.delete-account-modal{box-sizing:border-box;width:min(520px,calc(100vw - 32px));max-width:calc(100vw - 32px);padding:0;border:1px solid #ead7d5;border-radius:22px;background:#fffdfa;color:#32253a;box-shadow:0 24px 80px #160d1e42}
+.delete-account-modal::backdrop{background:#21182999;backdrop-filter:blur(5px)}
+.delete-account-modal>.modal-dismiss{position:absolute;top:12px;right:12px;margin:0}
+.delete-account-form{display:grid;gap:14px;padding:clamp(22px,5vw,32px);padding-top:36px}
+.delete-account-form h2{margin:0;color:#352344;font:850 clamp(22px,5vw,28px)/1.12 Manrope,sans-serif;letter-spacing:-.035em}
+.delete-account-form>p{margin:0;color:#716579;font-size:12px;line-height:1.6}
+.delete-account-form>label:not(.delete-account-confirm-check){display:grid;gap:7px;color:#53465f;font-size:11px;font-weight:800}
+.delete-account-form input[type=password]{box-sizing:border-box;width:100%;min-height:46px;padding:11px 12px;border:1px solid #dfd3e7;border-radius:11px;background:#fff;color:#2e2236;font-size:16px}
+.delete-account-form input[type=password]:focus{outline:3px solid #7552b52e;border-color:#7552b5}
+.delete-account-confirm-check{display:flex;align-items:flex-start;gap:9px;padding:11px 12px;border:1px solid #efdcdb;border-radius:12px;background:#fff8f7;color:#65505a;font-size:11px;line-height:1.5}
+.delete-account-confirm-check input{margin:2px 0 0;accent-color:#ae3938}
+.delete-account-actions{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:9px;margin-top:2px}
+.delete-account-actions .button{min-height:44px}
+.button-danger{border-color:#a72f31;background:linear-gradient(135deg,#c94c49,#a82d34);color:#fff;box-shadow:0 7px 18px #a832322b}
+.button-danger:hover:not(:disabled){background:linear-gradient(135deg,#b83d40,#93232d)}
+.sidebar-delete-account:focus-visible,.button-danger:focus-visible,.delete-account-actions .button:focus-visible{outline:3px solid #855bc158;outline-offset:2px}
+html[data-theme="dark"] .sidebar-delete-account{border-color:#744849;background:#3a242b;color:#ffc7c0}
+html[data-theme="dark"] .sidebar-delete-account:hover{border-color:#a86162;background:#492a32}
+html[data-theme="dark"] .delete-account-modal{border-color:#65444f;background:#241b31;color:#f4eaf6}
+html[data-theme="dark"] .delete-account-form h2{color:#fff2f4}
+html[data-theme="dark"] .delete-account-form>p{color:#c9b7c8}
+html[data-theme="dark"] .delete-account-form>label:not(.delete-account-confirm-check){color:#ead9e7}
+html[data-theme="dark"] .delete-account-form input[type=password]{border-color:#604d65;background:#1d1626;color:#f4eaf6}
+html[data-theme="dark"] .delete-account-confirm-check{border-color:#66464f;background:#35222d;color:#efd5db}
+@media(max-width:520px){.delete-account-modal{width:100%;max-width:100%;max-height:92dvh;margin:auto 0 0;border-radius:22px 22px 0 0}.delete-account-actions{display:grid;grid-template-columns:1fr}.delete-account-actions .button{width:100%}}

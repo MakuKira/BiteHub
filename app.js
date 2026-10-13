@@ -247,7 +247,7 @@ function renderSidebar(){
   if(!user||!account||!navigation)return;
   const school=user.school_name||(user.school_id==='psu'?'Palawan State University':user.school_id==='pns'?'Palawan National School':'Your school');
   const initial=esc(user.name.trim().charAt(0).toUpperCase()),profilePhoto=user.profile_photo_url?`<img src="${esc(user.profile_photo_url)}" alt="">`:initial;
-  account.innerHTML=`<div class="sidebar-account-main"><span class="sidebar-avatar">${profilePhoto}</span><span class="sidebar-account-copy"><strong>${esc(user.name)}</strong><small>${esc(roleLabel[user.role])} · ${esc(school)}</small></span><button type="button" class="sidebar-profile-trigger" data-action="toggle-profile" aria-expanded="${state.sidebarProfileOpen}">${state.sidebarProfileOpen?'Close':'Edit profile'}</button></div><section class="sidebar-profile-editor" ${state.sidebarProfileOpen?'':'hidden'} aria-label="Edit your profile"><form class="sidebar-profile-form" data-form="user-profile"><div class="sidebar-profile-photo-row"><span class="sidebar-profile-avatar">${profilePhoto}</span><label class="sidebar-photo-picker"><input name="photo_file" type="file" accept="image/jpeg,image/png,image/webp"><span>Choose photo</span><small>JPG, PNG, WebP · max 2 MB</small></label></div><label class="sidebar-profile-name">Display name<input name="name" autocomplete="name" maxlength="80" required value="${esc(user.name)}"></label>${user.profile_photo_url?'<label class="sidebar-profile-remove"><input name="remove_photo" type="checkbox" value="true"><span>Remove current photo</span></label>':''}<button class="button button-primary button-small" type="submit">Save profile</button></form></section>`;
+  account.innerHTML=`<div class="sidebar-account-main"><span class="sidebar-avatar">${profilePhoto}</span><span class="sidebar-account-copy"><strong>${esc(user.name)}</strong><small>${esc(roleLabel[user.role])} · ${esc(school)}</small></span><button type="button" class="sidebar-profile-trigger" data-action="toggle-profile" aria-expanded="${state.sidebarProfileOpen}">${state.sidebarProfileOpen?'Close':'Edit profile'}</button></div><section class="sidebar-profile-editor" ${state.sidebarProfileOpen?'':'hidden'} aria-label="Edit your profile"><form class="sidebar-profile-form" data-form="user-profile"><div class="sidebar-profile-photo-row"><span class="sidebar-profile-avatar">${profilePhoto}</span><label class="sidebar-photo-picker"><input name="photo_file" type="file" accept="image/jpeg,image/png,image/webp"><span>Choose photo</span><small>JPG, PNG, WebP · max 2 MB</small></label></div><label class="sidebar-profile-name">Display name<input name="name" autocomplete="name" maxlength="80" required value="${esc(user.name)}"></label>${user.profile_photo_url?'<label class="sidebar-profile-remove"><input name="remove_photo" type="checkbox" value="true"><span>Remove current photo</span></label>':''}<button class="button button-primary button-small" type="submit">Save profile</button></form><button type="button" class="sidebar-delete-account" data-action="show-delete-account">Delete account</button></section>`;
   const dashboard={buyer:['buyer','menu','Browse food'],owner:['owner','dashboard','Today'],admin:['admin','overview','Overview']}[user.role];
   const orders={buyer:['buyer','orders','My orders','↗'],owner:['owner','orders','Orders','↗'],admin:['admin','orders','Orders','↗']}[user.role];
   const navButton=([role,view,label,icon],active)=>`<button type="button" class="sidebar-nav-link ${active?'is-active':''}" data-workspace-role="${role}" data-workspace-view="${view}" ${active?'aria-current="page"':''}><span class="sidebar-link-icon" aria-hidden="true">${icon}</span><span>${label}</span></button>`;
@@ -788,6 +788,13 @@ document.addEventListener('click',async e=>{
   const action=e.target.closest('[data-action]');if(!action)return;
   if(action.dataset.action==='open-sidebar'){state.sidebarOpen=true;syncSidebarState();$('.sidebar-close')?.focus({preventScroll:true});return}
   if(action.dataset.action==='close-sidebar'){closeSidebar();$('.sidebar-menu-button')?.focus({preventScroll:true});return}
+  if(action.dataset.action==='show-delete-account'){
+    const dialog=$('#delete-account-dialog'),impact=$('#delete-account-impact');
+    if(!state.user||!dialog)return;
+    if(impact)impact.textContent=state.user.role==='owner'?'Your stall will be paused. Your personal profile details and sign-in will be removed. Past orders will remain with your name hidden.':'Your personal profile details and sign-in will be removed. Past orders will remain with your name hidden.';
+    $('#delete-account-form')?.reset();closeSidebar();dialog.showModal();$('#delete-account-password')?.focus({preventScroll:true});return;
+  }
+  if(action.dataset.action==='cancel-delete-account'){$('#delete-account-dialog').close();return}
   if(action.dataset.action==='toggle-profile'){state.sidebarProfileOpen=!state.sidebarProfileOpen;renderSidebar();return}
   if(action.dataset.action==='toggle-sidebar-settings'){state.sidebarSettingsOpen=!state.sidebarSettingsOpen;renderSidebar();return}
   if(action.dataset.action==='toggle-theme'){
@@ -820,6 +827,8 @@ document.addEventListener('keydown',e=>{
 });
 document.addEventListener('scroll',e=>{if(e.target.matches?.('.featured-rail'))state.featuredScroll=e.target.scrollLeft},{capture:true,passive:true});
 $('#cart-dialog').addEventListener('click',e=>{if(e.target===$('#cart-dialog'))$('#cart-dialog').close()});
+$('#delete-account-dialog').addEventListener('click',e=>{if(e.target===$('#delete-account-dialog'))$('#delete-account-dialog').close()});
+$('#delete-account-dialog').addEventListener('close',()=>$('#delete-account-form').reset());
 $('#cart-dialog').addEventListener('input',e=>{if(e.target.id==='order-note')state.cartNote=e.target.value});
 $('#cart-dialog').addEventListener('change',e=>{
   if(e.target.name==='fulfillment'){
@@ -835,6 +844,12 @@ document.addEventListener('submit',async e=>{
   const form=e.target.closest('[data-form]');if(!form)return;e.preventDefault();const submit=form.querySelector('button[type="submit"],button:not([type])');if(submit)submit.disabled=true;
   try{
     const formData=new FormData(form),values=Object.fromEntries(formData.entries());
+    if(form.dataset.form==='delete-account'){
+      const result=await api('/api/account/delete',{method:'POST',body:json({password:String(values.password||''),confirm:formData.get('confirm')==='yes'})});
+      $('#delete-account-dialog').close();clearTimeout(refreshTimer);
+      if(state.trackingWatch!==null)navigator.geolocation?.clearWatch(state.trackingWatch);
+      state.trackingWatch=null;state.user=null;state.sidebarOpen=false;state.sidebarProfileOpen=false;state.cart.clear();resetEmptyBag();renderAuthWall();toast(result.message||'Your account has been deleted.');return;
+    }
     if(form.dataset.form==='user-profile'){
       const photoFile=formData.get('photo_file'),profile={name:String(values.name||'').trim()};
       if(photoFile instanceof File&&photoFile.size){if(photoFile.size>2*1024*1024||!['image/jpeg','image/png','image/webp'].includes(photoFile.type))throw new Error('Choose a JPG, PNG, or WebP profile photo under 2 MB.');profile.photo_data=await fileAsBase64(photoFile);profile.photo_type=photoFile.type}

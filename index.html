@@ -20,7 +20,7 @@
   <link rel="stylesheet" href="opening-screen.css?v=school-name-size-20261003">
   <link rel="stylesheet" href="market-ui.css?v=role-workspaces-20261007">
   <link rel="stylesheet" href="brand-refresh.css?v=header-wordmark-footer-cleanup-20261013">
-  <link rel="stylesheet" href="sidebar-preferences.css?v=signup-without-school-pin-20261014">
+  <link rel="stylesheet" href="sidebar-preferences.css?v=account-deletion-confirmation-20261014">
   <link rel="stylesheet" href="device-responsive.css?v=signup-without-school-pin-20261014">
 </head>
 <body>
@@ -48,6 +48,17 @@
   <dialog id="product-dialog" class="modal product-modal"><div id="product-content"></div></dialog>
   <dialog id="product-edit-dialog" class="modal auth-modal"><div id="product-edit-content"></div></dialog>
   <dialog id="stall-dialog" class="modal stall-modal"><div id="stall-content"></div></dialog>
+  <dialog id="delete-account-dialog" class="modal delete-account-modal" aria-labelledby="delete-account-title">
+    <form method="dialog" class="modal-dismiss"><button class="icon-button" aria-label="Close delete account confirmation">×</button></form>
+    <form id="delete-account-form" class="delete-account-form" data-form="delete-account">
+      <span class="eyebrow">ACCOUNT REMOVAL</span>
+      <h2 id="delete-account-title">Are you sure you want to delete this account?</h2>
+      <p id="delete-account-impact">Your personal profile details and sign-in will be removed. Past orders will remain with your name hidden.</p>
+      <label>Current password<input id="delete-account-password" name="password" type="password" autocomplete="current-password" required></label>
+      <label class="delete-account-confirm-check"><input name="confirm" type="checkbox" value="yes" required><span>I understand this account cannot be restored.</span></label>
+      <div class="delete-account-actions"><button type="button" class="button button-outline" data-action="cancel-delete-account">Keep my account</button><button type="submit" class="button button-danger">Delete my account</button></div>
+    </form>
+  </dialog>
   <dialog id="auth-dialog" class="modal auth-modal"></dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <button id="sidebar-backdrop" class="sidebar-backdrop" type="button" data-action="close-sidebar" aria-label="Close menu" hidden></button>
@@ -68,7 +79,7 @@
     </div>
     <footer class="sidebar-footer"><button class="sidebar-logout" type="button" data-action="logout"><span aria-hidden="true">↪</span>Sign out</button></footer>
   </aside>
-<script src="app.js?v=signup-without-school-pin-20261014" defer></script>
+<script src="app.js?v=account-deletion-confirmation-20261014" defer></script>
 </body>
 </html>
 

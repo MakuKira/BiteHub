@@ -195,6 +195,7 @@ def initialize():
             ("profile_photo_data", "BLOB"),
             ("profile_photo_type", "TEXT"),
             ("profile_photo_version", "INTEGER NOT NULL DEFAULT 0"),
+            ("deleted_at", "TEXT"),
         ):
             if name not in user_columns:
                 db.execute(f"ALTER TABLE users ADD COLUMN {name} {declaration}")
@@ -655,7 +656,7 @@ class Handler(BaseHTTPRequestHandler):
                     s.pickup_lon stall_pickup_lon,s.logo_type stall_logo_type,
                     u.profile_photo_type,u.profile_photo_version
                     FROM sessions x JOIN users u ON u.id=x.user_id LEFT JOIN stalls s ON s.owner_id=u.id
-                    WHERE x.token_hash=? AND x.expires_at>?""", (token_hash, int(time.time()))).fetchone()
+                    WHERE x.token_hash=? AND x.expires_at>? AND u.deleted_at IS NULL""", (token_hash, int(time.time()))).fetchone()
             if row:
                 user = dict(row)
                 user["stall_logo_url"] = f"/api/stalls/{user['stall_id']}/logo" if user.get("stall_logo_type") else None
@@ -949,7 +950,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/runners":
             self.require_role("owner", "admin")
             with connect() as db:
-                rows = db.execute("SELECT id,name FROM users WHERE role='runner' ORDER BY name").fetchall()
+                rows = db.execute("SELECT id,name FROM users WHERE role='runner' AND deleted_at IS NULL ORDER BY name").fetchall()
             self.send_json(200, {"runners": [dict(row) for row in rows]})
             return
         if path == "/api/admin/reports":
@@ -1014,7 +1015,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/admin/overview":
             self.require_role("admin")
             with connect() as db:
-                users = db.execute("SELECT role,COUNT(*) count FROM users GROUP BY role").fetchall()
+                users = db.execute("SELECT role,COUNT(*) count FROM users WHERE deleted_at IS NULL GROUP BY role").fetchall()
                 stalls = db.execute("SELECT COUNT(*) FROM stalls").fetchone()[0]
                 stall_rows = db.execute("""SELECT s.id,s.name,s.status,s.created_at,u.name owner_name,u.email owner_email,
                     COUNT(p.id) product_count FROM stalls s JOIN users u ON u.id=s.owner_id
@@ -1228,7 +1229,7 @@ class Handler(BaseHTTPRequestHandler):
             account_key = hashlib.sha256(f"{ip}|{email}".encode()).hexdigest()
             self.enforce_rate_limit("login-ip", ip, 120, 60)
             self.enforce_rate_limit("login-account", account_key, 8, 600)
-            with connect() as db: user = db.execute("SELECT id,password_hash,password_salt FROM users WHERE email=?", (email,)).fetchone()
+            with connect() as db: user = db.execute("SELECT id,password_hash,password_salt FROM users WHERE email=? AND deleted_at IS NULL", (email,)).fetchone()
             if not user or not secrets.compare_digest(password_digest(password,bytes.fromhex(user["password_salt"])),user["password_hash"]):
                 raise ApiError(401, "Email or password did not match.")
             self.clear_rate_limit("login-account", account_key)
@@ -1239,6 +1240,48 @@ class Handler(BaseHTTPRequestHandler):
             if token:
                 with connect() as db: db.execute("DELETE FROM sessions WHERE token_hash=?", (hashlib.sha256(token.encode()).hexdigest(),))
             self.send_json(200, {"ok": True}, {"Set-Cookie": "bitehub_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"})
+            return
+        if path == "/api/account/delete":
+            user = self.current_user()
+            password = data.get("password")
+            if not isinstance(password, str) or not password or len(password) > 1024:
+                raise ValueError("Enter your current password to confirm account deletion.")
+            if data.get("confirm") is not True:
+                raise ValueError("Confirm that you understand before deleting your account.")
+            self.enforce_rate_limit("account-delete", user["id"], 8, 600)
+            salt = secrets.token_bytes(16)
+            deleted_email = f"deleted-{user['id']}-{secrets.token_hex(8)}@deleted.invalid"
+            replacement_password = secrets.token_urlsafe(48)
+            with connect() as db:
+                db.execute("BEGIN IMMEDIATE")
+                account = db.execute("SELECT role,password_hash,password_salt FROM users WHERE id=? AND deleted_at IS NULL", (user["id"],)).fetchone()
+                if not account or not secrets.compare_digest(password_digest(password, bytes.fromhex(account["password_salt"])), account["password_hash"]):
+                    raise ApiError(401, "Your password did not match. Your account has not been changed.")
+                self.clear_rate_limit("account-delete", user["id"])
+                if account["role"] == "admin":
+                    active_admins = db.execute("SELECT COUNT(*) FROM users WHERE role='admin' AND deleted_at IS NULL AND id<>?", (user["id"],)).fetchone()[0]
+                    if active_admins == 0:
+                        raise ApiError(409, "This is the only administrator account. Add another administrator before deleting it.")
+                active_orders = db.execute("""SELECT o.id FROM orders o LEFT JOIN stalls s ON s.id=o.stall_id
+                    WHERE o.status NOT IN ('completed','declined')
+                    AND (o.buyer_id=? OR o.runner_id=? OR s.owner_id=?) LIMIT 1""", (user["id"], user["id"], user["id"])).fetchone()
+                if active_orders:
+                    raise ApiError(409, "Complete or resolve your active orders and deliveries before deleting your account.")
+                db.execute("DELETE FROM sessions WHERE user_id=?", (user["id"],))
+                db.execute("DELETE FROM push_subscriptions WHERE user_id=?", (user["id"],))
+                db.execute("DELETE FROM feedback WHERE buyer_id=?", (user["id"],))
+                db.execute("DELETE FROM delivery_positions WHERE order_id IN (SELECT id FROM orders WHERE buyer_id=? OR runner_id=?)", (user["id"], user["id"]))
+                db.execute("UPDATE orders SET runner_id=NULL WHERE runner_id=?", (user["id"],))
+                db.execute("UPDATE orders SET buyer_note='',delivery_lat=NULL,delivery_lon=NULL WHERE buyer_id=?", (user["id"],))
+                db.execute("""UPDATE stalls SET status='paused',description='',pickup_lat=NULL,pickup_lon=NULL,logo_data=NULL,logo_type=NULL
+                    WHERE owner_id=?""", (user["id"],))
+                db.execute("""UPDATE users SET name='Deleted account',email=?,password_hash=?,password_salt=?,
+                    school_id='',school_region='',school_province='',school_city='',school_zip='',
+                    profile_photo_data=NULL,profile_photo_type=NULL,profile_photo_version=profile_photo_version+1,deleted_at=?
+                    WHERE id=?""", (deleted_email, password_digest(replacement_password, salt), salt.hex(), now(), user["id"]))
+            secure = "; Secure" if getattr(self.server, "is_https", False) else ""
+            self.send_json(200, {"ok": True, "message": "Your account has been deleted. Past orders no longer show your profile."},
+                           {"Set-Cookie": f"bitehub_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0{secure}"})
             return
         location_match = re.fullmatch(r"/api/orders/(\d+)/location", path)
         if location_match:
@@ -1526,7 +1569,7 @@ class Handler(BaseHTTPRequestHandler):
                         if order["status"] != "ready" or order["fulfillment"] != "delivery": raise ApiError(409,"Only ready delivery orders can be assigned.")
                         try: runner_id = int(data.get("runner_id"))
                         except (ValueError,TypeError): raise ValueError("Choose a campus runner.")
-                        runner = db.execute("SELECT id FROM users WHERE id=? AND role='runner'", (runner_id,)).fetchone()
+                        runner = db.execute("SELECT id FROM users WHERE id=? AND role='runner' AND deleted_at IS NULL", (runner_id,)).fetchone()
                         if not runner: raise ValueError("Choose a valid campus runner.")
                     elif action in transitions:
                         expected_status,next_status = transitions[action]

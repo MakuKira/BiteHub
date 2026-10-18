@@ -1,6 +1,6 @@
-# BiteHub local prototype
+# BiteHub · Palawan National School
 
-BiteHub now runs as a Python web server with a persistent SQLite database. The browser does not store accounts, menu data, or orders in `localStorage`.
+BiteHub is a food ordering hub for the Palawan National School (PNS) community. Students, teachers, staff, and other PNS community members can register as customers; stall owners register their PNS stall. Python and SQLite store accounts, menus, and orders on the server.
 
 ## Start the server
 
@@ -12,7 +12,7 @@ Open PowerShell in this folder and run:
 
 The launcher uses Python 3 from your system, or the Python runtime bundled with Codex when available. Open [http://127.0.0.1:8000](http://127.0.0.1:8000). Keep the terminal open while using the site; press `Ctrl+C` to stop it.
 
-The database is created as `bitehub.sqlite3` in this folder. It survives server restarts and is excluded from source control. To put the database somewhere else, set the `BITEHUB_DB` environment variable before starting the server.
+The database is created as `bitehub.sqlite3` in this folder. It survives server restarts and is excluded from source control. To put the database somewhere else, set the `BITEHUB_DB` environment variable before starting the server. New signups and the customer facing menu are limited to Palawan National School.
 
 ### Device order notifications
 
@@ -35,12 +35,13 @@ The phone and computer must stay on the same trusted network. Do not allow the s
 
 ## Account types
 
-- **Campus customer:** browse a stall-balanced rotating catalog, see daily featured campus picks, explore one stall at a time, filter dietary labels and allergens, view item details, choose capacity-limited 30-minute pickup windows or campus delivery, receive status alerts and ready-time estimates, and review completed orders.
-- **Stall owner:** create a stall account, set opening hours, typical prep time, per-window pickup limits, and stock counts, feature one available item for 24 hours, upload optional JPG/PNG/WebP menu photos (up to 2 MB each), disclose dietary/allergen information, edit items, accept orders, assign delivery orders to a runner, read customer feedback, and review anonymous stall and product detail views alongside item order counts.
-- **Campus runner:** see assigned runs and update pickup and delivery progress.
-- **Administrator:** pause or resume stalls, review campus activity, and pause or resume ordering.
+- **PNS customer:** browse a stall-balanced rotating catalog, see daily featured PNS picks, explore one stall at a time, filter dietary labels and allergens, view item details, choose pickup or PNS delivery, receive status alerts and ready-time estimates, and review completed orders. Grade and section are optional so teachers, staff, and other PNS community members can also register.
+- **PNS stall owner:** create a stall account for a named stall, set opening hours, typical prep time, pickup limits, and stock counts, feature one available item for 24 hours, upload optional JPG/PNG/WebP menu photos (up to 2 MB each), disclose dietary/allergen information, edit items, accept orders, assign delivery orders by typing a runner’s name, offer pickup when no runner is available, read customer feedback, and review anonymous stall and product detail views alongside item order counts.
+- **PNS administrator:** pause or resume PNS stalls, review PNS activity, and pause or resume ordering.
 
-Customers can open public stall links and browse menus before signing in; a customer account is required to place an order. Stall owners can copy or share a direct link to their public stall page from the stall workspace. View statistics count each browser once per stall or product per day, with request limits to discourage fake submissions; they do not store account identifiers. Admins can open **Data & reports**, filter daily activity to 7, 30, or 90 days or all recorded dates, and download aggregate CSV data without buyer names, emails, or delivery locations. Completed order value includes orders marked completed; payment is not separately verified. Stall and product comparisons are all-time totals. Customers, stall owners, and runners can create accounts from the role chooser. Stall owners can self-register; their stalls appear to customers as soon as signup is complete. Administrators can pause a stall if needed, and paused stalls stay hidden until resumed. Administrator accounts are deliberately not available through public signup. Create one from PowerShell with:
+Delivery assignments do not require a runner account. The stall owner enters the runner’s name, marks the order on the way, and confirms delivery. If no runner is available, the customer can choose pickup at the stall or cancel the order. Existing runner accounts from earlier versions can still finish orders already assigned to them.
+
+PNS customers can open public stall links and browse PNS menus before signing in; a customer account is required to place an order. Stall owners can copy or share a direct link to their public PNS stall page from the stall workspace. View statistics count each browser once per stall or product per day, with request limits to discourage fake submissions; they do not store account identifiers. Admins can open **Data & reports**, filter daily activity to 7, 30, or 90 days or all recorded dates, and download aggregate CSV data without buyer names, emails, or delivery locations. Completed order value includes orders marked completed; payment is not separately verified. Stall and product comparisons are all-time totals. PNS customers and stall owners can create accounts from the role chooser. Stall owners can self-register; their PNS stalls appear to customers as soon as signup is complete. Administrators can pause a stall if needed, and paused stalls stay hidden until resumed. Administrator accounts are deliberately not available through public signup. Create one from PowerShell with:
 
 ```powershell
 .\start.ps1 --create-admin
@@ -50,7 +51,7 @@ The command prompts for an email, name, and password. Admin passwords and all ac
 
 ## Prototype notes
 
-The database schema is created automatically the first time the server starts. New installations start with an empty menu: register an owner account, add menu items, then register customer and runner accounts to work through the order flow. There are no seeded accounts or sample orders.
+The database schema is created automatically the first time the server starts. New installations start with an empty menu: register a PNS stall owner, add menu items, then register PNS customer accounts to work through the order flow. There are no seeded accounts or sample orders.
 
 This is intended for a trusted local prototype. The built-in HTTP server is not an internet-facing production deployment; use a production application server, HTTPS, backups, and an institutional identity provider before exposing real accounts or student data.
 

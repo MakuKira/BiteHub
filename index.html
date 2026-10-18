@@ -3,45 +3,84 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#5531a5">
+  <meta name="theme-color" content="#226C82">
   <link rel="manifest" href="/manifest.webmanifest">
-  <title>BiteHub · food for your school</title>
-  <link rel="icon" type="image/svg+xml" href="bitehub-mark.svg">
+  <link rel="preload" as="image" href="assets/palawan-national-school-campus.png">
+  <title>BiteHub · Palawan National School</title>
+  <link rel="icon" type="image/svg+xml" href="bitehub-mark.svg?v=pns-palette-20261017">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
-  <link rel="stylesheet" href="app-ui.css?v=philippines-all-schools-20261013">
+  <link rel="stylesheet" href="app-ui.css?v=pns-school-only-20261017">
   <link rel="stylesheet" href="experience.css">
   <link rel="stylesheet" href="school-theme.css">
   <link rel="stylesheet" href="feature-ui.css?v=bag-redesign-20261007">
   <link rel="stylesheet" href="stall-profile.css?v=stall-pages-20261003">
-  <link rel="stylesheet" href="opening-screen.css?v=school-name-size-20261003">
   <link rel="stylesheet" href="market-ui.css?v=large-menu-food-20261014">
   <link rel="stylesheet" href="brand-refresh.css?v=larger-header-mark-20261014">
+  <link rel="stylesheet" href="opening-screen.css?v=pns-campus-break-story-v4-20261018">
   <link rel="stylesheet" href="sidebar-preferences.css?v=account-deletion-dashboard-20261014">
   <link rel="stylesheet" href="device-responsive.css?v=larger-header-mark-20261014">
+  <link rel="stylesheet" href="palette-theme.css?v=pns-phone-header-note-v4-20261018">
 </head>
 <body>
-  <div id="opening-splash" class="opening-splash" role="status" aria-label="Opening BiteHub">
+  <div id="opening-splash" class="opening-splash" role="status" aria-label="Getting BiteHub ready for the Palawan National School community">
     <div class="opening-splash-card">
-      <div class="splash-brand-lockup">
-        <div class="splash-food-mark" aria-hidden="true"><img src="assets/bitehub-icon.png" alt=""></div>
-        <div class="splash-word-group"><img class="splash-wordmark" src="assets/bitehub-wordmark.png" alt="BiteHub"><small class="splash-kicker">FOOD FOR YOUR SCHOOL</small><p>Good breaks start here.</p></div>
+      <header class="splash-brand-top">
+        <div class="splash-brand-lockup">
+          <span class="splash-brand-icon" aria-hidden="true"><img src="assets/bitehub-icon.png?v=pns-palette-20261017" alt=""></span>
+          <span class="splash-brand-copy">
+            <img class="splash-brand-wordmark" src="assets/bitehub-wordmark.png?v=pns-palette-20261017" alt="BiteHub">
+            <small>PALAWAN NATIONAL SCHOOL</small>
+          </span>
+        </div>
+        <div class="splash-community-badge">
+          <img src="assets/palawan-national-school-logo.webp" alt="" fetchpriority="high" decoding="sync">
+          <span><small>MADE FOR</small><strong>PNS COMMUNITY</strong></span>
+        </div>
+      </header>
+      <div class="splash-content">
+        <section class="splash-message">
+          <span class="splash-message-kicker"><i aria-hidden="true"></i> YOUR CAMPUS FOOD HUB</span>
+          <h1><span class="splash-title-mask"><span class="splash-title-line">Your break</span></span><span class="splash-title-mask"><span class="splash-title-line is-accent">starts here.</span></span></h1>
+          <p>We’re bringing your PNS stalls and favorites together.</p>
+          <div class="splash-feature-list" aria-hidden="true"><span>STALLS</span><i></i><span>MENUS</span><i></i><span>GOOD BREAKS</span></div>
+        </section>
+        <div class="splash-food-stage" aria-hidden="true">
+          <span class="splash-stage-ring"></span>
+          <span class="splash-stage-shadow"></span>
+          <span class="splash-stage-spark splash-stage-spark-one">✦</span>
+          <span class="splash-stage-spark splash-stage-spark-two">✳</span>
+          <div class="splash-hero-mark"><span class="splash-steam"><i></i><i></i><i></i></span><img src="assets/bitehub-icon.png?v=pns-palette-20261017" alt=""></div>
+          <span class="splash-food-chip splash-food-chip-burger">
+            <svg viewBox="0 0 32 32"><path d="M6 14a10 7 0 0 1 20 0H6Z" fill="#F3BE83" stroke="#174A57" stroke-width="1.5"/><path d="M6 15h20v3H6z" fill="#8ED0A9" stroke="#174A57" stroke-width="1.4"/><path d="M7.5 19h17v2.6a2 2 0 0 1-2 2H9.5a2 2 0 0 1-2-2V19Z" fill="#D98270" stroke="#174A57" stroke-width="1.4"/><path d="M11 10h.1M16 8.8h.1M21 10h.1" stroke="#FFF8E9" stroke-width="2.2" stroke-linecap="round"/></svg>
+          </span>
+          <span class="splash-food-chip splash-food-chip-drink">
+            <svg viewBox="0 0 32 32"><path d="m12 5 5 1-2 6" fill="none" stroke="#174A57" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="m9 12 16 1-2 14H11L9 12Z" fill="#B9E6D8" stroke="#174A57" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 18h14" stroke="#5FAFA3" stroke-width="2"/><path d="M14 16c2-2 4-2 6 0" fill="none" stroke="#D98270" stroke-width="1.7" stroke-linecap="round"/></svg>
+          </span>
+          <span class="splash-food-chip splash-food-chip-fruit">
+            <svg viewBox="0 0 32 32"><path d="M17 11c4-5 8-2 7-1-2 2-4 2-7 2" fill="#72B99A" stroke="#174A57" stroke-width="1.2"/><path d="M16 12c-4-4-10-1-10 6 0 6 4 10 8 10 1 0 2-.7 3-.7s2 1 3 1c4 0 8-4 8-10 0-6-6-10-12-6Z" fill="#F3C86E" stroke="#174A57" stroke-width="1.5"/></svg>
+          </span>
+        </div>
       </div>
-      <div class="splash-loading" aria-hidden="true"><i></i><i></i><i></i></div>
-      <div class="splash-school-lockup"><span aria-hidden="true">✦</span><span>Made for <strong>every school community</strong></span></div>
+      <div class="splash-loading-zone">
+        <div class="splash-loading-copy"><span class="splash-live-dot" aria-hidden="true"><i></i></span><strong>Getting your school-day favorites ready</strong><span class="splash-loading-dots" aria-hidden="true"><i></i><i></i><i></i></span></div>
+        <div class="splash-progress-track" aria-hidden="true"><span></span></div>
+        <div class="splash-loading-footer"><span>PALAWAN NATIONAL SCHOOL</span><span>GOOD FOOD · BETTER BREAKS</span></div>
+      </div>
     </div>
-    <span class="splash-orb splash-orb-one" aria-hidden="true"></span><span class="splash-orb splash-orb-two" aria-hidden="true"></span>
+    <span class="splash-background-star splash-background-star-one" aria-hidden="true">✦</span>
+    <span class="splash-background-star splash-background-star-two" aria-hidden="true">✳</span>
   </div>
   <div id="app" class="app-shell">
     <header class="topbar">
-      <div class="header-brand-group"><a class="brand" href="#home" aria-label="BiteHub home"><img class="brand-mark" src="assets/bitehub-icon.png" alt=""><span class="brand-copy"><img class="brand-wordmark" src="assets/bitehub-wordmark.png" alt="BiteHub"><small>FOOD FOR YOUR SCHOOL</small></span></a></div>
+      <div class="header-brand-group"><a class="brand" href="#home" aria-label="BiteHub home"><img class="brand-mark" src="assets/bitehub-icon.png?v=pns-palette-20261017" alt=""><span class="brand-copy"><img class="brand-wordmark" src="assets/bitehub-wordmark.png?v=pns-palette-20261017" alt="BiteHub"><small>PALAWAN NATIONAL SCHOOL</small></span></a></div>
       <div id="account-tools" class="account-tools" hidden></div>
     </header>
-    <main id="view-content" class="main-content" tabindex="-1"><div class="loading-state"><img class="brand-mark" src="assets/bitehub-icon.png" alt=""><p>Connecting to your campus hub…</p></div></main>
-    <footer class="site-footer"><span>Made for better school breaks.</span></footer>
+    <main id="view-content" class="main-content" tabindex="-1"><div class="loading-state"><img class="brand-mark" src="assets/bitehub-icon.png?v=pns-palette-20261017" alt=""><p>Connecting to the PNS food hub…</p></div></main>
+    <footer class="site-footer"><span>Made for better breaks at Palawan National School.</span></footer>
   </div>
   <dialog id="cart-dialog" class="modal cart-modal" aria-labelledby="cart-title"><form method="dialog" class="modal-dismiss"><button id="cart-close" class="icon-button" aria-label="Close bag">×</button></form><div id="cart-content"></div></dialog>
   <button id="cart-fab" class="cart-fab" type="button" data-action="open-cart" hidden></button>
@@ -64,7 +103,7 @@
   <button id="sidebar-backdrop" class="sidebar-backdrop" type="button" data-action="close-sidebar" aria-label="Close menu" hidden></button>
   <aside id="app-sidebar" class="app-sidebar" role="dialog" aria-modal="true" aria-labelledby="sidebar-title" aria-hidden="true" inert>
     <header class="sidebar-header">
-      <a class="sidebar-brand" href="#home" aria-label="BiteHub home"><img src="assets/bitehub-icon.png" alt=""><span><strong id="sidebar-title">BiteHub</strong><small>YOUR SCHOOL HUB</small></span></a>
+      <a class="sidebar-brand" href="#home" aria-label="BiteHub home"><img src="assets/bitehub-icon.png?v=pns-palette-20261017" alt=""><span><strong id="sidebar-title">BiteHub</strong><small>PALAWAN NATIONAL SCHOOL</small></span></a>
       <button class="sidebar-close" type="button" data-action="close-sidebar" aria-label="Close menu">×</button>
     </header>
     <div id="sidebar-account" class="sidebar-account"></div>
@@ -80,7 +119,7 @@
     </div>
     <footer class="sidebar-footer"><button class="sidebar-logout" type="button" data-action="logout"><span aria-hidden="true">↪</span>Sign out</button></footer>
   </aside>
-<script src="app.js?v=role-login-copy-20261014" defer></script>
+  <script src="app.js?v=pns-phone-header-v2-20261018" defer></script>
 </body>
 </html>
 

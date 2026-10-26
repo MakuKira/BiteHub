@@ -119,6 +119,10 @@
     </div>
     <footer class="sidebar-footer"><button class="sidebar-logout" type="button" data-action="logout"><span aria-hidden="true">↪</span>Sign out</button></footer>
   </aside>
+  <script type="module">
+    import { inject } from './node_modules/@vercel/analytics/dist/index.mjs';
+    inject();
+  </script>
   <script src="app.js?v=pns-phone-header-v2-20261018" defer></script>
 </body>
 </html>

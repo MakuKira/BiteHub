@@ -1,0 +1,23 @@
+{
+  "name": "primary",
+  "version": "1.0.0",
+  "description": "BiteHub is a food ordering hub for the Palawan National School (PNS) community. Students, teachers, staff, and other PNS community members can register as customers; stall owners register their PNS stall. Python and SQLite store accounts, menus, and orders on the server.",
+  "main": "app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MakuKira/BiteHub.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/MakuKira/BiteHub/issues"
+  },
+  "homepage": "https://github.com/MakuKira/BiteHub#readme",
+  "dependencies": {
+    "@vercel/analytics": "^2.0.1"
+  }
+}

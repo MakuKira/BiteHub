@@ -8,3 +8,4 @@ desktop.ini
 assets/bitehub-local-root-ca.crt
 tmp/generate_local_cert.py
 tmp/pdfs/
+node_modules/

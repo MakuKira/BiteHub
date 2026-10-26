@@ -1,0 +1,12 @@
+{
+  "name": "bitehub",
+  "version": "1.0.0",
+  "description": "BiteHub is a food ordering hub for the Palawan National School (PNS) community",
+  "private": true,
+  "scripts": {
+    "start": "python server.py"
+  },
+  "dependencies": {
+    "@vercel/analytics": "^1.4.1"
+  }
+}

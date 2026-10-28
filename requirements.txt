@@ -1,2 +1,3 @@
-# Optional Web Push dependency; other BiteHub features use Python's standard library.
+# Web Push plus optional Supabase PostgreSQL support; SQLite stays in Python's standard library.
 cryptography>=42.0
+psycopg[binary,pool]>=3.2,<4

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""BiteHub local server. Uses Python's standard library, SQLite, and cryptography for Web Push."""
+"""BiteHub server with local SQLite and optional Supabase PostgreSQL support."""
 from __future__ import annotations
 
 import argparse
+import atexit
 import base64
 import binascii
 import hashlib
@@ -30,6 +31,8 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 BASE = Path(__file__).resolve().parent
 DB_PATH = Path(os.environ.get("BITEHUB_DB", BASE / "bitehub.sqlite3"))
+DATABASE_URL = os.environ.get("BITEHUB_DATABASE_URL", "").strip()
+REQUIRE_POSTGRES = os.environ.get("BITEHUB_REQUIRE_POSTGRES", "").strip().lower() in {"1", "true", "yes"}
 SESSION_SECONDS = 60 * 60 * 24 * 14
 PBKDF2_ROUNDS = 310_000
 ROLES = {"buyer", "owner", "runner", "admin"}
@@ -52,9 +55,192 @@ REACH_COOKIE_SECONDS = 60 * 60 * 24 * 365
 _rate_limit_lock = threading.Lock()
 _rate_limit_events = {}
 _rate_limit_calls = 0
+_postgres_pool = None
+_postgres_pool_lock = threading.Lock()
+try:
+    import psycopg as _psycopg
+except ImportError:
+    _psycopg = None
+
+
+class _PostgresRow:
+    """Small row adapter that keeps SQLite's name and numeric indexing behavior."""
+
+    def __init__(self, columns, values):
+        self._columns = tuple(columns)
+        self._values = tuple(_legacy_db_value(value) for value in values)
+        self._mapping = dict(zip(self._columns, self._values))
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self._values[key]
+        return self._mapping[key]
+
+    def __iter__(self):
+        return iter(self._values)
+
+    def __len__(self):
+        return len(self._values)
+
+    def keys(self):
+        return self._mapping.keys()
+
+    def get(self, key, default=None):
+        return self._mapping.get(key, default)
+
+
+def _legacy_db_value(value):
+    if isinstance(value, datetime):
+        return value.isoformat(timespec="seconds")
+    if isinstance(value, date):
+        return value.isoformat()
+    return value
+
+
+def _postgres_parameter(value):
+    if isinstance(value, str) and re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})",
+        value,
+    ):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return value
+    return value
+
+
+def _postgres_sql(sql):
+    sql = re.sub(
+        r"\bdate\(\s*o\.created_at\s*,\s*'\+8 hours'\s*\)",
+        "(o.created_at AT TIME ZONE 'Asia/Manila')::date",
+        sql,
+        flags=re.IGNORECASE,
+    )
+    sql = re.sub(
+        r"\b([A-Za-z_][A-Za-z0-9_]*\.)?available\s*=\s*1\b",
+        lambda match: f"{match.group(1) or ''}available = TRUE",
+        sql,
+        flags=re.IGNORECASE,
+    )
+    sql = re.sub(
+        r"\bproduct_id\s+IS\s+\?",
+        "product_id IS NOT DISTINCT FROM %s",
+        sql,
+        flags=re.IGNORECASE,
+    )
+    sql = re.sub(r"\bBEGIN\s+IMMEDIATE\b", "BEGIN", sql, flags=re.IGNORECASE)
+    sql = sql.replace("?", "%s")
+    sql = re.sub(
+        r"\bMIN\(\s*1000000\s*,\s*stock_count\s*\+\s*%s\s*\)",
+        "LEAST(1000000, stock_count + %s)",
+        sql,
+        flags=re.IGNORECASE,
+    )
+    return sql
+
+
+class _PostgresCursor:
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    @property
+    def rowcount(self):
+        return self._cursor.rowcount
+
+    def _row(self, values):
+        if values is None:
+            return None
+        columns = [column.name for column in self._cursor.description]
+        return _PostgresRow(columns, values)
+
+    def fetchone(self):
+        return self._row(self._cursor.fetchone())
+
+    def fetchall(self):
+        return [self._row(values) for values in self._cursor.fetchall()]
+
+    def __iter__(self):
+        for values in self._cursor:
+            yield self._row(values)
+
+
+class _PostgresConnection:
+    def __init__(self, pool):
+        self._pool = pool
+        self._context = None
+        self._connection = None
+
+    def __enter__(self):
+        self._context = self._pool.connection()
+        self._connection = self._context.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return self._context.__exit__(exc_type, exc_value, traceback)
+
+    def execute(self, sql, params=()):
+        sql = _postgres_sql(sql)
+        values = tuple(_postgres_parameter(value) for value in params) if params else None
+        try:
+            cursor = self._connection.execute(sql, values)
+        except Exception as error:
+            if _psycopg is not None and isinstance(error, _psycopg.IntegrityError):
+                self._connection.rollback()
+                raise sqlite3.IntegrityError(str(error)) from error
+            raise
+        return _PostgresCursor(cursor)
+
+
+def _get_postgres_pool():
+    global _postgres_pool, _psycopg
+    if _postgres_pool is not None:
+        return _postgres_pool
+    with _postgres_pool_lock:
+        if _postgres_pool is not None:
+            return _postgres_pool
+        try:
+            import psycopg as driver
+            from psycopg_pool import ConnectionPool
+        except ImportError as error:
+            raise RuntimeError(
+                "BITEHUB_DATABASE_URL is set, but PostgreSQL support is missing. "
+                "Install the dependencies in requirements.txt."
+            ) from error
+        _psycopg = driver
+        pool_size = max(1, min(12, int(os.environ.get("BITEHUB_DB_POOL_SIZE", "5"))))
+        pool = ConnectionPool(
+            conninfo=DATABASE_URL,
+            min_size=1,
+            max_size=pool_size,
+            timeout=10,
+            open=True,
+            kwargs={
+                "autocommit": False,
+                "connect_timeout": 10,
+                "sslmode": "require",
+                "options": "-c search_path=bitehub_app,public",
+            },
+        )
+        try:
+            pool.wait(timeout=10)
+        except Exception:
+            pool.close()
+            raise
+        _postgres_pool = pool
+        atexit.register(pool.close)
+        return _postgres_pool
+
+
+def insert_id(db, sql, params):
+    if DATABASE_URL:
+        row = db.execute(sql + " RETURNING id", params).fetchone()
+        return row[0] if row else None
+    return db.execute(sql, params).lastrowid
 
 
 def connect():
+    if DATABASE_URL:
+        return _PostgresConnection(_get_postgres_pool())
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(DB_PATH, timeout=10)
     db.row_factory = sqlite3.Row
@@ -63,7 +249,48 @@ def connect():
     return db
 
 
+def initialize_postgres():
+    required_tables = (
+        "schools", "users", "sessions", "stalls", "products", "reach_views",
+        "settings", "orders", "order_items", "feedback", "delivery_positions",
+        "push_subscriptions", "school_requests",
+    )
+    placeholders = ",".join("?" for _ in required_tables)
+    with connect() as db:
+        table_count = db.execute(
+            f"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=? AND table_name IN ({placeholders})",
+            ("bitehub_app", *required_tables),
+        ).fetchone()[0]
+        if table_count != len(required_tables):
+            raise RuntimeError(
+                "Supabase is missing BiteHub's database tables. Apply "
+                "supabase/migrations/202610270001_initial_bitehub_schema.sql first."
+            )
+        db.execute(
+            "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING",
+            ("reach_signing_secret", secrets.token_hex(32)),
+        )
+        db.execute("DELETE FROM sessions WHERE expires_at <= ?", (int(time.time()),))
+        db.execute(
+            "DELETE FROM delivery_positions WHERE order_id IN "
+            "(SELECT id FROM orders WHERE status!='out' OR fulfillment!='delivery')"
+        )
+        db.execute(
+            "UPDATE orders SET runner_tracking_token_hash=NULL,runner_tracking_expires_at=NULL "
+            "WHERE status!='out' OR fulfillment!='delivery'"
+        )
+        db.execute("UPDATE orders SET delivery_lat=NULL,delivery_lon=NULL WHERE status='completed'")
+
+
 def initialize():
+    if REQUIRE_POSTGRES and not DATABASE_URL:
+        raise RuntimeError(
+            "This deployment requires Supabase PostgreSQL. Set the private "
+            "BITEHUB_DATABASE_URL environment variable before starting BiteHub."
+        )
+    if DATABASE_URL:
+        initialize_postgres()
+        return
     with connect() as db:
         db.executescript("""
         CREATE TABLE IF NOT EXISTS users (
@@ -117,13 +344,19 @@ def initialize():
         );
         INSERT OR IGNORE INTO settings(key,value) VALUES('ordering_paused','false');
         CREATE TABLE IF NOT EXISTS orders (
-          id INTEGER PRIMARY KEY, buyer_id INTEGER NOT NULL REFERENCES users(id),
+          id INTEGER PRIMARY KEY, buyer_id INTEGER REFERENCES users(id),
           stall_id INTEGER NOT NULL REFERENCES stalls(id), runner_id INTEGER REFERENCES users(id),
           fulfillment TEXT NOT NULL CHECK(fulfillment IN ('pickup','delivery')),
           status TEXT NOT NULL CHECK(status IN ('placed','confirmed','preparing','ready','out','completed','declined')),
           total_cents INTEGER NOT NULL, buyer_note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL, estimated_ready_at TEXT, pickup_at TEXT,
-          delivery_lat REAL, delivery_lon REAL
+          delivery_lat REAL, delivery_lon REAL, runner_name TEXT NOT NULL DEFAULT '',
+          runner_tracking_token_hash TEXT, runner_tracking_expires_at TEXT,
+          pickup_offer_status TEXT NOT NULL DEFAULT 'none' CHECK(pickup_offer_status IN ('none','pending','accepted','declined')),
+          guest_name TEXT NOT NULL DEFAULT '', guest_school_role TEXT NOT NULL DEFAULT '',
+          guest_grade TEXT NOT NULL DEFAULT '', guest_section TEXT NOT NULL DEFAULT '',
+          guest_access_token_hash TEXT NOT NULL DEFAULT '',
+          guest_pickup_code TEXT NOT NULL DEFAULT ''
         );
         CREATE TABLE IF NOT EXISTS order_items (
           id INTEGER PRIMARY KEY, order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
@@ -222,6 +455,64 @@ def initialize():
         for name in ("delivery_lat", "delivery_lon"):
             if name not in order_columns:
                 db.execute(f"ALTER TABLE orders ADD COLUMN {name} REAL")
+        order_info = {row["name"]: row for row in db.execute("PRAGMA table_info(orders)")}
+        for name, declaration in (
+            ("guest_name", "TEXT NOT NULL DEFAULT ''"),
+            ("guest_school_role", "TEXT NOT NULL DEFAULT ''"),
+            ("guest_grade", "TEXT NOT NULL DEFAULT ''"),
+            ("guest_section", "TEXT NOT NULL DEFAULT ''"),
+            ("guest_access_token_hash", "TEXT NOT NULL DEFAULT ''"),
+            ("guest_pickup_code", "TEXT NOT NULL DEFAULT ''"),
+        ):
+            if name not in order_info:
+                db.execute(f"ALTER TABLE orders ADD COLUMN {name} {declaration}")
+        db.execute("CREATE UNIQUE INDEX IF NOT EXISTS orders_guest_pickup_code_idx ON orders(guest_pickup_code) WHERE guest_pickup_code != ''")
+        if order_info["buyer_id"]["notnull"]:
+            # Guest orders have no user row. Rebuild the legacy orders table so
+            # buyer_id can be NULL while every existing order and child row stays.
+            db.commit()
+            db.execute("PRAGMA foreign_keys = OFF")
+            try:
+                db.executescript("""
+                BEGIN IMMEDIATE;
+                CREATE TABLE orders_guest_migration (
+                  id INTEGER PRIMARY KEY, buyer_id INTEGER REFERENCES users(id),
+                  stall_id INTEGER NOT NULL REFERENCES stalls(id), runner_id INTEGER REFERENCES users(id),
+                  fulfillment TEXT NOT NULL CHECK(fulfillment IN ('pickup','delivery')),
+                  status TEXT NOT NULL CHECK(status IN ('placed','confirmed','preparing','ready','out','completed','declined')),
+                  total_cents INTEGER NOT NULL, buyer_note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL, estimated_ready_at TEXT, pickup_at TEXT,
+                  delivery_lat REAL, delivery_lon REAL, runner_name TEXT NOT NULL DEFAULT '',
+                  runner_tracking_token_hash TEXT, runner_tracking_expires_at TEXT,
+                  pickup_offer_status TEXT NOT NULL DEFAULT 'none' CHECK(pickup_offer_status IN ('none','pending','accepted','declined')),
+                  guest_name TEXT NOT NULL DEFAULT '', guest_school_role TEXT NOT NULL DEFAULT '',
+                  guest_grade TEXT NOT NULL DEFAULT '', guest_section TEXT NOT NULL DEFAULT '',
+                  guest_access_token_hash TEXT NOT NULL DEFAULT '',
+                  guest_pickup_code TEXT NOT NULL DEFAULT ''
+                );
+                INSERT INTO orders_guest_migration(
+                  id,buyer_id,stall_id,runner_id,fulfillment,status,total_cents,buyer_note,created_at,
+                  updated_at,estimated_ready_at,pickup_at,delivery_lat,delivery_lon,runner_name,
+                  runner_tracking_token_hash,runner_tracking_expires_at,pickup_offer_status,
+                  guest_name,guest_school_role,guest_grade,guest_section,guest_access_token_hash,guest_pickup_code
+                ) SELECT id,buyer_id,stall_id,runner_id,fulfillment,status,total_cents,buyer_note,created_at,
+                  updated_at,estimated_ready_at,pickup_at,delivery_lat,delivery_lon,runner_name,
+                  runner_tracking_token_hash,runner_tracking_expires_at,pickup_offer_status,
+                  guest_name,guest_school_role,guest_grade,guest_section,guest_access_token_hash,guest_pickup_code FROM orders;
+                DROP TABLE orders;
+                ALTER TABLE orders_guest_migration RENAME TO orders;
+                CREATE INDEX orders_buyer_idx ON orders(buyer_id, id DESC);
+                CREATE INDEX orders_stall_idx ON orders(stall_id, id DESC);
+                CREATE INDEX orders_runner_idx ON orders(runner_id, id DESC);
+                CREATE UNIQUE INDEX orders_guest_pickup_code_idx
+                  ON orders(guest_pickup_code) WHERE guest_pickup_code != '';
+                COMMIT;
+                """)
+            except Exception:
+                db.rollback()
+                raise
+            finally:
+                db.execute("PRAGMA foreign_keys = ON")
         product_columns = {row["name"] for row in db.execute("PRAGMA table_info(products)")}
         for name, declaration in (
             ("stock_count", "INTEGER CHECK(stock_count IS NULL OR stock_count >= 0)"),
@@ -759,7 +1050,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/stalls":
             with connect() as db:
                 rows = db.execute("""SELECT s.id,s.name,s.description,s.status,s.opens_at,s.closes_at,s.logo_type,
-                    COUNT(CASE WHEN p.available=1 THEN 1 END) menu_count FROM stalls s
+        COUNT(CASE WHEN p.available=1 THEN 1 END) menu_count FROM stalls s
                     JOIN users u ON u.id=s.owner_id LEFT JOIN products p ON p.stall_id=s.id
                     WHERE s.status='approved' AND u.school_id='pns'
                     GROUP BY s.id ORDER BY s.name""").fetchall()
@@ -935,10 +1226,10 @@ class Handler(BaseHTTPRequestHandler):
                 elif user["role"] == "owner": sql, args = "s.owner_id=?", [user["id"]]
                 elif user["role"] == "runner": sql, args = "o.runner_id=?", [user["id"]]
                 else: sql, args = "owner.school_id='pns'", []
-                orders = db.execute(f"""SELECT o.*,u.name buyer_name,u.email buyer_email,s.name stall_name,r.name account_runner_name,
+                orders = db.execute(f"""SELECT o.*,COALESCE(NULLIF(o.guest_name,''),u.name,'Guest') buyer_name,COALESCE(u.email,'') buyer_email,s.name stall_name,r.name account_runner_name,
                     s.pickup_lat stall_latitude,s.pickup_lon stall_longitude,dp.latitude driver_latitude,
                     dp.longitude driver_longitude,dp.accuracy driver_accuracy,dp.heading driver_heading,dp.updated_at driver_updated_at
-                    FROM orders o JOIN users u ON u.id=o.buyer_id JOIN stalls s ON s.id=o.stall_id
+                    FROM orders o LEFT JOIN users u ON u.id=o.buyer_id JOIN stalls s ON s.id=o.stall_id
                     JOIN users owner ON owner.id=s.owner_id
                     LEFT JOIN users r ON r.id=o.runner_id LEFT JOIN delivery_positions dp ON dp.order_id=o.id
                     WHERE {sql} ORDER BY o.id DESC""",args).fetchall()
@@ -1082,6 +1373,9 @@ class Handler(BaseHTTPRequestHandler):
             feedback_by_order.update({row["order_id"]:{"rating":row["rating"],"comment":row["comment"],
                 "created_at":row["created_at"]} for row in feedback})
         return [{"id":row["id"],"buyer":row["buyer_name"],"buyer_email":row["buyer_email"],
+            "is_guest":row["buyer_id"] is None,"pickup_code":row["guest_pickup_code"],
+            "guest_school_role":row["guest_school_role"],"guest_grade":row["guest_grade"],
+            "guest_section":row["guest_section"],
             "stall":row["stall_name"],"runner":row["runner_name"] or row["account_runner_name"],
             "runner_account":row["runner_id"] is not None,"fulfillment":row["fulfillment"],
             "pickup_offer_status":row["pickup_offer_status"],
@@ -1119,10 +1413,10 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("Invalid GPS heading.")
             with connect() as db:
                 order = db.execute("""SELECT o.status,o.fulfillment,o.runner_name,o.runner_id,
-                    o.runner_tracking_token_hash,o.runner_tracking_expires_at,u.school_id,
+                    o.runner_tracking_token_hash,o.runner_tracking_expires_at,COALESCE(u.school_id,'pns') school_id,
                     sc.name school_name,sc.latitude school_latitude,sc.longitude school_longitude,
                     sc.delivery_radius_m FROM orders o JOIN stalls s ON s.id=o.stall_id
-                    JOIN users u ON u.id=o.buyer_id JOIN schools sc ON sc.id=u.school_id WHERE o.id=?""",
+                    LEFT JOIN users u ON u.id=o.buyer_id JOIN schools sc ON sc.id=COALESCE(u.school_id,'pns') WHERE o.id=?""",
                     (order_id,)).fetchone()
                 if not order or not order["runner_tracking_token_hash"] or not hmac.compare_digest(order["runner_tracking_token_hash"], token_hash):
                     self.enforce_rate_limit("runner-location-invalid", self.client_ip(), 120, 900)
@@ -1235,8 +1529,9 @@ class Handler(BaseHTTPRequestHandler):
             if len(password) < 10: raise ValueError("Use a password with at least 10 characters.")
             if len(password) > 1024: raise ValueError("Password must be 1,024 characters or fewer.")
             role = data.get("role")
-            if role not in ("buyer", "owner"): raise ApiError(400, "Choose a supported account type.")
-            grade_section = clean_text(data.get("grade_section", ""), "Grade and section", 80, required=False) if role == "buyer" else ""
+            if role == "buyer": raise ApiError(400,"Customer accounts are no longer needed. Continue as a guest to order.")
+            if role != "owner": raise ApiError(400, "Choose a supported account type.")
+            grade_section = ""
             school = PILOT_SCHOOLS["pns"]
             school_region, school_province, school_city = school["region"], school["province"], school["city"]
             school_zip = "5300"
@@ -1244,9 +1539,8 @@ class Handler(BaseHTTPRequestHandler):
             salt = secrets.token_bytes(16)
             with connect() as db:
                 school_id = "pns"
-                cur = db.execute("INSERT INTO users(name,email,password_hash,password_salt,role,school_id,school_region,school_province,school_city,school_zip,grade_section,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                                 (name,email,password_digest(password,salt),salt.hex(),role,school_id,school_region,school_province,school_city,school_zip,grade_section,now()))
-                user_id = cur.lastrowid
+                user_id = insert_id(db, "INSERT INTO users(name,email,password_hash,password_salt,role,school_id,school_region,school_province,school_city,school_zip,grade_section,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                                    (name,email,password_digest(password,salt),salt.hex(),role,school_id,school_region,school_province,school_city,school_zip,grade_section,now()))
                 if role == "owner": db.execute("INSERT INTO stalls(owner_id,name,status,created_at) VALUES(?,?,'approved',?)", (user_id,stall_name,now()))
             self.send_json(201, {"user": self.current_user_from_id(user_id)}, self.create_session(user_id))
             return
@@ -1311,7 +1605,7 @@ class Handler(BaseHTTPRequestHandler):
                 db.execute("""UPDATE stalls SET status='paused',description='',pickup_lat=NULL,pickup_lon=NULL,logo_data=NULL,logo_type=NULL
                     WHERE owner_id=?""", (user["id"],))
                 db.execute("""UPDATE users SET name='Deleted account',email=?,password_hash=?,password_salt=?,
-                    school_id='',school_region='',school_province='',school_city='',school_zip='',
+                    school_id='pns',school_region='',school_province='',school_city='',school_zip='',
                     profile_photo_data=NULL,profile_photo_type=NULL,profile_photo_version=profile_photo_version+1,deleted_at=?
                     WHERE id=?""", (deleted_email, password_digest(replacement_password, salt), salt.hex(), now(), user["id"]))
             secure = "; Secure" if getattr(self.server, "is_https", False) else ""
@@ -1363,21 +1657,69 @@ class Handler(BaseHTTPRequestHandler):
             if "photo_data" in data or "photo_type" in data:
                 photo_data, photo_type = parse_product_photo(data.get("photo_data"), data.get("photo_type"))
             with connect() as db:
-                cur = db.execute("""INSERT INTO products(stall_id,name,description,ingredients,category,price_cents,emoji,stock_count,
+                product_id = insert_id(db, """INSERT INTO products(stall_id,name,description,ingredients,category,price_cents,emoji,stock_count,
                     dietary_tags,allergen_tags,photo_data,photo_type,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (owner["stall_id"],name,desc,ingredients,category,price,emoji,stock_count,json.dumps(dietary_tags),json.dumps(allergen_tags),photo_data,photo_type,now()))
                 row = db.execute("""SELECT p.*,s.id stall_id,s.name stall_name,s.status stall_status,s.opens_at,s.closes_at,
                     s.pickup_lat,s.pickup_lon
-                    FROM products p JOIN stalls s ON s.id=p.stall_id WHERE p.id=?""", (cur.lastrowid,)).fetchone()
+                    FROM products p JOIN stalls s ON s.id=p.stall_id WHERE p.id=?""", (product_id,)).fetchone()
             self.send_json(201, {"product": self.product_json(row)})
             return
-        if path == "/api/orders":
-            buyer = self.require_role("buyer")
+        guest_order_match = re.fullmatch(r"/api/guest/orders/(\d+)", path)
+        if guest_order_match:
+            token = data.get("token")
+            if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9_-]{40,100}", token):
+                self.enforce_rate_limit("guest-order-invalid", self.client_ip(), 120, 900)
+                raise ApiError(404, "Guest order not found.")
+            token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+            order_id = int(guest_order_match.group(1))
+            with connect() as db:
+                row = db.execute("""SELECT o.*,COALESCE(NULLIF(o.guest_name,''),u.name,'Guest') buyer_name,COALESCE(u.email,'') buyer_email,
+                    s.name stall_name,r.name account_runner_name,s.pickup_lat stall_latitude,s.pickup_lon stall_longitude,
+                    dp.latitude driver_latitude,dp.longitude driver_longitude,dp.accuracy driver_accuracy,
+                    dp.heading driver_heading,dp.updated_at driver_updated_at
+                    FROM orders o LEFT JOIN users u ON u.id=o.buyer_id JOIN stalls s ON s.id=o.stall_id
+                    JOIN users owner ON owner.id=s.owner_id LEFT JOIN users r ON r.id=o.runner_id
+                    LEFT JOIN delivery_positions dp ON dp.order_id=o.id
+                    WHERE o.id=? AND o.buyer_id IS NULL AND o.guest_access_token_hash=?""",
+                    (order_id,token_hash)).fetchone()
+                if not row:
+                    self.enforce_rate_limit("guest-order-invalid", self.client_ip(), 120, 900)
+                    raise ApiError(404, "Guest order not found.")
+                result = self.orders_json(db,[row])[0]
+            self.send_json(200,{"order":result})
+            return
+        if path in ("/api/orders", "/api/guest/orders"):
+            guest_order = path == "/api/guest/orders"
+            if guest_order and self.current_user(required=False):
+                raise ApiError(403,"Sign out before placing a guest order.")
+            buyer = None if guest_order else self.require_role("buyer")
+            guest_name = clean_text(data.get("guest_name"),"Name for this order",80) if guest_order else ""
+            guest_school_role = guest_grade = guest_section = ""
+            guest_token = secrets.token_urlsafe(32) if guest_order else ""
+            guest_token_hash = hashlib.sha256(guest_token.encode("utf-8")).hexdigest() if guest_token else ""
             if data.get("fulfillment") not in ("pickup", "delivery"): raise ValueError("Choose pickup or campus delivery.")
             delivery_lat = delivery_lon = None
             if data["fulfillment"] == "delivery":
+                if guest_order:
+                    guest_school_role = clean_text(data.get("guest_school_role"), "School role", 32)
+                    allowed_guest_roles = {"junior_student", "senior_student", "teacher", "staff"}
+                    if guest_school_role not in allowed_guest_roles:
+                        raise ValueError("Choose your school role for delivery.")
+                    guest_section = clean_text(data.get("guest_section"), "Section or office", 80)
+                    if guest_school_role in ("junior_student", "senior_student"):
+                        guest_grade = clean_text(data.get("guest_grade"), "Grade", 2)
+                        allowed_grades = {"7", "8", "9", "10"} if guest_school_role == "junior_student" else {"11", "12"}
+                        if guest_grade not in allowed_grades:
+                            raise ValueError("Choose a grade that matches your school role.")
                 point = data.get("delivery_location") or {}
-                delivery_lat, delivery_lon = campus_point(point.get("latitude"), point.get("longitude"), "Delivery location", buyer)
+                if buyer:
+                    location_school = buyer
+                else:
+                    school = PILOT_SCHOOLS["pns"]
+                    location_school = {"school_id":"pns","school_latitude":school["latitude"],
+                        "school_longitude":school["longitude"],"delivery_radius_m":school["radius"]}
+                delivery_lat, delivery_lon = campus_point(point.get("latitude"), point.get("longitude"), "Delivery location", location_school)
             pickup_at=None
             if data["fulfillment"]=="pickup" and data.get("pickup_at"):
                 try:
@@ -1423,16 +1765,31 @@ class Handler(BaseHTTPRequestHandler):
                         if not changed.rowcount:
                             raise ApiError(409,f"Stock for {product['name']} just changed. Refresh the menu and try again.")
                 total = sum(row["price_cents"]*quantities[row["id"]] for row in products)
-                cur = db.execute("""INSERT INTO orders(buyer_id,stall_id,fulfillment,status,total_cents,buyer_note,
-                    created_at,updated_at,pickup_at,delivery_lat,delivery_lon) VALUES(?,?,?,'placed',?,?,?,?,?,?,?)""",
-                    (buyer["id"],products[0]["stall_id"],data["fulfillment"],total,note,now(),now(),pickup_at,delivery_lat,delivery_lon))
-                order_id = cur.lastrowid
+                pickup_code = ""
+                if guest_order:
+                    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+                    for _ in range(10):
+                        pickup_code = "".join(secrets.choice(alphabet) for _ in range(8))
+                        if not db.execute("SELECT 1 FROM orders WHERE guest_pickup_code=?",(pickup_code,)).fetchone():
+                            break
+                    else:
+                        raise ApiError(503,"Could not create a unique pickup code. Please try again.")
+                order_id = insert_id(db, """INSERT INTO orders(buyer_id,guest_name,guest_school_role,guest_grade,guest_section,
+                    guest_access_token_hash,guest_pickup_code,stall_id,fulfillment,status,total_cents,buyer_note,
+                    created_at,updated_at,pickup_at,delivery_lat,delivery_lon)
+                    VALUES(?,?,?,?,?,?,?,?,?,'placed',?,?,?,?,?,?,?)""",
+                    (buyer["id"] if buyer else None,guest_name,guest_school_role,guest_grade,guest_section,
+                     guest_token_hash,pickup_code,products[0]["stall_id"],data["fulfillment"],total,note,
+                     now(),now(),pickup_at,delivery_lat,delivery_lon))
                 stall_owner_id = db.execute("SELECT owner_id FROM stalls WHERE id=?", (products[0]["stall_id"],)).fetchone()[0]
                 for product in products:
                     db.execute("INSERT INTO order_items(order_id,product_id,name,price_cents,quantity,emoji) VALUES(?,?,?,?,?,?)",
                                (order_id,product["id"],product["name"],product["price_cents"],quantities[product["id"]],product["emoji"]))
             dispatch_push([stall_owner_id], {"title": "New BiteHub order", "body": f"New order #{order_id} is waiting at your stall.", "url": "/#owner-orders", "tag": f"bitehub-order-{order_id}"})
-            self.send_json(201, {"order_id": order_id})
+            result = {"order_id":order_id}
+            if guest_order:
+                result.update({"guest_token":guest_token,"pickup_code":pickup_code})
+            self.send_json(201,result)
             return
         feedback_match = re.fullmatch(r"/api/orders/(\d+)/feedback", path)
         if feedback_match:
@@ -1562,8 +1919,8 @@ class Handler(BaseHTTPRequestHandler):
                 if set(data) == {"available"}:
                     available = data["available"]
                     if not isinstance(available,bool): raise ValueError("Availability must be true or false.")
-                    db.execute("UPDATE products SET available=?,featured_until=CASE WHEN ?=0 THEN NULL ELSE featured_until END WHERE id=?",
-                        (int(available),int(available),product_id))
+                    db.execute("UPDATE products SET available=?,featured_until=CASE WHEN ?=FALSE THEN NULL ELSE featured_until END WHERE id=?",
+                        (available,available,product_id))
                     self.send_json(200, {"ok":True}); return
                 name = clean_text(data.get("name",row["name"]), "Item name", 80)
                 desc = clean_text(data.get("description",row["description"]), "Description", 240, required=False)
@@ -1593,15 +1950,24 @@ class Handler(BaseHTTPRequestHandler):
         order_match = re.fullmatch(r"/api/orders/(\d+)", path)
         if order_match:
             order_id, action = int(order_match.group(1)), data.get("action")
-            user = self.current_user()
+            user = self.current_user(required=False)
             with connect() as db:
                 db.execute("BEGIN IMMEDIATE")
                 order = db.execute("SELECT o.*,s.owner_id,s.prep_minutes FROM orders o JOIN stalls s ON s.id=o.stall_id WHERE o.id=?", (order_id,)).fetchone()
                 if not order: raise ApiError(404, "Order not found.")
+                guest_access = False
+                if user is None:
+                    guest_token = data.get("guest_token")
+                    if isinstance(guest_token,str) and re.fullmatch(r"[A-Za-z0-9_-]{40,100}",guest_token):
+                        supplied_hash = hashlib.sha256(guest_token.encode("utf-8")).hexdigest()
+                        stored_hash = order["guest_access_token_hash"] or ""
+                        guest_access = order["buyer_id"] is None and bool(stored_hash) and hmac.compare_digest(stored_hash,supplied_hash)
+                    if not guest_access:
+                        raise ApiError(404,"Guest order not found.")
                 next_status, expected_status = None, None
                 runner_name = order["runner_name"]
                 special_action = None
-                if user["role"] == "owner" and order["owner_id"] == user["id"]:
+                if user and user["role"] == "owner" and order["owner_id"] == user["id"]:
                     transitions = {"confirm":("placed","confirmed"),"decline":("placed","declined"),"prepare":("confirmed","preparing"),"ready":("preparing","ready")}
                     if action == "assign":
                         if order["status"] != "ready" or order["fulfillment"] != "delivery": raise ApiError(409,"Only ready delivery orders can be assigned.")
@@ -1624,12 +1990,12 @@ class Handler(BaseHTTPRequestHandler):
                         expected_status,next_status = transitions[action]
                         if order["status"] != expected_status: raise ApiError(409,"That order has already changed. Refresh and try again.")
                     else: raise ApiError(400,"That order action is not supported.")
-                elif user["role"] == "runner" and order["runner_id"] == user["id"]:
+                elif user and user["role"] == "runner" and order["runner_id"] == user["id"]:
                     transitions = {"out":("ready","out"),"delivered":("out","completed")}
                     if action not in transitions: raise ApiError(400,"That order action is not supported.")
                     expected_status,next_status = transitions[action]
                     if order["status"] != expected_status: raise ApiError(409,"That order has already changed. Refresh and try again.")
-                elif user["role"] == "buyer" and order["buyer_id"] == user["id"]:
+                elif (user and user["role"] == "buyer" and order["buyer_id"] == user["id"]) or guest_access:
                     if action == "accept-pickup":
                         if order["status"] != "ready" or order["fulfillment"] != "delivery" or order["pickup_offer_status"] != "pending": raise ApiError(409,"There is no pickup offer to accept.")
                         special_action = "accept-pickup"
@@ -1678,7 +2044,7 @@ class Handler(BaseHTTPRequestHandler):
                 owner_id = order["owner_id"]
                 stall_name = db.execute("SELECT name FROM stalls WHERE id=?", (order["stall_id"],)).fetchone()[0]
             if special_action == "offer-pickup":
-                dispatch_push([buyer_id], {"title":"Delivery unavailable · choose pickup or cancel","body":f"{stall_name} has no runner for order #{order_id}. Open BiteHub to choose pickup at the stall or cancel.","url":"/#buyer-orders","tag":f"bitehub-order-{order_id}"})
+                if buyer_id: dispatch_push([buyer_id], {"title":"Delivery unavailable · choose pickup or cancel","body":f"{stall_name} has no runner for order #{order_id}. Open BiteHub to choose pickup at the stall or cancel.","url":"/#buyer-orders","tag":f"bitehub-order-{order_id}"})
             elif special_action == "accept-pickup":
                 dispatch_push([owner_id], {"title":"Customer chose pickup","body":f"The customer will pick up order #{order_id} at your stall.","url":"/#owner-orders","tag":f"bitehub-order-{order_id}"})
             elif special_action == "cancel-no-runner":
@@ -1694,9 +2060,9 @@ class Handler(BaseHTTPRequestHandler):
                     "declined": ("Order update", declined_body)}
                 if next_status in push_status:
                     title, body = push_status[next_status]
-                    dispatch_push([buyer_id], {"title": title, "body": body, "url": "/#buyer-orders", "tag": f"bitehub-order-{order_id}"})
+                    if buyer_id: dispatch_push([buyer_id], {"title": title, "body": body, "url": "/#buyer-orders", "tag": f"bitehub-order-{order_id}"})
             elif special_action == "assign":
-                dispatch_push([buyer_id], {"title":"Runner assigned","body":f"{runner_name} will deliver order #{order_id}.","url":"/#buyer-orders","tag":f"bitehub-order-{order_id}"})
+                if buyer_id: dispatch_push([buyer_id], {"title":"Runner assigned","body":f"{runner_name} will deliver order #{order_id}.","url":"/#buyer-orders","tag":f"bitehub-order-{order_id}"})
             self.send_json(200,{"ok":True}); return
         raise ApiError(404,"That API route does not exist.")
 
@@ -1727,7 +2093,10 @@ class Handler(BaseHTTPRequestHandler):
             "school-theme.css", "feature-ui.css", "stall-profile.css",
             "opening-screen.css", "market-ui.css", "app.js", "sw.js", "manifest.webmanifest",
             "bitehub-mark.svg", "brand-refresh.css", "sidebar-preferences.css", "device-responsive.css",
-            "palette-theme.css",
+            "palette-theme.css", "prototype-notice.css",
+            "legal_drafts/PRIVACY_NOTICE_DRAFT.md", "legal_drafts/TERMS_OF_USE_DRAFT.md",
+            "legal_drafts/COOKIE_AND_LOCATION_NOTICES_DRAFT.md",
+            "legal_drafts/CHILD_FRIENDLY_PRIVACY_SUMMARY_DRAFT.md",
             "assets/bitehub-food-mark.png", "assets/bitehub-logo.png",
             "assets/bitehub-icon.png", "assets/bitehub-wordmark.png",
             "assets/palawan-national-school-logo.webp",
@@ -1748,7 +2117,7 @@ class Handler(BaseHTTPRequestHandler):
         if target.is_dir(): target = target / "index.html"
         if not target.is_file(): self.send_error(404); return
         data = target.read_bytes()
-        mime = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        mime = "text/plain" if target.suffix == ".md" else (mimetypes.guess_type(target.name)[0] or "application/octet-stream")
         if mime.startswith("text/") or mime in ("application/javascript",): mime += "; charset=utf-8"
         self.send_response(200)
         self.send_header("Content-Type",mime)
@@ -1806,7 +2175,10 @@ def main():
         print(f"BiteHub is listening on all interfaces at port {args.port} ({scheme.upper()}). Open https://<this-PC-LAN-IP>:{args.port} on trusted phones.")
     else:
         print(f"BiteHub is running at {scheme}://{args.host}:{args.port}")
-    print(f"SQLite database: {DB_PATH}")
+    if DATABASE_URL:
+        print("PostgreSQL database: Supabase (bitehub_app schema)")
+    else:
+        print(f"SQLite database: {DB_PATH}")
     try: httpd.serve_forever()
     except KeyboardInterrupt: print("\nStopping BiteHub.")
     finally: httpd.server_close()

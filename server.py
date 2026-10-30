@@ -8,6 +8,7 @@ import base64
 import binascii
 import hashlib
 import hmac
+from html import escape as html_escape
 import json
 import math
 import mimetypes
@@ -27,13 +28,20 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, urlencode, unquote, urlparse
 
 BASE = Path(__file__).resolve().parent
 DB_PATH = Path(os.environ.get("BITEHUB_DB", BASE / "bitehub.sqlite3"))
 DATABASE_URL = os.environ.get("BITEHUB_DATABASE_URL", "").strip()
 REQUIRE_POSTGRES = os.environ.get("BITEHUB_REQUIRE_POSTGRES", "").strip().lower() in {"1", "true", "yes"}
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "").strip()
+BITEHUB_EMAIL_FROM = os.environ.get("BITEHUB_EMAIL_FROM", "").strip()
+BITEHUB_PUBLIC_URL = (os.environ.get("BITEHUB_PUBLIC_URL", "") or
+                      os.environ.get("RENDER_EXTERNAL_URL", "")).strip().rstrip("/")
+EMAIL_VERIFY_SECONDS = 60 * 60 * 24
+PASSWORD_RESET_SECONDS = 60 * 60
 SESSION_SECONDS = 60 * 60 * 24 * 14
+GUEST_SESSION_SECONDS = 60 * 60 * 24 * 30
 PBKDF2_ROUNDS = 310_000
 ROLES = {"buyer", "owner", "runner", "admin"}
 MAX_BODY = 3 * 1024 * 1024
@@ -251,7 +259,7 @@ def connect():
 
 def initialize_postgres():
     required_tables = (
-        "schools", "users", "sessions", "stalls", "products", "reach_views",
+        "schools", "users", "sessions", "guest_sessions", "stalls", "products", "reach_views",
         "settings", "orders", "order_items", "feedback", "delivery_positions",
         "push_subscriptions", "school_requests",
     )
@@ -264,13 +272,24 @@ def initialize_postgres():
         if table_count != len(required_tables):
             raise RuntimeError(
                 "Supabase is missing BiteHub's database tables. Apply "
-                "supabase/migrations/202610270001_initial_bitehub_schema.sql first."
+                "supabase/migrations/202610270001_initial_bitehub_schema.sql and "
+                "supabase/migrations/202610300002_guest_sessions.sql first."
+            )
+        guest_session_column = db.execute(
+            "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=? AND table_name=? AND column_name=?",
+            ("bitehub_app", "orders", "guest_session_id"),
+        ).fetchone()[0]
+        if not guest_session_column:
+            raise RuntimeError(
+                "Supabase is missing the guest-session order link. Apply "
+                "supabase/migrations/202610300002_guest_sessions.sql first."
             )
         db.execute(
             "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING",
             ("reach_signing_secret", secrets.token_hex(32)),
         )
         db.execute("DELETE FROM sessions WHERE expires_at <= ?", (int(time.time()),))
+        db.execute("DELETE FROM guest_sessions WHERE expires_at <= ?", (int(time.time()),))
         db.execute(
             "DELETE FROM delivery_positions WHERE order_id IN "
             "(SELECT id FROM orders WHERE status!='out' OR fulfillment!='delivery')"
@@ -296,6 +315,7 @@ def initialize():
         CREATE TABLE IF NOT EXISTS users (
           id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE,
           password_hash TEXT NOT NULL, password_salt TEXT NOT NULL,
+          email_verified INTEGER NOT NULL DEFAULT 1 CHECK(email_verified IN (0,1)),
           role TEXT NOT NULL CHECK(role IN ('buyer','owner','runner','admin')),
           school_id TEXT NOT NULL DEFAULT 'pns', school_region TEXT NOT NULL DEFAULT 'MIMAROPA',
           school_province TEXT NOT NULL DEFAULT 'Palawan', school_city TEXT NOT NULL DEFAULT 'Puerto Princesa',
@@ -313,6 +333,18 @@ def initialize():
           token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
           expires_at INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS guest_sessions (
+          id INTEGER PRIMARY KEY, guest_name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
+          created_at TEXT NOT NULL, expires_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS guest_sessions_expiry_idx ON guest_sessions(expires_at);
+        CREATE TABLE IF NOT EXISTS email_auth_tokens (
+          token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          purpose TEXT NOT NULL CHECK(purpose IN ('verify','reset')), expires_at INTEGER NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS email_auth_tokens_user_purpose_idx
+          ON email_auth_tokens(user_id,purpose,expires_at);
         CREATE TABLE IF NOT EXISTS stalls (
           id INTEGER PRIMARY KEY, owner_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
                     name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'approved'
@@ -352,6 +384,7 @@ def initialize():
           updated_at TEXT NOT NULL, estimated_ready_at TEXT, pickup_at TEXT,
           delivery_lat REAL, delivery_lon REAL, runner_name TEXT NOT NULL DEFAULT '',
           runner_tracking_token_hash TEXT, runner_tracking_expires_at TEXT,
+          guest_session_id INTEGER REFERENCES guest_sessions(id) ON DELETE SET NULL,
           pickup_offer_status TEXT NOT NULL DEFAULT 'none' CHECK(pickup_offer_status IN ('none','pending','accepted','declined')),
           guest_name TEXT NOT NULL DEFAULT '', guest_school_role TEXT NOT NULL DEFAULT '',
           guest_grade TEXT NOT NULL DEFAULT '', guest_section TEXT NOT NULL DEFAULT '',
@@ -417,6 +450,7 @@ def initialize():
             ("profile_photo_type", "TEXT"),
             ("profile_photo_version", "INTEGER NOT NULL DEFAULT 0"),
             ("deleted_at", "TEXT"),
+            ("email_verified", "INTEGER NOT NULL DEFAULT 1 CHECK(email_verified IN (0,1))"),
         ):
             if name not in user_columns:
                 db.execute(f"ALTER TABLE users ADD COLUMN {name} {declaration}")
@@ -463,6 +497,7 @@ def initialize():
             ("guest_section", "TEXT NOT NULL DEFAULT ''"),
             ("guest_access_token_hash", "TEXT NOT NULL DEFAULT ''"),
             ("guest_pickup_code", "TEXT NOT NULL DEFAULT ''"),
+            ("guest_session_id", "INTEGER REFERENCES guest_sessions(id) ON DELETE SET NULL"),
         ):
             if name not in order_info:
                 db.execute(f"ALTER TABLE orders ADD COLUMN {name} {declaration}")
@@ -484,6 +519,7 @@ def initialize():
                   updated_at TEXT NOT NULL, estimated_ready_at TEXT, pickup_at TEXT,
                   delivery_lat REAL, delivery_lon REAL, runner_name TEXT NOT NULL DEFAULT '',
                   runner_tracking_token_hash TEXT, runner_tracking_expires_at TEXT,
+                  guest_session_id INTEGER REFERENCES guest_sessions(id) ON DELETE SET NULL,
                   pickup_offer_status TEXT NOT NULL DEFAULT 'none' CHECK(pickup_offer_status IN ('none','pending','accepted','declined')),
                   guest_name TEXT NOT NULL DEFAULT '', guest_school_role TEXT NOT NULL DEFAULT '',
                   guest_grade TEXT NOT NULL DEFAULT '', guest_section TEXT NOT NULL DEFAULT '',
@@ -506,6 +542,7 @@ def initialize():
                 CREATE INDEX orders_runner_idx ON orders(runner_id, id DESC);
                 CREATE UNIQUE INDEX orders_guest_pickup_code_idx
                   ON orders(guest_pickup_code) WHERE guest_pickup_code != '';
+                CREATE INDEX orders_guest_session_idx ON orders(guest_session_id);
                 COMMIT;
                 """)
             except Exception:
@@ -513,6 +550,7 @@ def initialize():
                 raise
             finally:
                 db.execute("PRAGMA foreign_keys = ON")
+        db.execute("CREATE INDEX IF NOT EXISTS orders_guest_session_idx ON orders(guest_session_id)")
         product_columns = {row["name"] for row in db.execute("PRAGMA table_info(products)")}
         for name, declaration in (
             ("stock_count", "INTEGER CHECK(stock_count IS NULL OR stock_count >= 0)"),
@@ -526,6 +564,8 @@ def initialize():
             if name not in product_columns:
                 db.execute(f"ALTER TABLE products ADD COLUMN {name} {declaration}")
         db.execute("DELETE FROM sessions WHERE expires_at <= ?", (int(time.time()),))
+        db.execute("DELETE FROM email_auth_tokens WHERE expires_at <= ?", (int(time.time()),))
+        db.execute("DELETE FROM guest_sessions WHERE expires_at <= ?", (int(time.time()),))
         db.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('reach_signing_secret',?)", (secrets.token_hex(32),))
         # Remove any stale runner locations left by earlier server versions.
         db.execute("DELETE FROM delivery_positions WHERE order_id IN (SELECT id FROM orders WHERE status!='out' OR fulfillment!='delivery')")
@@ -662,6 +702,61 @@ def cents(value):
 
 def password_digest(password, salt):
     return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, PBKDF2_ROUNDS).hex()
+
+
+def email_delivery_ready():
+    return bool(RESEND_API_KEY and BITEHUB_EMAIL_FROM and BITEHUB_PUBLIC_URL)
+
+
+def create_email_auth_token(db, user_id, purpose, lifetime):
+    token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(token.encode("ascii")).hexdigest()
+    db.execute("DELETE FROM email_auth_tokens WHERE expires_at<=?", (int(time.time()),))
+    db.execute("DELETE FROM email_auth_tokens WHERE user_id=? AND purpose=?", (user_id, purpose))
+    db.execute("INSERT INTO email_auth_tokens(token_hash,user_id,purpose,expires_at,created_at) VALUES(?,?,?,?,?)",
+               (token_hash, user_id, purpose, int(time.time()) + lifetime, now()))
+    return token, token_hash
+
+
+def send_account_email(recipient, subject, heading, message, button_label, query_key, token, token_hash):
+    if not email_delivery_ready():
+        raise ApiError(503, "Email delivery is not set up yet. Please try again later.")
+    public_url = urlparse(BITEHUB_PUBLIC_URL)
+    is_local_http = public_url.scheme == "http" and public_url.hostname in {"localhost", "127.0.0.1", "::1"}
+    if not public_url.hostname or (public_url.scheme != "https" and not is_local_http):
+        raise ApiError(503, "BiteHub's public website address must use HTTPS before account emails can be sent.")
+    link = f"{BITEHUB_PUBLIC_URL}/?{urlencode({query_key: token})}"
+    safe_heading = html_escape(heading)
+    safe_message = html_escape(message)
+    safe_button = html_escape(button_label)
+    safe_link = html_escape(link, quote=True)
+    html_body = ("<!doctype html><html><body style=\"margin:0;background:#fff8ee;font-family:Arial,sans-serif;color:#33251f\">"
+        "<main style=\"max-width:520px;margin:32px auto;padding:30px;background:#fff;border:1px solid #f2d6a7;border-radius:18px\">"
+        "<p style=\"margin:0 0 20px;color:#be3027;font-weight:700;letter-spacing:.08em\">BITEHUB · PNS FOOD MARKET</p>"
+        f"<h1 style=\"font-size:26px;margin:0 0 12px\">{safe_heading}</h1>"
+        f"<p style=\"font-size:16px;line-height:1.6\">{safe_message}</p>"
+        f"<p style=\"margin:26px 0\"><a href=\"{safe_link}\" style=\"display:inline-block;padding:14px 22px;border-radius:10px;background:#c92c24;color:#fff;text-decoration:none;font-weight:700\">{safe_button}</a></p>"
+        "<p style=\"font-size:13px;line-height:1.6;color:#6c625b\">If you did not request this, you can ignore this email. This link can only be used once and will expire.</p>"
+        "</main></body></html>")
+    text_body = f"{heading}\n\n{message}\n\n{button_label}: {link}\n\nIf you did not request this, you can ignore this email. The link can only be used once and will expire."
+    payload = json.dumps({"from": BITEHUB_EMAIL_FROM, "to": [recipient], "subject": subject,
+        "html": html_body, "text": text_body}, separators=(",", ":")).encode("utf-8")
+    request = urllib.request.Request("https://api.resend.com/emails", data=payload, method="POST", headers={
+        "Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json",
+        "Idempotency-Key": token_hash,
+    })
+    try:
+        with urllib.request.urlopen(request, timeout=12) as response:
+            if response.status < 200 or response.status >= 300:
+                raise ApiError(502, "BiteHub could not send the email right now. Please try again later.")
+            response.read(1024)
+    except urllib.error.HTTPError as error:
+        # Never log message bodies or recipient data from the mail provider.
+        sys.stderr.write(f"BiteHub email provider returned HTTP {error.code}.\n")
+        raise ApiError(502, "BiteHub could not send the email right now. Please try again later.") from None
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        sys.stderr.write(f"BiteHub email delivery connection failed ({type(error).__name__}).\n")
+        raise ApiError(502, "BiteHub could not send the email right now. Please try again later.") from None
 
 
 def clean_text(value, label, max_length, required=True):
@@ -929,6 +1024,40 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return None
 
+    def guest_cookie_token(self):
+        cookie = SimpleCookie()
+        try:
+            cookie.load(self.headers.get("Cookie", ""))
+            return cookie["bitehub_guest_session"].value if "bitehub_guest_session" in cookie else None
+        except Exception:
+            return None
+
+    def current_guest_session(self):
+        token = self.guest_cookie_token()
+        if not token:
+            return None
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        with connect() as db:
+            row = db.execute(
+                "SELECT id,guest_name FROM guest_sessions WHERE token_hash=? AND expires_at>?",
+                (token_hash, int(time.time())),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def create_guest_session(self, guest_name):
+        token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        expires = int(time.time()) + GUEST_SESSION_SECONDS
+        with connect() as db:
+            db.execute("DELETE FROM guest_sessions WHERE expires_at<=?", (int(time.time()),))
+            guest_id = insert_id(db,
+                "INSERT INTO guest_sessions(guest_name,token_hash,created_at,expires_at) VALUES(?,?,?,?)",
+                (guest_name, token_hash, now(), expires))
+        secure = "; Secure" if getattr(self.server, "is_https", False) else ""
+        cookie_header = (f"bitehub_guest_session={token}; HttpOnly; SameSite=Strict; Path=/; "
+                         f"Max-Age={GUEST_SESSION_SECONDS}{secure}")
+        return {"id": guest_id, "name": guest_name}, cookie_header
+
     def current_user(self, required=True):
         token = self.cookie_token()
         if token:
@@ -1157,7 +1286,9 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(row["photo_data"])
             return
         if path == "/api/session":
-            self.send_json(200, {"user": self.current_user(required=False)})
+            user = self.current_user(required=False)
+            guest_session = self.current_guest_session() if not user else None
+            self.send_json(200, {"user": user, "guest_session": guest_session})
             return
         if path == "/api/pickup-slots":
             self.require_role("buyer")
@@ -1521,6 +1652,103 @@ class Handler(BaseHTTPRequestHandler):
                     (user["id"], endpoint, json.dumps(subscription), now(), now()))
             self.send_json(201, {"ok": True})
             return
+        if path == "/api/guest/session":
+            if self.current_user(required=False):
+                raise ApiError(403, "Sign out before continuing as a guest.")
+            guest_name = clean_text(data.get("name"), "Name", 80)
+            guest_session, cookie_header = self.create_guest_session(guest_name)
+            self.send_json(201, {"guest_session": guest_session}, {"Set-Cookie": cookie_header})
+            return
+        if path == "/api/email/verify":
+            if not email_delivery_ready():
+                raise ApiError(503, "Email verification is not enabled yet. You can sign in with your password.")
+            token = data.get("token")
+            if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9_-]{40,100}", token):
+                raise ApiError(400, "This verification link is invalid or has expired. Request a new one and try again.")
+            token_hash = hashlib.sha256(token.encode("ascii")).hexdigest()
+            with connect() as db:
+                auth_token = db.execute("""SELECT t.user_id FROM email_auth_tokens t
+                    JOIN users u ON u.id=t.user_id WHERE t.token_hash=? AND t.purpose='verify'
+                    AND t.expires_at>? AND u.deleted_at IS NULL""", (token_hash, int(time.time()))).fetchone()
+                if not auth_token:
+                    raise ApiError(400, "This verification link is invalid or has expired. Request a new one and try again.")
+                db.execute("UPDATE users SET email_verified=TRUE WHERE id=?", (auth_token["user_id"],))
+                db.execute("DELETE FROM email_auth_tokens WHERE token_hash=?", (token_hash,))
+            self.send_json(200, {"ok": True, "message": "Your email is verified. You can sign in now."})
+            return
+        if path == "/api/email/verification/resend":
+            if not email_delivery_ready():
+                raise ApiError(503, "Email delivery is not set up yet. Please try again later.")
+            email = str(data.get("email") or "").strip().lower()
+            ip = self.client_ip()
+            email_key = hashlib.sha256(email.encode("utf-8")).hexdigest()
+            self.enforce_rate_limit("email-resend-ip", ip, 30, 3600)
+            self.enforce_rate_limit("email-resend-account", email_key, 3, 3600)
+            if email_delivery_ready() and re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+                with connect() as db:
+                    user = db.execute("SELECT id,email,name FROM users WHERE email=? AND email_verified=FALSE AND deleted_at IS NULL", (email,)).fetchone()
+                    if user:
+                        token, token_hash = create_email_auth_token(db, user["id"], "verify", EMAIL_VERIFY_SECONDS)
+                    else:
+                        token = token_hash = None
+                if user:
+                    try:
+                        send_account_email(user["email"], "Verify your BiteHub account", "Verify your email",
+                            "Confirm your email address to sign in to your PNS stall account.",
+                            "Verify email", "verify_email", token, token_hash)
+                    except ApiError:
+                        pass
+            self.send_json(200, {"ok": True, "message": "If this address needs verification, a new link will arrive shortly."})
+            return
+        if path == "/api/password/forgot":
+            if not email_delivery_ready():
+                raise ApiError(503, "Email delivery is not set up yet. Please try again later.")
+            email = str(data.get("email") or "").strip().lower()
+            ip = self.client_ip()
+            email_key = hashlib.sha256(email.encode("utf-8")).hexdigest()
+            self.enforce_rate_limit("password-reset-ip", ip, 30, 3600)
+            self.enforce_rate_limit("password-reset-account", email_key, 5, 3600)
+            if email_delivery_ready() and re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+                with connect() as db:
+                    user = db.execute("SELECT id,email,name FROM users WHERE email=? AND email_verified=TRUE AND deleted_at IS NULL", (email,)).fetchone()
+                    if user:
+                        token, token_hash = create_email_auth_token(db, user["id"], "reset", PASSWORD_RESET_SECONDS)
+                    else:
+                        token = token_hash = None
+                if user:
+                    try:
+                        send_account_email(user["email"], "Reset your BiteHub password", "Reset your password",
+                            "Use this secure link to choose a new password for your PNS stall account.",
+                            "Choose a new password", "reset_password", token, token_hash)
+                    except ApiError:
+                        pass
+            self.send_json(200, {"ok": True, "message": "If a BiteHub account uses that email, password reset instructions will arrive shortly."})
+            return
+        if path == "/api/password/reset":
+            if not email_delivery_ready():
+                raise ApiError(503, "Email password reset is not enabled yet. Contact the BiteHub administrator for help.")
+            token = data.get("token")
+            password = data.get("password")
+            if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9_-]{40,100}", token):
+                raise ApiError(400, "This password reset link is invalid or has expired. Request a new one and try again.")
+            if not isinstance(password, str) or len(password) < 10:
+                raise ApiError(400, "Use a password with at least 10 characters.")
+            if len(password) > 1024:
+                raise ApiError(400, "Password must be 1,024 characters or fewer.")
+            token_hash = hashlib.sha256(token.encode("ascii")).hexdigest()
+            with connect() as db:
+                auth_token = db.execute("""SELECT t.user_id FROM email_auth_tokens t
+                    JOIN users u ON u.id=t.user_id WHERE t.token_hash=? AND t.purpose='reset'
+                    AND t.expires_at>? AND u.deleted_at IS NULL""", (token_hash, int(time.time()))).fetchone()
+                if not auth_token:
+                    raise ApiError(400, "This password reset link is invalid or has expired. Request a new one and try again.")
+                salt = secrets.token_bytes(16)
+                db.execute("UPDATE users SET password_hash=?,password_salt=?,email_verified=TRUE WHERE id=?",
+                    (password_digest(password, salt), salt.hex(), auth_token["user_id"]))
+                db.execute("DELETE FROM sessions WHERE user_id=?", (auth_token["user_id"],))
+                db.execute("DELETE FROM email_auth_tokens WHERE user_id=?", (auth_token["user_id"],))
+            self.send_json(200, {"ok": True, "message": "Your password has been changed. Sign in with your new password."})
+            return
         if path == "/api/signup":
             name = clean_text(data.get("name"), "Name", 80)
             email = clean_text(data.get("email"), "Email", 254).lower()
@@ -1698,6 +1926,10 @@ class Handler(BaseHTTPRequestHandler):
             guest_school_role = guest_grade = guest_section = ""
             guest_token = secrets.token_urlsafe(32) if guest_order else ""
             guest_token_hash = hashlib.sha256(guest_token.encode("utf-8")).hexdigest() if guest_token else ""
+            guest_session = self.current_guest_session() if guest_order else None
+            guest_session_cookie = None
+            if guest_order and not guest_session:
+                guest_session, guest_session_cookie = self.create_guest_session(guest_name)
             if data.get("fulfillment") not in ("pickup", "delivery"): raise ValueError("Choose pickup or campus delivery.")
             delivery_lat = delivery_lon = None
             if data["fulfillment"] == "delivery":
@@ -1740,6 +1972,9 @@ class Handler(BaseHTTPRequestHandler):
             note = clean_text(data.get("note"), "Order note", 240, required=False)
             with connect() as db:
                 db.execute("BEGIN IMMEDIATE")
+                if guest_order:
+                    db.execute("UPDATE guest_sessions SET guest_name=?,expires_at=? WHERE id=?",
+                        (guest_name,int(time.time())+GUEST_SESSION_SECONDS,guest_session["id"]))
                 paused = db.execute("SELECT value FROM settings WHERE key='ordering_paused'").fetchone()[0] == "true"
                 if paused: raise ApiError(409, "Ordering is temporarily paused.")
                 marks = ",".join("?" for _ in ids)
@@ -1775,11 +2010,12 @@ class Handler(BaseHTTPRequestHandler):
                     else:
                         raise ApiError(503,"Could not create a unique pickup code. Please try again.")
                 order_id = insert_id(db, """INSERT INTO orders(buyer_id,guest_name,guest_school_role,guest_grade,guest_section,
-                    guest_access_token_hash,guest_pickup_code,stall_id,fulfillment,status,total_cents,buyer_note,
+                    guest_session_id,guest_access_token_hash,guest_pickup_code,stall_id,fulfillment,status,total_cents,buyer_note,
                     created_at,updated_at,pickup_at,delivery_lat,delivery_lon)
-                    VALUES(?,?,?,?,?,?,?,?,?,'placed',?,?,?,?,?,?,?)""",
+                    VALUES(?,?,?,?,?,?,?,?,?,?,'placed',?,?,?,?,?,?,?)""",
                     (buyer["id"] if buyer else None,guest_name,guest_school_role,guest_grade,guest_section,
-                     guest_token_hash,pickup_code,products[0]["stall_id"],data["fulfillment"],total,note,
+                     guest_session["id"] if guest_order else None,guest_token_hash,pickup_code,
+                     products[0]["stall_id"],data["fulfillment"],total,note,
                      now(),now(),pickup_at,delivery_lat,delivery_lon))
                 stall_owner_id = db.execute("SELECT owner_id FROM stalls WHERE id=?", (products[0]["stall_id"],)).fetchone()[0]
                 for product in products:
@@ -1788,8 +2024,10 @@ class Handler(BaseHTTPRequestHandler):
             dispatch_push([stall_owner_id], {"title": "New BiteHub order", "body": f"New order #{order_id} is waiting at your stall.", "url": "/#owner-orders", "tag": f"bitehub-order-{order_id}"})
             result = {"order_id":order_id}
             if guest_order:
-                result.update({"guest_token":guest_token,"pickup_code":pickup_code})
-            self.send_json(201,result)
+                result.update({"guest_token":guest_token,"pickup_code":pickup_code,
+                    "guest_session_id":guest_session["id"]})
+            response_headers = {"Set-Cookie": guest_session_cookie} if guest_session_cookie else None
+            self.send_json(201,result,response_headers)
             return
         feedback_match = re.fullmatch(r"/api/orders/(\d+)/feedback", path)
         if feedback_match:
@@ -2100,6 +2338,7 @@ class Handler(BaseHTTPRequestHandler):
             "assets/bitehub-food-mark.png", "assets/bitehub-logo.png",
             "assets/bitehub-icon.png", "assets/bitehub-wordmark.png",
             "assets/palawan-national-school-logo.webp",
+            "assets/bitehub-food-market-4k.webp",
             "assets/palawan-campus-map.png",
             "assets/pns-campus-safe-routes.jpg",
             "assets/pns-campus-hero.jpg",

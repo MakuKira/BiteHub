@@ -1,6 +1,6 @@
 # BiteHub · Palawan National School
 
-BiteHub is a food ordering hub for the Palawan National School (PNS) community. Students, teachers, staff, and other PNS community members can register as customers; stall owners register their PNS stall. Python and SQLite store accounts, menus, and orders on the server.
+BiteHub is a food ordering hub for the Palawan National School (PNS) community. Students, teachers, staff, and other PNS community members can order as guests; stall owners register their PNS stall. The Python server uses SQLite locally by default, or Supabase PostgreSQL when `BITEHUB_DATABASE_URL` is configured on the server.
 
 ## Start the server
 
@@ -35,13 +35,13 @@ The phone and computer must stay on the same trusted network. Do not allow the s
 
 ## Account types
 
-- **PNS customer:** browse a stall-balanced rotating catalog, see daily featured PNS picks, explore one stall at a time, filter dietary labels and allergens, view item details, choose pickup or PNS delivery, receive status alerts and ready-time estimates, and review completed orders. Grade and section are optional so teachers, staff, and other PNS community members can also register.
+- **Guest customer:** browse a stall-balanced rotating catalog, see daily featured PNS picks, explore one stall at a time, filter dietary labels and allergens, view item details, choose pickup or PNS delivery, receive status alerts and ready-time estimates, and review completed orders through a private guest link. A customer account is not required.
 - **PNS stall owner:** create a stall account for a named stall, set opening hours, typical prep time, pickup limits, and stock counts, feature one available item for 24 hours, upload optional JPG/PNG/WebP menu photos (up to 2 MB each), disclose dietary/allergen information, edit items, accept orders, assign delivery orders by typing a runner’s name, offer pickup when no runner is available, read customer feedback, and review anonymous stall and product detail views alongside item order counts.
 - **PNS administrator:** pause or resume PNS stalls, review PNS activity, and pause or resume ordering.
 
 Delivery assignments do not require a runner account. The stall owner enters the runner’s name, marks the order on the way, and confirms delivery. If no runner is available, the customer can choose pickup at the stall or cancel the order. Existing runner accounts from earlier versions can still finish orders already assigned to them.
 
-PNS customers can open public stall links and browse PNS menus before signing in; a customer account is required to place an order. Stall owners can copy or share a direct link to their public PNS stall page from the stall workspace. View statistics count each browser once per stall or product per day, with request limits to discourage fake submissions; they do not store account identifiers. Admins can open **Data & reports**, filter daily activity to 7, 30, or 90 days or all recorded dates, and download aggregate CSV data without buyer names, emails, or delivery locations. Completed order value includes orders marked completed; payment is not separately verified. Stall and product comparisons are all-time totals. PNS customers and stall owners can create accounts from the role chooser. Stall owners can self-register; their PNS stalls appear to customers as soon as signup is complete. Administrators can pause a stall if needed, and paused stalls stay hidden until resumed. Administrator accounts are deliberately not available through public signup. Create one from PowerShell with:
+PNS community members can browse and order as guests; delivery orders collect the guest's name, school role, grade, and section. Stall owners can copy or share a direct link to their public PNS stall page from the stall workspace. View statistics count each browser once per stall or product per day, with request limits to discourage fake submissions; they do not store account identifiers. Admins can open **Data & reports**, filter daily activity to 7, 30, or 90 days or all recorded dates, and download aggregate CSV data without buyer names, emails, or delivery locations. Completed order value includes orders marked completed; payment is not separately verified. Stall and product comparisons are all-time totals. Stall owners can self-register; their PNS stalls appear to guests as soon as signup is complete. Administrators can pause a stall if needed, and paused stalls stay hidden until resumed. Administrator accounts are deliberately not available through public signup. Create one from PowerShell with:
 
 ```powershell
 .\start.ps1 --create-admin
@@ -49,16 +49,32 @@ PNS customers can open public stall links and browse PNS menus before signing in
 
 The command prompts for an email, name, and password. Admin passwords and all account passwords are salted and hashed by the server. To start using the site afterward, run `.\start.ps1` in a separate PowerShell window.
 
+### Stall account sign-in and guest records
+
+Stall owners can sign up with any properly formatted email address and sign in right away; BiteHub does not send a verification email. The account row is stored in Supabase `users`, its salted password hash is stored instead of the raw password, and the active sign-in session is stored in `sessions`.
+
+Choosing **Browse stalls** as a guest creates a temporary `guest_sessions` row with a generated ID and the guest's name. A private, HTTP-only cookie identifies that guest session; PostgreSQL stores only the cookie's hash. Guest orders keep their existing guest details and link to that guest session. Expired guest sessions are cleaned up after 30 days.
+
+To send these records to Supabase, Render must use `BITEHUB_REQUIRE_POSTGRES=true` and a private `BITEHUB_DATABASE_URL` pointing to the intended Supabase project. The baseline `bitehub_app` schema and `202610300002_guest_sessions.sql` migration are applied to BiteHub-Dev and Production. Render's database URL is masked and still needs its target project verified before deployment. The email provider and optional `202610300001_email_auth.sql` migration are deferred; password-reset emails are not available yet.
+
+## Supabase development database
+
+The `supabase/` folder contains BiteHub's PostgreSQL baseline and guest-session migration, applied to both **BiteHub-Dev** and **MakuKira's Project** (Production). Both have a separate private `bitehub_app` schema with row-level security; the synthetic test catalog is loaded into BiteHub-Dev only. Production has no demo orders or imported student records, and the older Supabase `public` tables remain untouched.
+
+The app now has a PostgreSQL adapter, but it continues to use SQLite until the backend environment contains `BITEHUB_DATABASE_URL`. Never put this connection string in `app.js`, HTML, mobile code, or any other browser-delivered file. Create the private `bitehub_api_login` role in Supabase by following `supabase/README.md`, then put its connection string in the Python backend's private environment. Use Supabase's direct connection if the host supports IPv6, or the shared **session** pooler for an IPv4-only host. The app uses the `bitehub_app` schema and keeps the existing SQLite mode as the local fallback.
+
+No local SQLite accounts or orders have been copied to Supabase. Keep the connection string and role password out of Git, screenshots, and chat.
+
 ## Prototype notes
 
-The database schema is created automatically the first time the server starts. New installations start with an empty menu: register a PNS stall owner, add menu items, then register PNS customer accounts to work through the order flow. There are no seeded accounts or sample orders.
+Local SQLite installations create their schema automatically and start with an empty menu. The Supabase **development** project has synthetic demo stalls and products so the catalog can be explored once the Python server is connected. The demo owner records cannot sign in, and no sample orders are present.
 
 This is intended for a trusted local prototype. The built-in HTTP server is not an internet-facing production deployment; use a production application server, HTTPS, backups, and an institutional identity provider before exposing real accounts or student data.
 
 ## Capacity and production readiness
 
-The SQLite schema can store 20,000 student accounts, but this prototype is not certified for 20,000 simultaneous users. Background order checks are staggered and fetch only order data, but 20,000 active sessions would still generate hundreds of requests per second. Before a campus-wide launch, move to managed PostgreSQL and a production ASGI/WSGI application server with horizontal scaling, then run a staged load test at the expected peak. Keep the SQLite database for local development only; the free Render service is not a production capacity target.
+The SQLite schema can store 20,000 accounts, but this prototype is not certified for 20,000 simultaneous users. Background order checks are staggered and fetch only order data, but 20,000 active sessions would still generate hundreds of requests per second. Supabase PostgreSQL support is prepared for development; before a campus-wide launch, connect the backend with its private database role, review account/order authorization on the PostgreSQL path, add backups and monitoring, then run a staged load test at the expected peak. The free Render service is not a production capacity target.
 
 ## Free Render deployment
 
-The included `render.yaml` can deploy BiteHub on Render's free web service. Push this folder to GitHub, create a new Render Blueprint, and select the repository. The free service does not include a persistent disk, so the SQLite database may reset when the service restarts or redeploys. Use a paid persistent disk or a hosted PostgreSQL database before relying on it for real accounts or orders.
+The included `render.yaml` can deploy BiteHub on Render's free web service. Push this folder to GitHub, create a new Render Blueprint, and select the repository. The free service does not include a persistent disk, so local SQLite data may reset when the service restarts or redeploys. Configure `BITEHUB_DATABASE_URL` as a private environment variable on the Python backend to use Supabase; do not expose it to the website or mobile app.

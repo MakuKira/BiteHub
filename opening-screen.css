@@ -35,14 +35,15 @@
 }
 .opening-splash-card::before { position: absolute; content: ""; pointer-events: none; }
 .splash-loading-dots { display: flex; align-items: center; height: 15px; }
-/* PNS campus-break launch scene: match the login photo and palette, with a playful food-tray moment. */
+/* Food-first market launch scene; PNS identity stays in the brand lockup. */
 .opening-splash {
-  background-color: #F9F4E8;
+  background-color: #FFF6E5;
   background-image:
-    linear-gradient(108deg, #FFF5EAEF 0%, #FFF4EAD9 43%, #EEF4E7C2 69%, #DAEFE8B5 100%),
-    url("assets/palawan-national-school-campus.png");
-  background-position: center, center 53%;
-  background-size: cover, cover;
+    radial-gradient(ellipse at 8% 15%, #F4BA3F42 0, transparent 30rem),
+    radial-gradient(ellipse at 92% 82%, #55AFC442 0, transparent 32rem),
+    linear-gradient(112deg, #FFF6E5 0%, #FFF1D6 48%, #E7F2E3 100%);
+  background-position: left top, right bottom, center;
+  background-size: auto, auto, cover;
 }
 .opening-splash::before {
   inset: 0;

@@ -1,9 +1,40 @@
-const state={user:null,publicBrowse:new URLSearchParams(location.search).has('stall'),products:[],featuredProducts:[],heroFeaturedIndex:0,featuredScroll:0,featuredPaused:false,featuredTimer:null,orders:[],overview:null,adminReports:null,reportRange:'30',reachAnalytics:null,paused:false,cart:new Map(),cartNote:'',fulfillment:'pickup',deliveryLocation:null,mapZoom:1,trackingWatch:null,lastLocationSent:0,runnerLinks:{},filter:'All',query:'',sort:'featured',stallFilter:'All',dietaryFilter:'All',allergenFilter:'All',buyerView:'menu',ownerView:'dashboard',adminView:'overview',authRole:'buyer',pushEnabled:false,pushAvailable:false,sidebarOpen:false,sidebarSettingsOpen:false,sidebarProfileOpen:false};
+const GUEST_ORDER_STORAGE_KEY='bitehub-guest-order-access-v1';
+function savedGuestOrderAccess(){
+  try{
+    const records=JSON.parse(localStorage.getItem(GUEST_ORDER_STORAGE_KEY)||'[]');
+    return Array.isArray(records)?records.filter(item=>Number.isSafeInteger(item?.id)&&item.id>0&&typeof item.token==='string'&&/^[A-Za-z0-9_-]{40,100}$/.test(item.token)).slice(-12):[];
+  }catch{return[]}
+}
+const hasSavedGuestOrders=savedGuestOrderAccess().length>0;
+let guestOrderAccess=savedGuestOrderAccess();
+const state={user:null,publicBrowse:new URLSearchParams(location.search).has('stall')||hasSavedGuestOrders,products:[],featuredProducts:[],heroFeaturedIndex:0,featuredScroll:0,featuredPaused:false,featuredTimer:null,orders:[],overview:null,adminReports:null,reportRange:'30',reachAnalytics:null,paused:false,cart:new Map(),cartNote:'',guestName:'',guestSessionId:null,guestSchoolRole:'',guestGrade:'',guestSection:'',fulfillment:'pickup',deliveryLocation:null,mapZoom:1,trackingWatch:null,lastLocationSent:0,runnerLinks:{},filter:'All',query:'',sort:'featured',stallFilter:'All',dietaryFilter:'All',allergenFilter:'All',filterPanelOpen:false,buyerView:'menu',ownerView:'dashboard',adminView:'overview',authRole:'buyer',pushEnabled:false,pushAvailable:false,sidebarOpen:false,sidebarSettingsOpen:false,sidebarProfileOpen:false};
 const $=s=>document.querySelector(s), root=$('#view-content'), toastNode=$('#toast'), openingSplash=$('#opening-splash'), openingSplashStartedAt=performance.now();
 function dismissOpeningSplash(){
   if(!openingSplash?.isConnected)return;
   openingSplash.classList.add('is-exiting');
   setTimeout(()=>openingSplash.remove(),460);
+}
+let slowLoadCount=0,slowLoadTimer=null;
+function beginSlowLoadFeedback(){
+  slowLoadCount++;
+  if(slowLoadCount===1)slowLoadTimer=setTimeout(()=>{
+    if(!slowLoadCount)return;
+    const skeleton=$('#slow-load-skeleton');
+    if(skeleton){skeleton.hidden=false;skeleton.setAttribute('aria-hidden','false')}
+    document.querySelector('#app')?.classList.add('is-slow-loading');
+    dismissOpeningSplash();
+  },600);
+  let finished=false;
+  return()=>{
+    if(finished)return;
+    finished=true;
+    slowLoadCount=Math.max(0,slowLoadCount-1);
+    if(slowLoadCount)return;
+    clearTimeout(slowLoadTimer);slowLoadTimer=null;
+    const skeleton=$('#slow-load-skeleton');
+    if(skeleton){skeleton.hidden=true;skeleton.setAttribute('aria-hidden','true')}
+    document.querySelector('#app')?.classList.remove('is-slow-loading');
+  };
 }
 let refreshTimer;
 let publicRunnerTracking=null,runnerShareTimer=null,runnerShareBusy=false;
@@ -80,7 +111,7 @@ const PNS_WALK_PATHS=[
 ];
 const PNS_WALK_GRAPH=(()=>{const nodes=new Map(),edges=[];for(const path of PNS_WALK_PATHS){for(const point of path)nodes.set(`${point[0]},${point[1]}`,point);for(let i=1;i<path.length;i++){const a=path[i-1],b=path[i],distance=Math.hypot(b[0]-a[0],b[1]-a[1]);edges.push({a:`${a[0]},${a[1]}`,b:`${b[0]},${b[1]}`,distance})}}const links=new Map([...nodes.keys()].map(key=>[key,[]]));for(const edge of edges){links.get(edge.a).push({key:edge.b,distance:edge.distance});links.get(edge.b).push({key:edge.a,distance:edge.distance})}return{nodes,links,edges}})();
 function activeCampus(){
-  const legacy=LEGACY_SCHOOL_LOCATIONS[state.user?.school_id],hasSavedPin=state.user?.school_latitude!=null&&state.user?.school_longitude!=null,configured=hasSavedPin||Boolean(legacy),latitude=Number(hasSavedPin?state.user.school_latitude:legacy?.center.latitude??12.8797),longitude=Number(hasSavedPin?state.user.school_longitude:legacy?.center.longitude??121.774),radius=Number(state.user?.delivery_radius_m)||legacy?.radius||1500;
+  const schoolId=state.user?.school_id||'pns',legacy=LEGACY_SCHOOL_LOCATIONS[schoolId],hasSavedPin=state.user?.school_latitude!=null&&state.user?.school_longitude!=null,configured=hasSavedPin||Boolean(legacy),latitude=Number(hasSavedPin?state.user.school_latitude:legacy?.center.latitude??12.8797),longitude=Number(hasSavedPin?state.user.school_longitude:legacy?.center.longitude??121.774),radius=Number(state.user?.delivery_radius_m)||legacy?.radius||1500;
   const latSpan=radius/111320,lonSpan=radius/(111320*Math.max(.2,Math.cos(latitude*Math.PI/180)));
   return{configured,center:{latitude,longitude},radius,south:latitude-latSpan,north:latitude+latSpan,west:longitude-lonSpan,east:longitude+lonSpan};
 }
@@ -144,6 +175,23 @@ async function api(path,options={}){
   return body;
 }
 const json=data=>JSON.stringify(data);
+function saveGuestOrderAccess(record){
+  const records=guestOrderAccess.filter(item=>item.id!==Number(record.id));
+  records.push({id:Number(record.id),token:record.token,code:String(record.code||'')});
+  guestOrderAccess=records.slice(-12);
+  try{localStorage.setItem(GUEST_ORDER_STORAGE_KEY,JSON.stringify(guestOrderAccess))}catch{toast('This browser could not save the private order link. Keep this tab open to follow your order.')}
+}
+function guestOrderToken(orderId){return guestOrderAccess.find(item=>item.id===Number(orderId))?.token||''}
+async function refreshGuestOrders(){
+  if(state.user||!state.publicBrowse)return[];
+  const records=guestOrderAccess;
+  const results=await Promise.all(records.map(async record=>{
+    try{return (await api(`/api/guest/orders/${record.id}`,{method:'POST',body:json({token:record.token})})).order}
+    catch{return null}
+  }));
+  state.orders=results.filter(Boolean).sort((a,b)=>b.id-a.id);
+  return state.orders;
+}
 function renderRunnerSharePage(orderId,tokenValid=true){
   document.body.classList.add('runner-tracking-page');
   root.innerHTML=`<section class="runner-share-page"><header class="runner-share-brand"><a href="/" aria-label="BiteHub home"><img src="assets/bitehub-icon.png" alt=""><span><strong>BiteHub</strong><small>PALAWAN NATIONAL SCHOOL</small></span></a><span class="runner-share-live"><i></i>Delivery tracking</span></header><main class="runner-share-card"><span class="eyebrow">PNS RUNNER LINK · ORDER #${Number(orderId)||'—'}</span><div class="runner-share-illustration" aria-hidden="true"><span>📍</span><i></i><b>↗</b></div><h1>Share your live location</h1><p class="runner-share-lead">The customer can follow your delivery on the PNS campus map while you bring their order over.</p><div class="runner-share-status" id="runner-share-status" role="status" aria-live="polite">${tokenValid?'Tap start when you are ready. Your phone will ask to use its location.':'This runner link is incomplete. Ask the stall owner for a new link.'}</div><div class="runner-share-actions"><button type="button" class="button button-primary" data-runner-share-start ${tokenValid?'':'disabled'}>Start sharing location <span aria-hidden="true">→</span></button><button type="button" class="button button-outline" data-runner-share-stop hidden>Pause sharing</button></div><p class="runner-share-guidance">Updates about every 5 seconds while this page is open. Keep GPS enabled and leave this screen open during delivery. Phone location sharing requires a secure HTTPS connection.</p><div class="runner-share-privacy">🔒 Location is shared only with the customer and stall for this active order.</div></main><footer>Made for the PNS community · BiteHub</footer></section>`;
@@ -212,10 +260,10 @@ function productTags(product){
   return `${dietary.map(tag=>`<span class="product-tag dietary-tag">${esc(tag)}</span>`).join('')}${allergens.length?`<span class="product-tag allergen-tag">Contains ${esc(allergens.join(', '))}</span>`:''}`;
 }
 function addCatalogControls(){
-  const result=$('.menu-controls .result-count');if(!result)return;
+  const container=$('.catalog-filter-options');if(!container)return;
   const stalls=[...new Map(state.products.map(product=>[product.stall_id,product.stall_name])).entries()];
   const stallOptions=stalls.map(([id,name])=>`<option value="${id}" ${state.stallFilter===String(id)?'selected':''}>${esc(name)}</option>`).join('');
-  result.insertAdjacentHTML('beforebegin',`<label class="catalog-select">Stall<select id="stall-filter"><option value="All">All stalls</option>${stallOptions}</select></label><label class="catalog-select">Dietary<select id="dietary-filter"><option value="All">Any</option>${dietaryOptions.map(([value,label])=>`<option value="${value}" ${state.dietaryFilter===value?'selected':''}>${label}</option>`).join('')}</select></label><label class="catalog-select">Avoid<select id="allergen-filter"><option value="All">No filter</option>${allergenOptions.map(([value,label])=>`<option value="${value}" ${state.allergenFilter===value?'selected':''}>${label}</option>`).join('')}</select></label><small class="allergen-disclaimer">Allergen details are stall-provided; confirm directly when needed.</small>`);
+  container.innerHTML=`<label class="catalog-select">Stall<select id="stall-filter"><option value="All">All stalls</option>${stallOptions}</select></label><label class="catalog-select">Dietary<select id="dietary-filter"><option value="All">Any</option>${dietaryOptions.map(([value,label])=>`<option value="${value}" ${state.dietaryFilter===value?'selected':''}>${label}</option>`).join('')}</select></label><label class="catalog-select">Avoid<select id="allergen-filter"><option value="All">No filter</option>${allergenOptions.map(([value,label])=>`<option value="${value}" ${state.allergenFilter===value?'selected':''}>${label}</option>`).join('')}</select></label>`;
 }
 function decorateProductCards(){
   root.querySelectorAll('.product-card').forEach(card=>{
@@ -227,6 +275,8 @@ function decorateProductCards(){
     if(stall){stall.setAttribute('role','button');stall.setAttribute('tabindex','0');stall.setAttribute('data-stall-profile',product.stall_id);stall.setAttribute('aria-label',`Open ${product.stall_name} stall profile`);stall.innerHTML=`<span class="stall-mini-logo">${product.stall_logo_url?`<img src="${esc(product.stall_logo_url)}" alt="">`:`${esc(product.stall_name.trim().charAt(0).toUpperCase())}`}</span><span>${esc(product.stall_name)}</span>`;stall.insertAdjacentHTML('afterend',`<small class="product-service-note">${product.stall_open?`Open now · ${esc(product.opens_at)}–${esc(product.closes_at)} PHT`:`Closed · opens ${esc(product.opens_at)} PHT`}</small>`)}
     const footer=card.querySelector('.product-bottom');
     if(productTags(product))footer?.insertAdjacentHTML('beforebegin',`<div class="product-tag-summary">${productTags(product)}</div>`);
+    const stock=Number(product.stock_count),artwork=card.querySelector('.product-art-trigger');
+    if(product.available&&Number.isFinite(stock)&&stock>0&&stock<3&&artwork&&!artwork.querySelector('.product-stock-urgency'))artwork.insertAdjacentHTML('afterbegin','<small class="product-stock-urgency" aria-label="Almost sold out. Only '+stock+' left. Buy now"><b>ALMOST GONE</b><span>Buy now · '+stock+' left</span></small>');
     const add=card.querySelector('[data-add]');
     if(add){
       const closed=!product.stall_open;
@@ -238,10 +288,15 @@ function decorateProductCards(){
     }
   });
 }
+function renderMarketCategories(){
+  const categories=[['All','🍽️','All food'],['Meals','🍱','Meals'],['Snacks','🍟','Snacks'],['Drinks','🥤','Drinks']];
+  return `<section class="market-category-section" aria-labelledby="market-category-title"><div class="market-category-heading"><div><span class="eyebrow">BROWSE BY CRAVING</span><h2 id="market-category-title">Explore the campus market</h2></div><p>Quick picks from PNS stalls</p></div><div class="market-category-rail" role="group" aria-label="Browse campus food categories">${categories.map(([category,emoji,label])=>{const count=category==='All'?state.products.length:state.products.filter(item=>item.category===category).length;const sample=category==='All'?state.products.find(item=>item.photo_url):state.products.find(item=>item.category===category&&item.photo_url);const art=sample?.photo_url?`<img src="${esc(sample.photo_url)}" alt="" loading="lazy">`:`<span aria-hidden="true">${emoji}</span>`;const disabled=category!=='All'&&count===0;return `<button type="button" class="market-category-tile ${state.filter===category?'is-active':''}" data-filter="${category}" aria-pressed="${state.filter===category}" aria-label="${label}, ${count} menu ${count===1?'item':'items'}" ${disabled?'disabled':''}><span class="market-category-art">${art}</span><strong>${label}</strong><small>${count?`${count} ${count===1?'pick':'picks'}`:'No items yet'}</small></button>`}).join('')}</div></section>`;
+}
 function renderFeaturedPicks(){
   const picks=state.featuredProducts;
-  if(!picks.length)return'';
-  return `<section class="featured-section" aria-labelledby="featured-title"><div class="featured-heading"><div><span class="eyebrow">FRESH FINDS AROUND CAMPUS</span><h2 id="featured-title">Today’s Campus Picks <span aria-hidden="true">✦</span></h2><p>Stall-owner favorites, featured for the next 24 hours.</p></div><div class="featured-controls"><button type="button" class="featured-control" data-feature-move="-1" aria-label="Previous campus picks">←</button><button type="button" class="featured-control" data-feature-move="1" aria-label="Next campus picks">→</button><button type="button" class="featured-motion" data-feature-pause aria-pressed="${state.featuredPaused}">${state.featuredPaused?'Play':'Pause'} rotation</button></div></div><div class="featured-rail" aria-label="Featured campus menu items">${picks.map(item=>`<article class="featured-card"><div class="featured-photo">${item.photo_url?`<img src="${esc(item.photo_url)}" alt="${esc(item.name)}" loading="lazy">`:`<span aria-hidden="true">${esc(item.emoji)}</span>`}<span class="featured-ribbon">✦ TODAY’S PICK</span></div><div class="featured-copy"><button class="featured-stall featured-stall-link" data-stall-profile="${item.stall_id}"><span class="stall-mini-logo">${item.stall_logo_url?`<img src="${esc(item.stall_logo_url)}" alt="">`:`${esc(item.stall_name.trim().charAt(0).toUpperCase())}`}</span>${esc(item.stall_name)}</button><h3>${esc(item.name)}</h3><p>${esc(item.description||'A fresh campus favorite, ready for your break.')}</p><div class="featured-buy"><strong>${money(item.price)}</strong><button class="button button-primary button-small" data-add="${item.id}" ${state.paused||!item.stall_open||!item.available?'disabled':''}>${state.paused?'Paused':!item.stall_open?'Closed':!item.available?'Sold out':'Add to bag +'}</button></div></div></article>`).join('')}</div><small class="featured-fairness">Featured stalls rotate daily · Each stall can feature one item at a time</small></section>`;
+  const categories=renderMarketCategories();
+  if(!picks.length)return categories;
+  return `${categories}<section class="featured-section" aria-labelledby="featured-title"><div class="featured-heading"><div><span class="eyebrow">TODAY AT THE PNS MARKET</span><h2 id="featured-title">Fresh from our stalls <span aria-hidden="true">✦</span></h2><p>Handpicked favorites from the PNS campus market.</p></div><div class="featured-controls"><button type="button" class="featured-control" data-feature-move="-1" aria-label="Previous campus picks">←</button><button type="button" class="featured-control" data-feature-move="1" aria-label="Next campus picks">→</button><button type="button" class="featured-motion" data-feature-pause aria-pressed="${state.featuredPaused}">${state.featuredPaused?'Play':'Pause'} rotation</button></div></div><div class="featured-rail" aria-label="Featured campus menu items">${picks.map(item=>`<article class="featured-card"><div class="featured-photo">${item.photo_url?`<img src="${esc(item.photo_url)}" alt="${esc(item.name)}" loading="lazy">`:`<span aria-hidden="true">${esc(item.emoji)}</span>`}<span class="featured-ribbon">✦ TODAY’S PICK</span></div><div class="featured-copy"><button class="featured-stall featured-stall-link" data-stall-profile="${item.stall_id}"><span class="stall-mini-logo">${item.stall_logo_url?`<img src="${esc(item.stall_logo_url)}" alt="">`:`${esc(item.stall_name.trim().charAt(0).toUpperCase())}`}</span>${esc(item.stall_name)}</button><h3>${esc(item.name)}</h3><p>${esc(item.description||'A fresh campus favorite, ready for your break.')}</p><div class="featured-buy"><strong>${money(item.price)}</strong><button class="button button-primary button-small" data-add="${item.id}" ${state.paused||!item.stall_open||!item.available?'disabled':''}>${state.paused?'Paused':!item.stall_open?'Closed':!item.available?'Sold out':'Add to bag +'}</button></div></div></article>`).join('')}</div><small class="featured-fairness">Featured stalls rotate daily · Each stall can feature one item at a time</small></section>`;
 }
 function buyerHeroItems(){
   const available=[...state.featuredProducts,...state.products].filter(item=>item.available!==false&&(item.stock_count==null||Number(item.stock_count)>0));
@@ -263,18 +318,33 @@ function startFeaturedMotion(){
 }
 function accountTools(){
   const tools=$('#account-tools');
-  if(!state.user){tools.hidden=!state.publicBrowse;tools.innerHTML=state.publicBrowse?`<button class="button button-outline button-compact" data-action="open-cart">Your bag${cartCount()?` (${cartCount()})`:''}</button><button class="button button-primary button-compact" data-action="guest-signin">Log in to order</button>`:'';closeSidebar();updateCartShortcut();return}
+  if(!state.user){const bagCount=cartCount();tools.hidden=!state.publicBrowse;tools.innerHTML=state.publicBrowse?`<button class="sidebar-menu-button guest-menu-trigger" type="button" data-action="open-sidebar" aria-label="Open guest menu" aria-expanded="${state.sidebarOpen}"><span></span><span></span><span></span><b>Menu</b></button><span class="guest-mode-pill">Guest ordering</span><button class="button button-outline button-compact guest-orders-button" type="button" data-workspace-role="buyer" data-workspace-view="orders" aria-label="Open my orders">My orders${state.orders.length?` (${state.orders.length})`:''}</button><button class="button button-primary button-compact header-bag" type="button" data-action="open-cart" aria-label="Open your bag${bagCount?`, ${bagCount} item${bagCount===1?'':'s'}`:''}"><span class="header-bag-label">Your bag</span>${bagCount?`<span class="header-bag-count" aria-hidden="true">${bagCount}</span>`:''}</button>`:'';renderSidebar();updateCartShortcut();return}
   tools.hidden=false;
   const school=state.user.school_name||'Palawan National School';
   const count=cartCount();
   const bagButton=state.user.role==='buyer'?`<button class="button button-outline button-compact header-bag" type="button" data-action="open-cart" aria-label="Open your bag${count?`, ${count} item${count===1?'':'s'}`:''}"><span class="header-bag-label">Your bag</span>${count?`<span class="header-bag-count" aria-hidden="true">${count}</span>`:''}</button>`:'';
-  tools.innerHTML=`<button class="sidebar-menu-button" type="button" data-action="open-sidebar" aria-label="Open dashboard menu" aria-expanded="${state.sidebarOpen}"><span></span><span></span><span></span></button>${bagButton}<div class="account-chip"><span class="avatar">${state.user.profile_photo_url?`<img src="${esc(state.user.profile_photo_url)}" alt="">`:esc(state.user.name.trim().charAt(0).toUpperCase())}</span><span><strong>${esc(state.user.name)}</strong><small>${esc(roleLabel[state.user.role])} · ${esc(school)}${state.user.stall_name?` · ${esc(state.user.stall_name)}`:''}</small></span></div>`;
+  tools.innerHTML=`<button class="sidebar-menu-button" type="button" data-action="open-sidebar" aria-label="Open dashboard menu" aria-expanded="${state.sidebarOpen}"><span></span><span></span><span></span><b>Dashboard</b></button>${bagButton}<div class="account-chip"><span class="avatar">${state.user.profile_photo_url?`<img src="${esc(state.user.profile_photo_url)}" alt="">`:esc(state.user.name.trim().charAt(0).toUpperCase())}</span><span><strong>${esc(state.user.name)}</strong><small>${esc(roleLabel[state.user.role])} · ${esc(school)}${state.user.stall_name?` · ${esc(state.user.stall_name)}`:''}</small></span></div>`;
   renderSidebar();
   updateCartShortcut();
 }
 function renderSidebar(){
   const user=state.user,account=$('#sidebar-account'),navigation=$('#sidebar-navigation');
-  if(!user||!account||!navigation)return;
+  if(!account||!navigation)return;
+  const dangerZone=$('.sidebar-danger-zone'),logoutButton=$('.sidebar-logout'),settingsWrap=$('.sidebar-settings-wrap');
+  if(dangerZone)dangerZone.hidden=!user;
+  if(logoutButton)logoutButton.hidden=!user;
+  if(!user){
+    if(!state.publicBrowse)return;
+    const ordersCount=state.orders.filter(order=>!['completed','declined'].includes(order.status)).length;
+    account.innerHTML=`<div class="guest-sidebar-card"><span class="guest-sidebar-icon" aria-hidden="true">⌂</span><span><strong>Browsing as a guest</strong><small>No customer account needed to explore PNS stalls.</small></span></div>`;
+    navigation.innerHTML=`<button type="button" class="sidebar-nav-link ${state.buyerView==='menu'?'is-active':''}" data-workspace-role="buyer" data-workspace-view="menu" ${state.buyerView==='menu'?'aria-current="page"':''}><span class="sidebar-link-icon" aria-hidden="true">⌕</span><span>Browse food</span></button><button type="button" class="sidebar-nav-link ${state.buyerView==='orders'?'is-active':''}" data-workspace-role="buyer" data-workspace-view="orders" ${state.buyerView==='orders'?'aria-current="page"':''}><span class="sidebar-link-icon" aria-hidden="true">↗</span><span>My orders</span>${ordersCount?`<small>${ordersCount}</small>`:''}</button><button type="button" class="sidebar-nav-link guest-owner-link" data-action="guest-owner-login"><span class="sidebar-link-icon" aria-hidden="true">⌂</span><span>Stall owner sign in</span><span aria-hidden="true">→</span></button>`;
+    if(settingsWrap)settingsWrap.hidden=false;
+    const settings=$('#sidebar-settings-panel'),settingsButton=$('#sidebar-settings-toggle');
+    if(settings)settings.hidden=!state.sidebarSettingsOpen;
+    if(settingsButton)settingsButton.setAttribute('aria-expanded',String(state.sidebarSettingsOpen));
+    renderNotificationSettings();applyTheme();syncSidebarState();return;
+  }
+  if(settingsWrap)settingsWrap.hidden=false;
   const school=user.school_name||'Palawan National School';
   const initial=esc(user.name.trim().charAt(0).toUpperCase()),profilePhoto=user.profile_photo_url?`<img src="${esc(user.profile_photo_url)}" alt="">`:initial;
   account.innerHTML=`<div class="sidebar-account-main"><span class="sidebar-avatar">${profilePhoto}</span><span class="sidebar-account-copy"><strong>${esc(user.name)}</strong><small>${esc(roleLabel[user.role])} · ${esc(school)}</small></span><button type="button" class="sidebar-profile-trigger" data-action="toggle-profile" aria-expanded="${state.sidebarProfileOpen}">${state.sidebarProfileOpen?'Close':'Edit profile'}</button></div><section class="sidebar-profile-editor" ${state.sidebarProfileOpen?'':'hidden'} aria-label="Edit your profile"><form class="sidebar-profile-form" data-form="user-profile"><div class="sidebar-profile-photo-row"><span class="sidebar-profile-avatar">${profilePhoto}</span><label class="sidebar-photo-picker"><input name="photo_file" type="file" accept="image/jpeg,image/png,image/webp"><span>Choose photo</span><small>JPG, PNG, WebP · max 2 MB</small></label></div><label class="sidebar-profile-name">Display name<input name="name" autocomplete="name" maxlength="80" required value="${esc(user.name)}"></label>${user.profile_photo_url?'<label class="sidebar-profile-remove"><input name="remove_photo" type="checkbox" value="true"><span>Remove current photo</span></label>':''}<button class="button button-primary button-small" type="submit">Save profile</button></form></section>`;
@@ -297,7 +367,7 @@ function renderSidebar(){
 function syncSidebarState(){
   const sidebar=$('#app-sidebar'),backdrop=$('#sidebar-backdrop'),button=$('.sidebar-menu-button');
   if(!sidebar||!backdrop)return;
-  const open=Boolean(state.sidebarOpen&&state.user);
+  const open=Boolean(state.sidebarOpen&&(state.user||state.publicBrowse));
   sidebar.classList.toggle('is-open',open);
   sidebar.setAttribute('aria-hidden',String(!open));
   sidebar.inert=!open;
@@ -347,13 +417,15 @@ async function refresh(includeMenu=true){
     if(!state.publicBrowse){renderAuthWall();return}
     if(refreshInFlight)return;
     refreshInFlight=true;
-    try{const menu=await api('/api/products');state.products=menu.products;state.featuredProducts=menu.featured_products||[];state.paused=menu.ordering_paused;state.orders=[];render()}
+    const finishLoading=beginSlowLoadFeedback();
+    try{const menu=await api('/api/products');state.products=menu.products;state.featuredProducts=menu.featured_products||[];state.paused=menu.ordering_paused;await refreshGuestOrders();render()}
     catch(error){renderError(error.message)}
-    finally{refreshInFlight=false}
+    finally{refreshInFlight=false;finishLoading()}
     return;
   }
   if(refreshInFlight)return;
   refreshInFlight=true;
+  const finishLoading=beginSlowLoadFeedback();
   const userId=state.user.id;
   const role=state.user.role,now=Date.now();
   const loadMenu=includeMenu||now-lastMenuRefresh>=15000;
@@ -386,7 +458,7 @@ async function refresh(includeMenu=true){
       toast(changedOrders.length===1?`Order #${order.id} is now ${status.toLowerCase()}.`:`You have ${changedOrders.length} order status updates.`);
     }
   }catch(error){if(state.user?.id===userId){if(orderBaselineUserId===userId)toast(`Connection interrupted. Showing the last loaded information; retrying automatically. ${error.message}`);else renderError(error.message)}}
-  finally{refreshInFlight=false}
+  finally{refreshInFlight=false;finishLoading()}
 }
 function startAutoRefresh(){
   clearTimeout(refreshTimer);
@@ -400,6 +472,16 @@ function startAutoRefresh(){
   };
   schedule(document.visibilityState==='visible'?(state.user?3500+Math.random()*1000:8000+Math.random()*2000):30000);
 }
+async function continueAsGuest(){
+  const result=await api('/api/guest/session',{method:'POST',body:json({name:state.guestName})});
+  state.guestSessionId=result.guest_session?.id||null;
+  clearTimeout(refreshTimer);
+  state.publicBrowse=true;state.authRole='buyer';state.buyerView='menu';
+  document.querySelector('#app')?.classList.remove('auth-open');
+  history.pushState({workspace:'buyer',view:'menu'},'','#menu');
+  await refresh();startAutoRefresh();
+  toast(`Welcome, ${state.guestName}. Add items to your bag when you’re ready to order.`);
+}
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&(state.user||state.publicBrowse)){clearTimeout(refreshTimer);refresh(false).finally(startAutoRefresh)}});
 const workspaceHashMap={'#menu':['buyer','menu'],'#buyer-orders':['buyer','orders'],'#owner-dashboard':['owner','dashboard'],'#owner-orders':['owner','orders'],'#owner-menu':['owner','menu'],'#owner-stall':['owner','stall'],'#owner-insights':['owner','insights'],'#admin-overview':['admin','overview'],'#admin-stalls':['admin','stalls'],'#admin-orders':['admin','orders'],'#admin-reports':['admin','reports'],'#admin-accounts':['admin','accounts']};
 function applyWorkspaceHash(){
@@ -408,7 +490,7 @@ function applyWorkspaceHash(){
   if(!target){if(state.user?.role==='buyer'||(!state.user&&state.publicBrowse))state.buyerView='menu';if(state.user?.role==='owner')state.ownerView='dashboard';if(state.user?.role==='admin')state.adminView='overview'}
   else{
   if(role==='buyer'&&state.user?.role==='buyer')state.buyerView=view;
-  else if(role==='buyer'&&!state.user&&state.publicBrowse)state.buyerView='menu';
+  else if(role==='buyer'&&!state.user&&state.publicBrowse)state.buyerView=view;
   if(role==='owner'&&state.user?.role==='owner')state.ownerView=view;
   if(role==='admin'&&state.user?.role==='admin')state.adminView=view;
   }
@@ -418,6 +500,8 @@ window.addEventListener('popstate',()=>{if((state.user||state.publicBrowse)&&app
 window.addEventListener('hashchange',()=>{if((state.user||state.publicBrowse)&&applyWorkspaceHash())render()});
 function renderAuthWall(mode='front',role=state.authRole){
   if(mode==='login')mode='front';
+  if(mode==='choose'||mode==='login-choose'){mode='front';role='owner'}
+  if(mode==='signup')role='owner';
   state.authRole=role;
   accountTools();
   document.querySelector('#app')?.classList.add('auth-open');
@@ -426,32 +510,70 @@ function renderAuthWall(mode='front',role=state.authRole){
   const loginChoosing=mode==='login-choose';
   const frontLanding=mode==='front';
   const choosingRole=choosing||loginChoosing;
-  const frontCommunityBadge='<div class="auth-front-community"><img src="assets/palawan-national-school-logo.webp" alt=""><span><strong>Made for the PNS community</strong><small>Students · teachers · staff · stall owners</small></span></div>';
+  const adminEntry=role==='admin';
+  const frontCommunityBadge='<button type="button" class="auth-front-community" data-auth-mode="login" data-auth-role="'+(adminEntry?'buyer':'admin')+'" aria-label="'+(adminEntry?'Return to customer sign-in':'School administrator sign-in')+'"><img src="assets/palawan-national-school-logo.webp" alt=""><span><strong>Made for the PNS community</strong><small>Students · teachers · staff · stall owners</small></span></button>';
   const chooserSchoolBadge='<div class="chooser-school-badge"><img src="assets/palawan-national-school-logo.webp" alt=""><span><strong>Palawan National School</strong><small>Community food hub</small></span></div>';
   const masthead=`<div class="auth-masthead"><a class="brand auth-brand" href="#home" data-auth-mode="front" aria-label="BiteHub home"><img class="brand-mark auth-round-logo" src="assets/bitehub-icon.png?v=pns-palette-20261017" alt=""><img class="auth-wordmark" src="assets/bitehub-wordmark.png?v=pns-palette-20261017" alt="BiteHub"></a>${frontLanding?frontCommunityBadge:''}${choosingRole?chooserSchoolBadge:''}</div>`;
   const buyerArt=`<svg viewBox="0 0 100 100" aria-hidden="true"><path d="M19 43h62l-5 39H24z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M31 42c2-13 9-20 19-20s17 7 19 20" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M33 57h34M38 67h24" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><circle cx="50" cy="34" r="5" fill="#FAB2A4"/></svg>`;
   const ownerArt=`<svg viewBox="0 0 100 100" aria-hidden="true"><path d="M20 42h60v39H20z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M16 42l8-20h52l8 20" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M17 42c0 7 11 9 16 2 4 7 13 7 17 0 4 7 13 7 17 0 5 7 16 5 16-2" fill="#FAB2A4" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/><path d="M39 81V59h22v22M28 54h6m32 0h6" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
   const adminArt=`<svg viewBox="0 0 100 100" aria-hidden="true"><path d="M18 36l32-16 32 16v45H18z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M29 44h10v10H29zM45 44h10v10H45zM61 44h10v10H61zM29 61h10v10H29zM45 61h10v10H45zM61 61h10v10H61z" fill="#8ED0C2" stroke="currentColor" stroke-width="2"/><path d="M44 81V70h12v11" fill="none" stroke="currentColor" stroke-width="3"/></svg>`;
   const roleCard=({role,index,tag,title,description,art,cta})=>{
-    const action=loginChoosing?('data-auth-mode="front" data-auth-role="'+role+'"'):(role==='admin'?('data-auth-mode="front" data-auth-role="'+role+'"'):('data-signup-role="'+role+'"'));
+    const action=role==='buyer'?'data-action="continue-as-guest"':loginChoosing?('data-auth-mode="front" data-auth-role="'+role+'"'):(role==='admin'?('data-auth-mode="front" data-auth-role="'+role+'"'):('data-signup-role="'+role+'"'));
     return `<button class="role-choice role-${role}" ${action}><span class="role-card-top"><span class="role-kicker"><i>${index}</i>${tag}</span><span class="role-card-arrow" aria-hidden="true">→</span></span><span class="role-art">${art}</span><span class="role-copy"><strong>${title}</strong><small>${description}</small></span><span class="role-choice-action"><span>${cta}</span><b>→</b></span></button>`;
   };
   const roleCards=[
-    {role:'buyer',index:'01',tag:loginChoosing?'CUSTOMER':'ORDER FOOD',title:'Customer',description:'Find a favorite, order a break-time bite, and track pickup.',art:buyerArt,cta:loginChoosing?'Log in as customer':'Create a customer account'},
-    {role:'owner',index:'02',tag:loginChoosing?'STALL OWNER':'SELL AT PNS',title:'Stall Owner',description:'Share your menu, manage orders, and serve the PNS community.',art:ownerArt,cta:loginChoosing?'Log in as stall owner':'Create a stall account'},
-    {role:'admin',index:'03',tag:'SCHOOL TEAM',title:'School Admin',description:'Keep campus stalls and school ordering organized.',art:adminArt,cta:'Log in as admin'}
+    {role:'owner',index:'01',tag:loginChoosing?'STALL OWNER':'SELL AT PNS',title:'Stall Owner',description:'Share your menu, manage orders, and serve the PNS community.',art:ownerArt,cta:loginChoosing?'Log in as stall owner':'Create a stall account'},
   ].map(roleCard).join('');
-  const frontRoleOptions=[['buyer',buyerArt,'Customer','Order food and explore menus'],['owner',ownerArt,'Stall Owner','Manage your menu and orders'],['admin',adminArt,'School Admin','Oversee stalls and manage the platform']].map(function(item){
+  const frontRoleOptions=[['owner',ownerArt,'Stall Owner','Sign in with your email and password']].map(function(item){
     const selected=role===item[0];
     return '<button type="button" class="front-role-choice role-'+item[0]+(selected?' is-selected':'')+'" data-front-role="'+item[0]+'" aria-pressed="'+selected+'" aria-label="'+item[2]+(selected?' selected':'')+'"><span class="front-role-icon">'+item[1]+'</span><span class="front-role-copy"><strong>'+item[2]+'</strong><small>'+item[3]+'</small></span><span class="front-role-arrow" aria-hidden="true">'+(selected?'✓':'→')+'</span></button>';
   }).join('');
-  const frontRoleLanding='<div class="auth-front-layout"><section class="auth-front-copy"><span class="front-eyebrow">PALAWAN NATIONAL SCHOOL · CAMPUS FOOD HUB</span><h1>Good food.<br><span>Better breaks.</span><i aria-hidden="true">✦</i></h1><p>Your campus favorites, all in one place. Discover stalls, explore menus, and make every school break delicious.</p><div class="auth-front-note"><span aria-hidden="true">✳</span><span>Feeling a brighter break <strong>at PNS</strong></span></div></section><section class="auth-card auth-front-card"><header class="auth-front-heading"><span class="front-sparkle" aria-hidden="true">✦</span><span class="eyebrow">PNS FOOD HUB</span><h2>Welcome back!</h2><p>Log in to your BiteHub account</p></header><div class="auth-front-role-heading"><strong>Choose your sign-in role</strong><small>Select the PNS account you want to open</small></div><div class="auth-front-role-list" role="group" aria-label="Choose your sign-in role">'+frontRoleOptions+'</div><div id="auth-form-slot"></div><div class="auth-front-secure"><span aria-hidden="true">▣</span><span>Secure sign in</span><i aria-hidden="true">·</i><span>PNS Food Hub</span></div></section></div>';
+  const frontRoleLanding='<div class="auth-front-layout'+(role==='admin'?' admin-login-open':'')+'"><section class="auth-front-copy"><span class="front-eyebrow">PALAWAN NATIONAL SCHOOL · CAMPUS FOOD MARKET</span><h1>Good food.<br><span>Better breaks.</span><i aria-hidden="true">✦</i></h1><p>Discover PNS stalls, browse their menus, and find a new favorite for your next school break.</p></section><section class="auth-card auth-front-card"><header class="auth-front-heading"><span class="front-sparkle" aria-hidden="true">✦</span><span class="eyebrow">YOUR PNS FOOD MARKET</span><h2>Welcome to BiteHub!</h2><p>Browse school stalls and order as a guest, or sign in to manage your stall.</p></header><div class="auth-front-role-heading"><strong>Continue as a guest</strong><small>Or sign in as a stall owner.</small></div><div class="auth-front-role-list" role="group" aria-label="Stall owner sign in">'+frontRoleOptions+'</div><div id="auth-form-slot"></div><div class="auth-front-secure"><span aria-hidden="true">▣</span><span>Secure sign in</span><i aria-hidden="true">·</i><span>PNS Food Hub</span></div></section></div>';
   const roleLanding=frontLanding?frontRoleLanding:choosingRole?`<section class="role-picker-panel" aria-labelledby="role-picker-title"><div class="role-path-heading"><div><span class="eyebrow">${loginChoosing?'SIGN IN':'PNS COMMUNITY'}</span><h2 id="role-picker-title">${loginChoosing?'Choose your workspace':'Choose your path'}</h2></div><p>${loginChoosing?'Select the account you use for BiteHub at PNS.':'Choose the space that fits you at PNS.'}</p></div><div class="role-card-grid">${roleCards}</div><p class="role-login">${loginChoosing?'New to BiteHub?':'Already have an account?'} <button class="text-button" data-auth-mode="${loginChoosing?'choose':'front'}">${loginChoosing?'Create an account':'Log in'}</button></p></section>`:`<header class="role-heading role-auth-heading"><span class="eyebrow">PNS FOOD HUB</span><h1>${mode==='login'?'Welcome back':'Join BiteHub'}</h1><p>${mode==='login'?'Log in to continue to your PNS workspace.':'Create an account for Palawan National School’s BiteHub.'}</p></header><section class="auth-card"><button class="text-button auth-back" data-auth-mode="choose">← Choose a role</button><div id="auth-form-slot"></div><p class="auth-footnote">Accounts, orders, and menus are saved to this server.</p></section>`;
-  const frontTopAction=frontLanding?'<button class="front-signup-link" data-auth-mode="choose">New here? <strong>Create an account</strong><span aria-hidden="true">→</span></button>':'';
+   const frontTopAction=frontLanding?'<button class="front-signup-link" data-auth-mode="signup" data-auth-role="owner">Stall owner? <strong>Create account</strong><span aria-hidden="true">→</span></button>':'';
   const chooserBackAction=choosingRole?'<button type="button" class="chooser-back-link" data-auth-mode="front"><span aria-hidden="true">←</span> Back to front page</button>':'';
   root.innerHTML='<section class="role-home '+(frontLanding?'role-home--front':choosingRole?'role-home--chooser':'role-home--auth')+'">'+masthead+frontTopAction+chooserBackAction+roleLanding+'</section>';
-  if(!choosingRole)renderAuthForm(frontLanding?'login':mode,role,frontLanding);
-}function renderAuthForm(mode,role=state.authRole,front=false){
+  const authBack=$('.auth-back');
+  if(authBack){authBack.dataset.authMode='front';authBack.dataset.authRole='owner';authBack.textContent='← Back to sign in'}
+  if(frontLanding&&role==='buyer')renderGuestWelcome();
+  else if(!choosingRole)renderAuthForm(frontLanding?'login':mode,role,frontLanding);
+  if(frontLanding){
+    const heading=$('.auth-front-heading h2'),intro=$('.auth-front-heading p');
+    if(heading)heading.textContent=role==='admin'?'School admin sign in':role==='owner'?'Stall owner sign in':'Explore as a guest';
+     if(intro)intro.textContent=role==='admin'?'Sign in to manage the PNS food marketplace.':role==='owner'?'Sign in to manage your stall and orders.':'Enter your name to browse PNS menus and order from a stall. No customer account needed.';
+    if(role==='buyer'){
+      const guestForm=$('#auth-form-slot .guest-entry-form');
+      guestForm?.classList.remove('guest-welcome');
+      guestForm?.querySelector('.eyebrow')?.remove();
+      guestForm?.querySelector('h3')?.remove();
+      guestForm?.querySelector('p')?.remove();
+    }
+    $('.auth-front-role-heading')?.remove();
+    $('.auth-front-role-list')?.remove();
+    const pathSwitch=document.createElement('button');
+    pathSwitch.type='button';
+    pathSwitch.className='auth-front-path-switch';
+    pathSwitch.dataset.authMode='front';
+    pathSwitch.dataset.authRole=role==='buyer'?'owner':'buyer';
+    const pathLead=document.createElement('span');
+    pathLead.textContent=role==='buyer'?'Stall owner?':'Just browsing?';
+    const pathAction=document.createElement('strong');
+    pathAction.textContent=role==='buyer'?'Sign in':'Continue as a guest';
+    const pathArrow=document.createElement('span');
+    pathArrow.setAttribute('aria-hidden','true');
+    pathArrow.textContent='→';
+    pathSwitch.append(pathLead,pathAction,pathArrow);
+    $('#auth-form-slot')?.after(pathSwitch);
+    const secureIcon=$('.auth-front-secure span:first-child'),secureLabel=$('.auth-front-secure span:nth-child(2)');
+    if(secureIcon&&role==='buyer')secureIcon.textContent='✓';
+    if(secureLabel)secureLabel.textContent=role==='buyer'?'No account needed':'Secure sign in';
+  }
+}
+function renderGuestWelcome(){
+  const slot=$('#auth-form-slot');if(!slot)return;
+   slot.innerHTML=`<form class="guest-welcome guest-entry-form" data-form="guest-entry"><span class="eyebrow">QUICK · EASY · NO CUSTOMER ACCOUNT</span><h3>Ready for your next break?</h3><p>Enter your name to browse. BiteHub saves it in a temporary guest session; your order details are saved when you order.</p><label class="guest-name-field">Your name<input name="guest_name" maxlength="80" autocomplete="name" required value="${esc(state.guestName)}" placeholder="What name should we use?"></label><button type="submit" class="button button-primary button-wide">Browse stalls <span aria-hidden="true">→</span></button></form>`;
+}
+function renderAuthForm(mode,role=state.authRole,front=false){
   const slot=$('#auth-form-slot');if(!slot)return;
   const roleName=role==='owner'?'PNS stall owner':role==='runner'?'school runner':role==='admin'?'administrator':'PNS customer';
   const roleCopy=role==='owner'?'Set up your stall for the Palawan National School community.':role==='runner'?'Create your account to receive PNS deliveries.':role==='admin'?'Manage Palawan National School stalls and ordering.':'Browse PNS menus and follow your orders.';
@@ -461,12 +583,12 @@ function renderAuthWall(mode='front',role=state.authRole){
     const heading=owner?'Create your stall owner account':'Create your customer account';
     const details=owner?`<label>Stall name<input name="stall_name" maxlength="80" required placeholder="Your stall name"></label>`:`<label>Grade &amp; section <span class="field-hint">Optional · students only</span><input name="grade_section" maxlength="80" placeholder="e.g. Grade 12 - ABM Perseverance"></label>`;
     const community=owner?'For stall owners serving the PNS community.':'Students, teachers, staff, and other PNS community members can join.';
-    slot.innerHTML=`<span class="eyebrow">${esc(roleName)}</span><h2>${heading}</h2><p class="form-intro">${esc(roleCopy)}</p><form class="stack-form signup-form" data-form="signup"><input type="hidden" name="role" value="${owner?'owner':'buyer'}"><section class="signup-person-section"><div class="signup-step-heading"><span>01</span><div><h3>Your account</h3><p>${community}</p></div></div><label>Email address<input name="email" type="email" autocomplete="email" maxlength="254" required placeholder="you@example.com"></label><label>Your name<input name="name" autocomplete="name" maxlength="80" required placeholder="Full name"></label><label>Password <span class="field-hint">At least 10 characters</span><input name="password" type="password" autocomplete="new-password" minlength="10" required></label>${details}<button class="button button-primary button-wide">Create account <span>→</span></button></section></form><p class="auth-switch">Already have an account? <button class="text-button" data-auth-mode="front">Log in</button></p>`;
+    slot.innerHTML=`<span class="eyebrow">${esc(roleName)}</span><h2>${heading}</h2><p class="form-intro">${esc(roleCopy)}</p><form class="stack-form signup-form" data-form="signup"><input type="hidden" name="role" value="${owner?'owner':'buyer'}"><section class="signup-person-section"><div class="signup-step-heading"><span>01</span><div><h3>Your account</h3><p>${community}</p></div></div><label>Email address<input name="email" type="email" autocomplete="email" maxlength="254" required placeholder="you@example.com"></label><label>Your name<input name="name" autocomplete="name" maxlength="80" required placeholder="Full name"></label><label>Password <span class="field-hint">At least 10 characters</span><input name="password" type="password" autocomplete="new-password" minlength="10" required></label>${details}<button class="button button-primary button-wide" type="submit">${owner?'Create stall account':'Create account'} <span>→</span></button><p class="auth-front-status" role="alert" aria-live="assertive"></p></section></form><p class="auth-switch">Already have an account? <button class="text-button" data-auth-mode="front">Log in</button></p>`;
     return;
   }
   if(front){
     const signInRole=role==='owner'?'Stall Owner':role==='admin'?'School Admin':'Customer';
-    slot.innerHTML=`<form class="stack-form auth-front-form" data-form="login"><input type="hidden" name="role" value="${esc(role)}"><label>Email address<span class="front-input-wrap"><span aria-hidden="true">✉</span><input name="email" type="email" autocomplete="username" maxlength="254" required placeholder="Email address"></span></label><label>Password<span class="front-input-wrap"><span aria-hidden="true">▣</span><input name="password" type="password" autocomplete="current-password" required placeholder="Password"><button class="password-visibility" type="button" data-toggle-password aria-label="Show password" aria-pressed="false"><span aria-hidden="true">Show</span></button></span></label><button class="button button-primary button-wide" type="submit">Log in as ${signInRole} <span aria-hidden="true">→</span></button><p class="auth-front-status" role="alert" aria-live="assertive"></p></form>`;
+    slot.innerHTML=`<form class="stack-form auth-front-form" data-form="login"><input type="hidden" name="role" value="${esc(role)}"><label>Email address<span class="front-input-wrap"><span aria-hidden="true">✉</span><input name="email" type="email" autocomplete="username" maxlength="254" required placeholder="you@example.com"></span></label><label>Password<span class="front-input-wrap"><span aria-hidden="true">▣</span><input name="password" type="password" autocomplete="current-password" required placeholder="Password"><button class="password-visibility" type="button" data-toggle-password aria-label="Show password" aria-pressed="false"><span aria-hidden="true">Show</span></button></span></label><button class="button button-primary button-wide" type="submit">Log in as ${signInRole} <span aria-hidden="true">→</span></button><p class="auth-front-status" role="alert" aria-live="assertive"></p><p class="auth-email-links-note">Email verification is not required. Password reset emails will be added later.</p></form>`;
     return;
   }
   slot.innerHTML='<span class="eyebrow">'+esc(roleName)+' workspace</span><h2>Welcome back.</h2><p class="form-intro">'+esc(loginCopy)+'</p><form class="stack-form" data-form="login"><label>Email address<input name="email" type="email" autocomplete="username" maxlength="254" required placeholder="you@example.com"></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button class="button button-primary button-wide">Log in <span>→</span></button></form><p class="auth-switch">New to BiteHub? <button class="text-button" data-auth-mode="choose">Choose your role</button></p>';
@@ -480,15 +602,18 @@ function workspaceNav(role,items,active=null){
 }
 function stat(label,value,note,icon){return `<article class="stat-card"><span class="stat-icon">${icon}</span><small>${esc(label)}</small><strong>${esc(value)}</strong><span class="stat-note">${esc(note)}</span></article>`}
 function orderCard(order){
+  const userRole=state.user?.role||'guest',customerView=userRole==='buyer'||userRole==='guest';
   const itemText=order.items.map(i=>`${i.quantity} × ${esc(i.name)}`).join(' · ');
+  const guestSchoolRoleNames={junior_student:'Junior high student',senior_student:'Senior high student',teacher:'Teacher',staff:'School staff'};
+  const guestDeliveryDetails=['owner','admin','runner'].includes(userRole)?order.is_guest&&order.fulfillment==='delivery'?`<p class="order-subline guest-delivery-summary"><strong>Delivery for:</strong> ${esc(guestSchoolRoleNames[order.guest_school_role]||'School community member')}${order.guest_grade?` · Grade ${esc(order.guest_grade)}`:''}${order.guest_section?` · ${order.guest_school_role==='teacher'||order.guest_school_role==='staff'?'Office':'Section'}: ${esc(order.guest_section)}`:''}</p>`:'':'';
   const progressSteps=order.fulfillment==='delivery'?['placed','confirmed','preparing','ready','out','completed']:['placed','confirmed','preparing','ready','completed'];
   const progressNames=order.fulfillment==='delivery'?['Received','Accepted','Preparing','Ready','On the way','Delivered']:['Received','Accepted','Preparing','Ready','Picked up'];
   const progressIndex=progressSteps.indexOf(order.status);
-  const progress=state.user.role==='buyer'&&order.status!=='declined'?`<ol class="order-progress" aria-label="Order progress: ${esc(statusLabel[order.status]||order.status)}">${progressSteps.map((step,index)=>`<li class="${index<progressIndex?'is-done':index===progressIndex?'is-current':''}" ${index===progressIndex?'aria-current="step"':''}><span>${index<progressIndex?'✓':index+1}</span><small>${progressNames[index]}</small></li>`).join('')}</ol>`:order.status==='declined'&&state.user.role==='buyer'?`<p class="order-declined" role="status">${order.pickup_offer_status==='declined'?'This order was cancelled because pickup at the stall did not work for you.':'This order was declined. Contact the stall if you need help.'}</p>`:'';
+  const progress=customerView&&order.status!=='declined'?`<ol class="order-progress" aria-label="Order progress: ${esc(statusLabel[order.status]||order.status)}">${progressSteps.map((step,index)=>`<li class="${index<progressIndex?'is-done':index===progressIndex?'is-current':''}" ${index===progressIndex?'aria-current="step"':''}><span>${index<progressIndex?'✓':index+1}</span><small>${progressNames[index]}</small></li>`).join('')}</ol>`:order.status==='declined'&&customerView?`<p class="order-declined" role="status">${order.pickup_offer_status==='declined'?'This order was cancelled because pickup at the stall did not work for you.':'This order was declined. Contact the stall if you need help.'}</p>`:'';
   const feedback=order.feedback?`<p class="order-feedback"><strong>Buyer feedback · ${'★'.repeat(order.feedback.rating)}${'☆'.repeat(5-order.feedback.rating)}</strong>${order.feedback.comment?`<span>${esc(order.feedback.comment)}</span>`:''}</p>`:'';
-  const feedbackForm=state.user.role==='buyer'&&order.status==='completed'&&!order.feedback?`<form class="feedback-form" data-form="feedback" data-order-id="${order.id}"><label>Rate this order<select name="rating" required><option value="">Choose 1-5</option><option value="5">5 · Great</option><option value="4">4 · Good</option><option value="3">3 · Okay</option><option value="2">2 · Poor</option><option value="1">1 · Bad</option></select></label><label>Comment <span class="field-hint">Optional</span><input name="comment" maxlength="500" placeholder="Tell the stall what went well"></label><button class="button button-outline button-small">Send feedback</button></form>`:'';
+  const feedbackForm=userRole==='buyer'&&order.status==='completed'&&!order.feedback?`<form class="feedback-form" data-form="feedback" data-order-id="${order.id}"><label>Rate this order<select name="rating" required><option value="">Choose 1-5</option><option value="5">5 · Great</option><option value="4">4 · Good</option><option value="3">3 · Okay</option><option value="2">2 · Poor</option><option value="1">1 · Bad</option></select></label><label>Comment <span class="field-hint">Optional</span><input name="comment" maxlength="500" placeholder="Tell the stall what went well"></label><button class="button button-outline button-small">Send feedback</button></form>`:'';
   let actions='';
-  if(state.user.role==='owner'){
+  if(userRole==='owner'){
     if(order.status==='placed')actions=`<button class="button button-primary button-small" data-order-action="confirm" data-id="${order.id}">Accept order</button><button class="button button-quiet button-small" data-order-action="decline" data-id="${order.id}">Decline</button>`;
     if(order.status==='confirmed')actions=`<button class="button button-primary button-small" data-order-action="prepare" data-id="${order.id}">Start preparing</button>`;
     if(order.status==='preparing')actions=`<button class="button button-primary button-small" data-order-action="ready" data-id="${order.id}">Mark ready</button>`;
@@ -498,12 +623,12 @@ function orderCard(order){
       actions=`<div class="runner-share-tools"><button class="button button-outline button-small" data-order-action="runner-link" data-id="${order.id}">${runnerLink?'Create a fresh runner link':'Create runner GPS link'}</button>${runnerLink?`<label class="runner-link-field">Share this private link with ${esc(order.runner||'the runner')}<input data-runner-link-value="${order.id}" readonly value="${esc(runnerLink)}"></label><button class="button button-outline button-small" type="button" data-copy-runner-link="${order.id}">Copy runner link</button><small>Valid for 12 hours. They open it on their phone and tap Start. A fresh link replaces this one.</small>`:''}</div><button class="button button-primary button-small" data-order-action="delivered" data-id="${order.id}">Confirm delivered</button>`;
     }
   }
-  if(state.user.role==='runner'){
+  if(userRole==='runner'){
     if(order.status==='ready')actions=`<button class="button button-primary button-small" data-order-action="out" data-id="${order.id}">Picked up</button>`;
     if(order.status==='out')actions=`<button class="button button-primary button-small" data-order-action="delivered" data-id="${order.id}">Mark delivered</button>`;
   }
-  if(state.user.role==='buyer'&&order.pickup_offer_status!=='pending'&&order.status==='ready'&&order.fulfillment==='pickup')actions=`<button class="button button-primary button-small" data-order-action="collect" data-id="${order.id}">Confirm pickup</button>`;
-  const estimate=order.estimated_ready_at&&['buyer','owner'].includes(state.user.role)&&['confirmed','preparing'].includes(order.status)?`<p class="order-estimate">${Date.parse(order.estimated_ready_at)<Date.now()?'Estimated time passed · check with stall':`Estimated ready ${new Date(order.estimated_ready_at).toLocaleTimeString('en-PH',{timeZone:'Asia/Manila',hour:'numeric',minute:'2-digit'})}`}</p>`:'';
+  if(customerView&&order.pickup_offer_status!=='pending'&&order.status==='ready'&&order.fulfillment==='pickup')actions=`<button class="button button-primary button-small" data-order-action="collect" data-id="${order.id}">Confirm pickup</button>`;
+  const estimate=order.estimated_ready_at&&['buyer','owner','guest'].includes(userRole)&&['confirmed','preparing'].includes(order.status)?`<p class="order-estimate">${Date.parse(order.estimated_ready_at)<Date.now()?'Estimated time passed · check with stall':`Estimated ready ${new Date(order.estimated_ready_at).toLocaleTimeString('en-PH',{timeZone:'Asia/Manila',hour:'numeric',minute:'2-digit'})}`}</p>`:'';
   const pickupTime=order.pickup_at?new Date(order.pickup_at).toLocaleTimeString('en-PH',{timeZone:'Asia/Manila',hour:'numeric',minute:'2-digit'}):null;
   const lastGpsTime=order.driver_updated_at?Date.parse(order.driver_updated_at):NaN;
   const gpsAge=Number.isFinite(lastGpsTime)?Math.max(0,Date.now()-lastGpsTime):Infinity;
@@ -514,10 +639,10 @@ function orderCard(order){
   const trackingDestination=order.delivery_latitude!=null?{latitude:order.delivery_latitude,longitude:order.delivery_longitude}:null;
   const trackingOrigin=gpsAge<180000&&order.driver_latitude!=null?{latitude:order.driver_latitude,longitude:order.driver_longitude}:order.stall_latitude!=null?{latitude:order.stall_latitude,longitude:order.stall_longitude}:null;
   const trackingGoogleLink=trackingDestination?`<a class="button button-outline button-small map-google-link" href="${googleMapsRouteUrl(trackingOrigin,trackingDestination)}" target="_blank" rel="noopener noreferrer">${trackingOrigin?'Open walking route in Google Maps':'Open handoff point in Google Maps'} <span aria-hidden="true">↗</span></a>`:'';
-  const tracking=(order.runner||order.runner_account)&&order.fulfillment==='delivery'&&order.status==='out'&&['buyer','runner','owner'].includes(state.user.role)?`<section class="tracking-panel"><div><strong>${state.user.role==='runner'?(gpsAge<45000?'Sharing your live location':gpsAge===Infinity?'Waiting for GPS fix':gpsText):gpsAge===Infinity?'Waiting for runner location':gpsText}</strong><small>Runner: ${esc(order.runner||'Assigned runner')} · GPS refreshes about every five seconds while sharing is active.</small>${eta?`<p class="tracking-eta">${eta}</p>`:''}${locationAccuracy||gpsUpdated?`<small class="tracking-meta">${[locationAccuracy,gpsUpdated].filter(Boolean).join(' · ')}</small>`:''}</div>${campusMap(order)}<small class="map-attribution">PNS campus map data © Overture Maps Foundation, Meta/WRI, and OpenGeoHub · GPS accuracy varies.</small><small class="map-key"><i class="map-key-runner"></i>Runner <i class="map-key-destination"></i>Handoff <i class="map-key-stall"></i>Stall</small>${trackingGoogleLink}<small class="tracking-note">Blue line follows the PNS campus walking paths. GPS may pause indoors or when the runner closes the sharing page.</small></section>`:'';
-  const pickupOffer=state.user.role==='buyer'&&order.pickup_offer_status==='pending'&&order.status==='ready'?`<section class="pickup-offer" aria-label="Pickup option"><span class="eyebrow">DELIVERY UPDATE</span><h4>No runner is available</h4><p>Would you like to keep your order and pick it up at <strong>${esc(order.stall)}</strong>, or cancel it?</p><div class="pickup-offer-actions"><button class="button button-primary button-small" data-order-action="accept-pickup" data-id="${order.id}">Continue with pickup</button><button class="button button-quiet button-small" data-order-action="cancel-no-runner" data-id="${order.id}">Cancel order</button></div></section>`:'';
-  const ownerPickupOffer=state.user.role==='owner'&&order.pickup_offer_status==='pending'?`<p class="pickup-offer-wait" role="status">Waiting for the customer to choose pickup or cancellation.</p>`:'';
-  return `<article class="order-card"><div class="order-card-top"><div><span class="order-number">ORDER #${order.id} · ${new Date(order.created_at).toLocaleString([], {dateStyle:'medium',timeStyle:'short'})}</span><h3>${esc(order.stall)}</h3></div><span class="status-badge status-${esc(order.status)}">${esc(statusLabel[order.status]||order.status)}</span></div>${progress}<div class="order-card-body"><div><p class="order-items-summary">${itemText}</p><p class="order-subline">${order.fulfillment==='delivery'?'School delivery only':pickupTime?`Pickup · ${pickupTime}`:'Pickup'}${order.runner?` · Runner: ${esc(order.runner)}`:''}${order.buyer_note?` · “${esc(order.buyer_note)}”`:''}</p>${state.user.role!=='buyer'?`<p class="order-subline">Placed by ${esc(order.buyer)}${order.buyer_email?` · ${esc(order.buyer_email)}`:''}</p>`:''}</div><strong class="order-total">${money(order.total)}</strong></div>${pickupOffer}${ownerPickupOffer}${tracking}${estimate}${actions?`<div class="order-actions">${actions}</div>`:''}${feedback}${feedbackForm}</article>`;
+  const tracking=(order.runner||order.runner_account)&&order.fulfillment==='delivery'&&order.status==='out'&&['buyer','runner','owner','guest'].includes(userRole)?`<section class="tracking-panel"><div><strong>${userRole==='runner'?(gpsAge<45000?'Sharing your live location':gpsAge===Infinity?'Waiting for GPS fix':gpsText):gpsAge===Infinity?'Waiting for runner location':gpsText}</strong><small>Runner: ${esc(order.runner||'Assigned runner')} · GPS refreshes about every five seconds while sharing is active.</small>${eta?`<p class="tracking-eta">${eta}</p>`:''}${locationAccuracy||gpsUpdated?`<small class="tracking-meta">${[locationAccuracy,gpsUpdated].filter(Boolean).join(' · ')}</small>`:''}</div>${campusMap(order)}<small class="map-attribution">PNS campus map data © Overture Maps Foundation, Meta/WRI, and OpenGeoHub · GPS accuracy varies.</small><small class="map-key"><i class="map-key-runner"></i>Runner <i class="map-key-destination"></i>Handoff <i class="map-key-stall"></i>Stall</small>${trackingGoogleLink}<small class="tracking-note">Blue line follows the PNS campus walking paths. GPS may pause indoors or when the runner closes the sharing page.</small></section>`:'';
+  const pickupOffer=customerView&&order.pickup_offer_status==='pending'&&order.status==='ready'?`<section class="pickup-offer" aria-label="Pickup option"><span class="eyebrow">DELIVERY UPDATE</span><h4>No runner is available</h4><p>Would you like to keep your order and pick it up at <strong>${esc(order.stall)}</strong>, or cancel it?</p><div class="pickup-offer-actions"><button class="button button-primary button-small" data-order-action="accept-pickup" data-id="${order.id}">Continue with pickup</button><button class="button button-quiet button-small" data-order-action="cancel-no-runner" data-id="${order.id}">Cancel order</button></div></section>`:'';
+  const ownerPickupOffer=userRole==='owner'&&order.pickup_offer_status==='pending'?`<p class="pickup-offer-wait" role="status">Waiting for the customer to choose pickup or cancellation.</p>`:'';
+  return `<article class="order-card"><div class="order-card-top"><div><span class="order-number">ORDER #${order.id} · ${new Date(order.created_at).toLocaleString([], {dateStyle:'medium',timeStyle:'short'})}</span><h3>${esc(order.stall)}</h3></div><span class="status-badge status-${esc(order.status)}">${esc(statusLabel[order.status]||order.status)}</span></div>${progress}<div class="order-card-body"><div><p class="order-items-summary">${itemText}</p><p class="order-subline">${order.fulfillment==='delivery'?'School delivery only':pickupTime?`Pickup · ${pickupTime}`:'Pickup'}${order.runner?` · Runner: ${esc(order.runner)}`:''}${order.buyer_note?` · “${esc(order.buyer_note)}”`:''}</p>${!customerView?`<p class="order-subline">Placed by ${esc(order.buyer)}${order.buyer_email?` · ${esc(order.buyer_email)}`:''}</p>`:''}${guestDeliveryDetails}</div><strong class="order-total">${money(order.total)}</strong></div>${order.is_guest&&customerView?`<p class="guest-pickup-code"><span>${order.fulfillment==='pickup'?'Pickup code':'Order code'}</span><strong>${esc(order.pickup_code)}</strong></p>`:''}${pickupOffer}${ownerPickupOffer}${tracking}${estimate}${actions?`<div class="order-actions">${actions}</div>`:''}${feedback}${feedbackForm}</article>`;
 }
 function emptyState(icon,title,copy){return `<div class="empty-state"><span>${icon}</span><h3>${esc(title)}</h3><p>${esc(copy)}</p></div>`}
 function buyerHeroArt(item){
@@ -546,14 +671,16 @@ function renderBuyer(){
   if(state.sort==='price-high')products.sort((a,b)=>b.price-a.price);
   if(state.sort==='name')products.sort((a,b)=>a.name.localeCompare(b.name));
   const categories=['All',...new Set(state.products.map(p=>p.category))];
-  const ordersView=state.user?.role==='buyer'&&state.buyerView==='orders';
+  const ordersView=(state.user?.role==='buyer'||(!state.user&&state.publicBrowse))&&state.buyerView==='orders';
   const orderCount=state.orders.filter(order=>!['completed','declined'].includes(order.status)).length;
+  const buyerNavigation=workspaceNav('buyer',state.user?.role==='buyer'||(!state.user&&state.publicBrowse)?[['menu','Browse food','⌕'],['orders','My orders','↗',orderCount]]:[['menu','Browse food','⌕']],ordersView?'orders':'menu');
+  if(ordersView){root.innerHTML=`${buyerNavigation}<section class="workspace-page customer-orders-page" id="buyer-orders"><div class="section-title"><div><span class="eyebrow">YOUR RECENT ACTIVITY</span><h2>Order updates</h2><p class="helper-text">Check progress, pickup details, and feedback for your PNS orders.</p></div><span class="result-count">${state.orders.length} ${state.orders.length===1?'order':'orders'}</span></div>${state.orders.length?`<div class="order-list">${state.orders.slice(0,12).map(orderCard).join('')}</div>`:emptyState('↗','Your first order starts here','Browse the menu and place an order. Its progress will appear here.')}</section>`;return}
   const heroRotates=buyerHeroItems().length>1;
-  root.innerHTML=`${heading('PALAWAN NATIONAL SCHOOL','A good break starts here.','Campus favorites, made fresh by the stalls you love.',`<span class="live-pill ${state.paused?'is-paused':''}"><i></i>${state.paused?'Ordering paused':'Open for orders'}</span>`)}${workspaceNav('buyer',state.user?.role==='buyer'?[['menu','Browse food','⌕'],['orders','My orders','↗',orderCount]]:[['menu','Browse food','⌕']],ordersView?'orders':'menu')}
-  ${ordersView?`<section class="workspace-page customer-orders-page" id="buyer-orders"><div class="section-title"><div><span class="eyebrow">YOUR RECENT ACTIVITY</span><h2>Order updates</h2><p class="helper-text">Check progress, pickup details, and feedback for your PNS orders.</p></div><span class="result-count">${state.orders.length} ${state.orders.length===1?'order':'orders'}</span></div>${state.orders.length?`<div class="order-list">${state.orders.slice(0,12).map(orderCard).join('')}</div>`:emptyState('↗','Your first order starts here','Browse the menu and place an order. Its progress will appear here.')}</section>`:`<section class="buyer-banner" aria-labelledby="buyer-banner-title"><div class="buyer-banner-copy"><span class="eyebrow">PALAWAN NATIONAL SCHOOL</span><h2 id="buyer-banner-title">Good food,<br><span>better breaks.</span></h2><p>Explore PNS stalls and find a favorite for your next break.</p><div class="buyer-banner-cycle-cue ${heroRotates?'is-rotating':'is-waiting'}"><i aria-hidden="true"></i><span>${heroRotates?'New PNS stall pick every 10 seconds':'More PNS picks appear as stalls add menu items'}</span></div></div><div class="banner-art" role="group" aria-roledescription="automatic food showcase" aria-label="Featured food from PNS school stalls">${buyerHeroArt()}</div></section>${renderFeaturedPicks()}
-  <section class="section-block customer-menu-page" id="menu"><div class="section-title"><div><span class="eyebrow">PNS MENU</span><h2>Find your next favorite</h2></div><label class="search-field"><span aria-hidden="true">⌕</span><input type="search" id="menu-search" value="${esc(state.query)}" placeholder="Dish, stall, or craving" aria-label="Search menu"></label></div><div class="menu-controls"><div class="filter-row" role="group" aria-label="Filter menu by category">${categories.map(c=>`<button class="filter-chip ${state.filter===c?'is-active':''}" data-filter="${esc(c)}" aria-pressed="${state.filter===c}">${esc(c)}</button>`).join('')}</div><label class="sort-field">Sort<select id="menu-sort"><option value="featured" ${state.sort==='featured'?'selected':''}>Featured</option><option value="price-low" ${state.sort==='price-low'?'selected':''}>Price: low to high</option><option value="price-high" ${state.sort==='price-high'?'selected':''}>Price: high to low</option><option value="name" ${state.sort==='name'?'selected':''}>Name</option></select></label><span class="result-count" role="status" aria-live="polite">${products.length} ${products.length===1?'item':'items'}</span></div><div class="product-grid">${products.length?products.map(p=>`<article class="product-card"><button class="product-art product-art-trigger" data-product-details="${p.id}" aria-label="View details for ${esc(p.name)}"><span>${esc(p.emoji)}</span><small>${esc(p.category)}</small></button><div class="product-details"><div class="product-stall">${esc(p.stall_name)}</div><button class="product-name-trigger" data-product-details="${p.id}"><h3>${esc(p.name)}</h3></button><p>${esc(p.description||'Fresh from the stall, ready for your break.')}</p><div class="product-bottom"><strong>${money(p.price)}</strong><button class="button button-primary button-small" data-add="${p.id}" ${state.paused?'disabled':''}>${state.paused?'Paused':'Add +'}</button></div></div></article>`).join(''):state.products.length===0?emptyState('⌂','No PNS menus yet','Stall owners can create an account and publish a menu. New items will appear here automatically.'):emptyState('⌕','No menu items found','Try another search or category.')}</div></section>`}`;
+  const activeFilterCount=[state.filter!=='All',state.stallFilter!=='All',state.dietaryFilter!=='All',state.allergenFilter!=='All',state.sort!=='featured'].filter(Boolean).length;
+  root.innerHTML=`<section class="buyer-banner" aria-labelledby="buyer-banner-title"><div class="buyer-banner-copy"><span class="eyebrow">THE PNS CAMPUS MARKET</span><h2 id="buyer-banner-title">Fresh finds,<br><span>happy breaks.</span></h2><p>Wander through campus stalls and discover something delicious.</p><div class="buyer-banner-cycle-cue ${heroRotates?'is-rotating':'is-waiting'}"><i aria-hidden="true"></i><span>${heroRotates?'New PNS stall pick every 10 seconds':'More PNS picks appear as stalls add menu items'}</span></div></div><div class="banner-art" role="group" aria-roledescription="automatic food showcase" aria-label="Featured food from PNS school stalls">${buyerHeroArt()}</div></section>${buyerNavigation}${renderFeaturedPicks()}
+  <section class="section-block customer-menu-page" id="menu"><div class="section-title"><div><span class="eyebrow">MARKET MENU</span><h2>Find your next favorite</h2></div><div class="menu-search-tools"><label class="search-field"><span aria-hidden="true">⌕</span><input type="search" id="menu-search" value="${esc(state.query)}" placeholder="Dish, stall, or craving" aria-label="Search menu"></label><button type="button" class="menu-filter-toggle" data-action="toggle-menu-filters" aria-controls="menu-filter-panel" aria-expanded="${state.filterPanelOpen}"><span aria-hidden="true">☷</span><span>Filters &amp; sort</span>${activeFilterCount?`<small>${activeFilterCount}</small>`:''}</button></div></div><div class="menu-controls"><div class="menu-filter-panel" id="menu-filter-panel" ${state.filterPanelOpen?'':'hidden'}><div class="filter-row" role="group" aria-label="Filter menu by category">${categories.map(c=>`<button class="filter-chip ${state.filter===c?'is-active':''}" data-filter="${esc(c)}" aria-pressed="${state.filter===c}">${esc(c)}</button>`).join('')}</div><label class="sort-field">Sort<select id="menu-sort"><option value="featured" ${state.sort==='featured'?'selected':''}>Featured</option><option value="price-low" ${state.sort==='price-low'?'selected':''}>Price: low to high</option><option value="price-high" ${state.sort==='price-high'?'selected':''}>Price: high to low</option><option value="name" ${state.sort==='name'?'selected':''}>Name</option></select></label><div class="catalog-filter-options"></div><small class="allergen-disclaimer">Allergen details are stall-provided; confirm directly when needed.</small><div class="menu-filter-summary"><span class="result-count" role="status" aria-live="polite">${products.length} ${products.length===1?'item':'items'}</span><button type="button" class="menu-filter-clear" data-action="clear-menu-filters" ${activeFilterCount?'':'hidden'}>Clear filters</button></div></div></div><div class="product-grid">${products.length?products.map(p=>`<article class="product-card"><button class="product-art product-art-trigger" data-product-details="${p.id}" aria-label="View details for ${esc(p.name)}"><span>${esc(p.emoji)}</span><small>${esc(p.category)}</small></button><div class="product-details"><div class="product-stall">${esc(p.stall_name)}</div><button class="product-name-trigger" data-product-details="${p.id}"><h3>${esc(p.name)}</h3></button><p>${esc(p.description||'Fresh from the stall, ready for your break.')}</p><div class="product-bottom"><strong>${money(p.price)}</strong><button class="button button-primary button-small" data-add="${p.id}" ${state.paused?'disabled':''}>${state.paused?'Paused':'Add +'}</button></div></div></article>`).join(''):state.products.length===0?emptyState('⌂','No PNS menus yet','Stall owners can create an account and publish a menu. New items will appear here automatically.'):emptyState('⌕','No menu items found','Try another search or category.')}</div></section>`;
 }
-function renderBuyerView(){renderBuyer();addCatalogControls();decorateProductCards();const rail=$('.featured-rail');if(rail)rail.scrollLeft=state.featuredScroll;startFeaturedMotion()}
+function renderBuyerView(){renderBuyer();const menu=$('#menu'),buyerNav=$('.workspace-nav-buyer'),categories=$('.market-category-section');if(categories&&buyerNav)buyerNav.after(categories);if(menu&&categories)categories.after(menu);else if(menu&&buyerNav)buyerNav.after(menu);addCatalogControls();decorateProductCards();const rail=$('.featured-rail');if(rail)rail.scrollLeft=state.featuredScroll;startFeaturedMotion()}
 function renderOwnerHoursPanel(){
   const opens=state.user.stall_opens_at||'00:00',closes=state.user.stall_closes_at||'23:59';
   const prep=state.user.stall_prep_minutes||15;
@@ -596,7 +723,7 @@ function renderOwner(){
   if(view==='menu')page=renderOwnerMenu(items);
   if(view==='stall')page=`<div class="owner-settings-grid workspace-page" id="owner-stall">${renderOwnerProfilePanel()}${renderOwnerHoursPanel()}</div>`;
   if(view==='insights')page=`<div class="workspace-page">${renderOwnerReach()}<section class="panel owner-feedback" id="owner-feedback"><div class="section-title"><div><span class="eyebrow">HEAR FROM YOUR CUSTOMERS</span><h2>Recent feedback</h2></div><span class="result-count">${feedback.length} reviews</span></div>${feedback.length?`<div class="feedback-list">${feedback.map(order=>`<article class="feedback-entry"><div><strong>Order #${order.id} · ${esc(order.buyer)}</strong><small>${new Date(order.created_at).toLocaleDateString()}</small></div><span class="feedback-stars">${'★'.repeat(order.feedback.rating)}${'☆'.repeat(5-order.feedback.rating)}</span>${order.feedback.comment?`<p>${esc(order.feedback.comment)}</p>`:'<p class="muted-feedback">No written comment.</p>'}</article>`).join('')}</div>`:emptyState('★','No customer feedback yet','Reviews arrive here after completed orders.')}</section></div>`;
-  root.innerHTML=`${heading('STALL WORKSPACE',`Welcome, ${esc(state.user.name.split(' ')[0])}.`,'Manage your menu, orders, and stall details in one place.',`<span class="live-pill"><i></i>Owner account</span>`)}${workspaceNav('owner',tabs,view)}<main class="workspace-content owner-workspace-content" id="owner-workspace">${page}</main>`;
+  root.innerHTML=`${heading('YOUR MARKET STALL',`Welcome, ${esc(state.user.name.split(' ')[0])}.`,'Manage your menu, orders, and stall details in one place.',`<span class="live-pill"><i></i>Owner account</span>`)}${workspaceNav('owner',tabs,view)}<main class="workspace-content owner-workspace-content" id="owner-workspace">${page}</main>`;
   root.querySelectorAll('.inventory-item').forEach(item=>{const id=Number(item.querySelector('[data-edit-product]')?.dataset.editProduct),product=state.products.find(entry=>entry.id===id);if(product?.photo_url){const art=item.querySelector('.inventory-emoji');if(art)art.innerHTML=`<img src="${esc(product.photo_url)}" alt="">`}});
 }
 function renderOwnerOrders(orders,total,preview){
@@ -636,7 +763,7 @@ function renderAdmin(){
   const overview=`<section class="stats-grid admin-stats" id="admin-overview">${stat('Campus accounts',Object.values(totals.users).reduce((a,b)=>a+b,0),'Across all account types','◎')}${stat('Campus stalls',totals.stalls,'Registered stall owners','⌂')}${stat('Menu items',totals.products,'Listed on the hub','▦')}${stat('Completed order value',money(amount),'Value of completed orders','₱')}</section><div class="admin-overview-grid"><section class="panel admin-recent-orders"><div class="section-title"><div><span class="eyebrow">CAMPUS ACTIVITY</span><h2>Recent orders</h2></div><button type="button" class="text-button" data-workspace-role="admin" data-workspace-view="orders">View all →</button></div>${state.orders.length?`<div class="order-list">${state.orders.slice(0,4).map(orderCard).join('')}</div>`:emptyState('▤','No orders yet','New orders across campus will appear here.')}</section><section class="panel admin-quick-actions"><div class="section-title"><div><span class="eyebrow">QUICK ACCESS</span><h2>Campus controls</h2></div></div><button type="button" class="admin-shortcut" data-workspace-role="admin" data-workspace-view="stalls"><span>⌂</span><span><strong>Manage stalls</strong><small>Check availability and stall status</small></span><b>${totals.stalls} →</b></button><button type="button" class="admin-shortcut" data-workspace-role="admin" data-workspace-view="reports"><span>▤</span><span><strong>Study reports</strong><small>Review aggregated reach and orders</small></span><b>Open →</b></button><button type="button" class="admin-shortcut" data-workspace-role="admin" data-workspace-view="accounts"><span>◎</span><span><strong>Account overview</strong><small>See users by campus role</small></span><b>Open →</b></button></section></div>`;
   const accounts=`<section class="panel admin-accounts workspace-page" id="admin-accounts"><div class="section-title"><div><span class="eyebrow">ACCOUNT DIRECTORY</span><h2>Campus roles</h2><p class="helper-text">A quick count of accounts using the campus hub.</p></div><span class="result-count">${Object.values(totals.users).reduce((a,b)=>a+b,0)} accounts</span></div><div class="role-directory">${[['buyer','Campus customers','🥡'],['owner','Stall owners','⌂'],['runner','Campus runners','↗'],['admin','Administrators','⚙']].map(([key,label,icon])=>`<article><span>${icon}</span><div><strong>${esc(label)}</strong><small>${totals.users[key]||0} accounts</small></div></article>`).join('')}</div></section>`;
   let page=view==='overview'?overview:view==='stalls'?renderStallApprovals():view==='orders'?renderAdminOrders():view==='reports'?renderAdminReports():accounts;
-  root.innerHTML=`${heading('CAMPUS ADMINISTRATION','The hub, at a glance.','Keep campus ordering, stalls, and study activity organized.',`<button class="button ${state.paused?'button-primary':'button-dark'}" data-action="toggle-pause">${state.paused?'Resume ordering':'Pause ordering'}</button>`)}${workspaceNav('admin',tabs,view)}<main class="workspace-content admin-workspace-content">${page}</main>`;
+  root.innerHTML=`${heading('CAMPUS MARKET CONTROL','The hub, at a glance.','Keep campus ordering, stalls, and study activity organized.',`<button class="button ${state.paused?'button-primary':'button-dark'}" data-action="toggle-pause">${state.paused?'Resume ordering':'Pause ordering'}</button>`)}${workspaceNav('admin',tabs,view)}<main class="workspace-content admin-workspace-content">${page}</main>`;
 }
 function renderAdminOrders(){
   return `<section class="panel admin-orders-page workspace-page" id="admin-orders"><div class="section-title"><div><span class="eyebrow">CAMPUS ORDER LEDGER</span><h2>All orders</h2><p class="helper-text">Review order status and activity across campus.</p></div><span class="result-count">${state.orders.length} recorded</span></div>${state.orders.length?`<div class="order-list">${state.orders.map(orderCard).join('')}</div>`:emptyState('▤','No orders yet','Orders across campus will be recorded here.')}</section>`;
@@ -701,6 +828,20 @@ function render(){
 }
 function renderError(message){root.innerHTML=`${heading('CONNECTION ISSUE','The hub could not load.','Check the local server, then try again.')}<section class="panel error-panel"><p>${esc(message)}</p><button class="button button-primary" data-action="retry">Try again</button></section>`}
 async function showAuth(mode='login'){$('#auth-dialog').close?.();renderAuthForm(mode);$('#auth-dialog').showModal()}
+function showAccountEmailDialog(mode,token=''){
+  const dialog=$('#auth-dialog');if(!dialog)return;
+  const reset=mode==='password-reset';
+  const title=reset?'Choose a new password':'Reset your password';
+  const intro=reset?'Use a new password with at least 10 characters. The link expires after one hour.':'Enter the email address on your stall account. If it is registered, BiteHub will send a secure reset link.';
+  const fields=reset?`<input type="hidden" name="token" value="${esc(token)}"><label>New password<input name="password" type="password" autocomplete="new-password" minlength="10" maxlength="1024" required></label><label>Confirm new password<input name="confirm_password" type="password" autocomplete="new-password" minlength="10" maxlength="1024" required></label>`:`<label>Email address<input name="email" type="email" autocomplete="email" maxlength="254" required placeholder="name@gmail.com"></label>`;
+  dialog.innerHTML=`<form method="dialog" class="modal-dismiss"><button class="icon-button" aria-label="Close">×</button></form><section class="account-email-dialog"><span class="eyebrow">BITEHUB ACCOUNT</span><h2>${title}</h2><p>${intro}</p><form class="stack-form" data-form="${reset?'password-reset':'password-forgot'}">${fields}<button class="button button-primary button-wide" type="submit">${reset?'Save new password':'Send reset link'} <span aria-hidden="true">→</span></button><p class="auth-front-status" role="alert" aria-live="polite"></p></form></section>`;
+  if(!dialog.open)dialog.showModal();
+  dialog.querySelector('input:not([type="hidden"])')?.focus({preventScroll:true});
+}
+function renderEmailVerificationPending(email,message='Check your email for a verification link before signing in.'){
+  const slot=$('#auth-form-slot');if(!slot)return;
+  slot.innerHTML=`<section class="auth-email-pending"><span class="eyebrow">ONE MORE STEP</span><h3>Check your email</h3><p>${esc(message)}</p><p class="auth-email-destination">${esc(email)}</p><button type="button" class="button button-primary button-wide" data-action="resend-verification" data-email="${esc(email)}">Resend verification email</button><button type="button" class="text-button auth-email-back" data-auth-mode="front" data-auth-role="owner">Back to sign in</button></section>`;
+}
 function cartEntries(){return [...state.cart.values()]}
 function cartTotal(){return cartEntries().reduce((sum,p)=>sum+p.price*p.quantity,0)}
 function updateCartShortcut(){
@@ -723,19 +864,71 @@ function renderCart(){
   const focused=document.activeElement,quantity=focused?.closest('[data-quantity]'),remove=focused?.closest('[data-remove-cart]');
   const focusState=quantity?{kind:'quantity',id:quantity.dataset.id,delta:quantity.dataset.quantity}:remove?{kind:'remove',id:remove.dataset.removeCart}:focused?.closest('[data-action="clear-cart"]')?{kind:'clear'}:null;
   const guest=!state.user,first=items[0];
+  if(guest){
+    if($('#guest-order-name'))state.guestName=$('#guest-order-name').value;
+    if($('#guest-school-role'))state.guestSchoolRole=$('#guest-school-role').value;
+    if($('#guest-order-grade'))state.guestGrade=$('#guest-order-grade').value;
+    if($('#guest-order-section'))state.guestSection=$('#guest-order-section').value;
+  }
   const controls=items.length&&!guest?`<section class="bag-section" aria-labelledby="bag-fulfillment-title"><h3 id="bag-fulfillment-title">How do you want to get it?</h3><div class="fulfillment-options" role="radiogroup" aria-label="Choose pickup or school delivery"><label class="fulfillment-choice ${state.fulfillment==='pickup'?'is-selected':''}"><input type="radio" id="fulfillment" name="fulfillment" value="pickup" ${state.fulfillment==='pickup'?'checked':''}><i class="fulfillment-icon" aria-hidden="true">⌂</i><span><strong>Pick up</strong><small>Collect from the stall</small></span></label><label class="fulfillment-choice ${state.fulfillment==='delivery'?'is-selected':''} ${deliveryAvailable?'':'is-disabled'}"><input type="radio" id="fulfillment-delivery" name="fulfillment" value="delivery" ${state.fulfillment==='delivery'?'checked':''} ${deliveryAvailable?'':'disabled'}><i class="fulfillment-icon" aria-hidden="true">↗</i><span><strong>School delivery</strong><small>${deliveryAvailable?'Meet your runner at school':'School delivery needs a location pin'}</small></span></label></div><div class="delivery-map-wrap" id="delivery-map-wrap" ${state.fulfillment!=='delivery'?'hidden':''}><strong>Choose a PNS handoff point</strong><small>Tap a blue campus path or nearby meeting point on the map.</small>${campusMap(null,true)}<small class="map-attribution">PNS campus map data © Overture Maps Foundation, Meta/WRI, and OpenGeoHub · GPS accuracy varies.</small><span class="map-key"><i class="map-key-destination"></i>Handoff point</span><span id="delivery-map-status" role="status">${state.deliveryLocation?'Delivery point selected':'No delivery point selected'}</span><a class="button button-outline button-small map-google-link" id="delivery-google-link" href="${googleMapsPointUrl(state.deliveryLocation)}" target="_blank" rel="noopener noreferrer">${state.deliveryLocation?'Check handoff point':'View school map'} in Google Maps <span aria-hidden="true">↗</span></a></div><label class="bag-note">Note for the stall <small>Optional · allergies or pickup details</small><textarea id="order-note" maxlength="240" rows="2" placeholder="Add a note for the stall">${esc(state.cartNote)}</textarea></label></section>`:'';
   content.innerHTML=`<div class="bag-layout"><header class="bag-header"><div class="bag-heading"><span class="bag-heading-mark" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M12 19h24l-2 20H14l-2-20Z" fill="#FFEACF" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/><path d="M18 20v-4a6 6 0 0 1 12 0v4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M18 27h12M20 32h8" stroke="#A85649" stroke-width="2.2" stroke-linecap="round"/></svg></span><div class="bag-heading-copy"><span class="bag-heading-kicker"><i aria-hidden="true">✦</i> YOUR PNS ORDER</span><h2 id="cart-title">${items.length?'Review your bag':'Your bag'}</h2><p>${items.length?`${cartCount()} ${cartCount()===1?'item':'items'} · ${esc(first.stall_name)}`:'Pick something good for your break.'}</p></div></div>${items.length?`<div class="bag-header-actions"><span class="bag-item-count">${cartCount()} ${cartCount()===1?'item':'items'}</span><button type="button" class="bag-clear" data-action="clear-cart">Clear bag</button></div>`:`<span class="bag-ready-pill"><i aria-hidden="true"></i> READY FOR A GOOD BREAK</span>`}</header><div class="bag-scroll" id="bag-scroll">${items.length?`<div class="bag-stall-note"><span aria-hidden="true">⌂</span><span><strong>${esc(first.stall_name)}</strong><small>One stall per order · review your items below</small></span></div><div class="bag-lines">${items.map(renderBagLine).join('')}</div>${controls}`:`<div class="bag-empty"><span class="bag-empty-kicker">A GOOD BREAK STARTS HERE</span><div class="bag-empty-art" aria-hidden="true"><span class="bag-empty-spark bag-empty-spark-one">✦</span><span class="bag-empty-spark bag-empty-spark-two">✳</span><svg viewBox="0 0 176 148"><ellipse cx="88" cy="133" rx="48" ry="7" fill="#174A5730"/><circle cx="88" cy="72" r="61" fill="#E5F3ED"/><path d="M59 61V48a29 29 0 0 1 58 0v13" fill="none" stroke="#226C82" stroke-width="5" stroke-linecap="round"/><path d="M49 57h78l-7 65a11 11 0 0 1-11 10H67a11 11 0 0 1-11-10l-7-65Z" fill="#FFF4DF" stroke="#226C82" stroke-width="3" stroke-linejoin="round"/><path d="M49 61h78v14H49z" fill="#FAB2A4" stroke="#226C82" stroke-width="3"/><path d="M65 60c0-11 9-20 21-20 12 0 21 9 21 20" fill="#FFEACF" stroke="#A85649" stroke-width="3"/><path d="M69 56c5-5 10 4 16-1s11 4 17-1" fill="none" stroke="#72B99A" stroke-width="4" stroke-linecap="round"/><circle cx="77" cy="93" r="2.8" fill="#226C82"/><circle cx="99" cy="93" r="2.8" fill="#226C82"/><path d="M80 103c5 6 12 6 17 0" fill="none" stroke="#A85649" stroke-width="2.8" stroke-linecap="round"/><path d="m45 38 3 7 7 3-7 3-3 7-3-7-7-3 7-3 3-7Zm88 29 2 5 5 2-5 2-2 5-2-5-5-2 5-2 2-5Z" fill="#D99A68"/></svg></div><h3>Let’s find your next favorite</h3><p>Explore the PNS menu and add a tasty break-time pick from one of your school stalls.</p><button type="button" class="button button-primary" data-action="continue-shopping">Explore the menu <span aria-hidden="true">→</span></button><div class="bag-empty-promises" aria-hidden="true"><span>✦ PNS stall favorites</span><i></i><span>⌂ Easy pickup</span></div></div>`}</div>${items.length?`<footer class="bag-footer"><div class="bag-total"><span>${cartCount()} ${cartCount()===1?'item':'items'} · total</span><strong>${money(cartTotal())}</strong></div>${guest?`<small class="bag-payment-note">Log in to choose pickup or delivery and place your order.</small><button type="button" class="button button-primary button-wide" data-action="guest-checkout">Log in to order <span>→</span></button>`:`<small class="bag-payment-note">Pay the stall directly at pickup or handoff.</small><button type="button" class="button button-primary button-wide" data-action="place-order" ${state.paused||(state.fulfillment==='delivery'&&!state.deliveryLocation)?'disabled':''}>${state.paused?'Ordering paused':`Place order · ${money(cartTotal())}`} <span>→</span></button>`}</footer>`:''}</div>`;
+  if(guest&&items.length){
+    const guestFields=document.createElement('section');guestFields.className='bag-section guest-checkout-fields';
+    guestFields.setAttribute('aria-labelledby','guest-checkout-title');
+    guestFields.innerHTML=`<h3 id="guest-checkout-title">Place your order as a guest</h3><label class="guest-name-field">Name for this order<input id="guest-order-name" name="guest_name" maxlength="80" autocomplete="name" required value="${esc(state.guestName)}" placeholder="What should the stall call you?"></label><div class="fulfillment-options" role="radiogroup" aria-label="Choose pickup or school delivery"><label class="fulfillment-choice ${state.fulfillment==='pickup'?'is-selected':''}"><input type="radio" id="fulfillment" name="fulfillment" value="pickup" ${state.fulfillment==='pickup'?'checked':''}><i class="fulfillment-icon" aria-hidden="true">⌂</i><span><strong>Pick up</strong><small>Collect from the stall</small></span></label><label class="fulfillment-choice ${state.fulfillment==='delivery'?'is-selected':''} ${deliveryAvailable?'':'is-disabled'}"><input type="radio" id="fulfillment-delivery" name="fulfillment" value="delivery" ${state.fulfillment==='delivery'?'checked':''} ${deliveryAvailable?'':'disabled'}><i class="fulfillment-icon" aria-hidden="true">↗</i><span><strong>School delivery</strong><small>${deliveryAvailable?'Meet your runner at school':'School delivery needs a location pin'}</small></span></label></div><div class="delivery-map-wrap" id="delivery-map-wrap" ${state.fulfillment!=='delivery'?'hidden':''}><strong>Choose a PNS handoff point</strong><small>Tap the map to select a campus meeting point.</small>${campusMap(null,true)}<span id="delivery-map-status" role="status">${state.deliveryLocation?'Delivery point selected':'No delivery point selected'}</span></div><label class="bag-note">Note for the stall <small>Optional · allergies or pickup details</small><textarea id="order-note" maxlength="240" rows="2" placeholder="Add a note for the stall">${esc(state.cartNote)}</textarea></label>`;
+    guestFields.querySelector('.fulfillment-options')?.insertAdjacentHTML('afterend',`<section class="guest-delivery-details" id="guest-delivery-details" ${state.fulfillment!=='delivery'?'hidden':''}><p>For school delivery, add the details the stall needs to find you.</p><label id="guest-school-role-field">School role<select id="guest-school-role" name="guest_school_role" required><option value="">Choose your school role</option><option value="junior_student" ${state.guestSchoolRole==='junior_student'?'selected':''}>Junior high student</option><option value="senior_student" ${state.guestSchoolRole==='senior_student'?'selected':''}>Senior high student</option><option value="teacher" ${state.guestSchoolRole==='teacher'?'selected':''}>Teacher</option><option value="staff" ${state.guestSchoolRole==='staff'?'selected':''}>School staff</option></select></label><label id="guest-grade-field" ${!['junior_student','senior_student'].includes(state.guestSchoolRole)||state.fulfillment!=='delivery'?'hidden':''}>Grade<select id="guest-order-grade" name="guest_grade" required><option value="">Choose your grade</option></select></label><label id="guest-section-field">Section or office<input id="guest-order-section" name="guest_section" maxlength="80" required value="${esc(state.guestSection)}" placeholder="Your section or office"></label></section>`);
+    $('#bag-scroll .bag-lines')?.after(guestFields);
+    const oldCheckout=$('#cart-content [data-action="guest-checkout"]');
+    if(oldCheckout){const place=document.createElement('button');place.type='button';place.className='button button-primary button-wide';place.dataset.action='place-order';place.innerHTML=`Place guest order · ${money(cartTotal())} <span aria-hidden="true">→</span>`;oldCheckout.replaceWith(place)}
+    const paymentNote=$('#cart-content .bag-payment-note');if(paymentNote)paymentNote.textContent='No customer account needed. Order updates will appear in My orders on this device.';
+    syncGuestDeliveryFields();
+  }
   accountTools();
   if(!dialog.open)dialog.showModal();
   if(wasOpen){const nextBody=$('#bag-scroll');if(nextBody)nextBody.scrollTop=previousScroll;let target=null;if(focusState?.kind==='quantity')target=content.querySelector(`[data-quantity="${focusState.delta}"][data-id="${focusState.id}"]`);if(focusState?.kind==='remove')target=content.querySelector(`[data-quantity="-1"]`)||content.querySelector('[data-action="continue-shopping"]');if(focusState?.kind==='clear')target=content.querySelector('[data-action="continue-shopping"]');(target||content.querySelector('[data-action="continue-shopping"]')||$('#cart-close'))?.focus({preventScroll:true});if(nextBody)nextBody.scrollTop=previousScroll}
   enhanceGoogleCampusMaps();
+}
+function syncGuestDeliveryFields(){
+  const details=$('#guest-delivery-details');if(!details)return;
+  const delivery=state.fulfillment==='delivery',role=$('#guest-school-role')?.value||state.guestSchoolRole;
+  const student=role==='junior_student'||role==='senior_student';
+  details.hidden=!delivery;
+  const roleInput=$('#guest-school-role');if(roleInput){roleInput.required=delivery;roleInput.disabled=!delivery}
+  const gradeField=$('#guest-grade-field'),gradeInput=$('#guest-order-grade');
+  if(gradeField)gradeField.hidden=!delivery||!student;
+  if(gradeInput){
+    const grades=role==='junior_student'?['7','8','9','10']:role==='senior_student'?['11','12']:[];
+    const current=gradeInput.value||state.guestGrade;
+    gradeInput.innerHTML='<option value="">Choose your grade</option>'+grades.map(grade=>`<option value="${grade}">Grade ${grade}</option>`).join('');
+    gradeInput.value=grades.includes(current)?current:'';
+    gradeInput.required=delivery&&student;gradeInput.disabled=!delivery||!student;state.guestGrade=gradeInput.value;
+  }
+  const sectionField=$('#guest-order-section'),sectionLabel=$('#guest-section-field');
+  if(sectionField){sectionField.required=delivery;sectionField.disabled=!delivery}
+  if(sectionLabel){const label=sectionLabel.firstChild;if(label&&label.nodeType===Node.TEXT_NODE)label.textContent=role==='teacher'||role==='staff'?'Office or department':'';if(role!=='teacher'&&role!=='staff'&&label)label.textContent='Section or office'}
 }
 function updateCartCheckoutButton(){
   const place=$('#cart-content [data-action="place-order"]');
   if(place)place.disabled=state.paused||(state.fulfillment==='delivery'&&!state.deliveryLocation);
 }
 function cartCount(){return cartEntries().reduce((count,item)=>count+item.quantity,0)}
-function addToCart(product){
+function animateFoodIntoBag(product,startRect){
+  const bag=$('#account-tools [data-action="open-cart"]');
+  if(!bag||!startRect?.width||!startRect?.height||typeof Element.prototype.animate!=='function'||window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)return;
+  const targetRect=bag.getBoundingClientRect(),size=Math.min(68,Math.max(46,Math.min(startRect.width,startRect.height)*.48));
+  const flyer=document.createElement('span');flyer.className='food-to-bag-flight';flyer.setAttribute('aria-hidden','true');
+  if(product.photo_url){const image=document.createElement('img');image.src=product.photo_url;image.alt='';image.loading='eager';flyer.append(image)}else flyer.textContent=product.emoji||'🍽️';
+  const startX=startRect.left+startRect.width/2-size/2,startY=startRect.top+startRect.height/2-size/2;
+  const endX=targetRect.left+targetRect.width/2-size/2,endY=targetRect.top+targetRect.height/2-size/2;
+  const dx=endX-startX,dy=endY-startY,arc=Math.max(20,Math.min(54,Math.abs(dx)*.12+18));
+  Object.assign(flyer.style,{left:startX+'px',top:startY+'px',width:size+'px',height:size+'px'});document.body.append(flyer);
+  const midTransform='translate3d('+(dx*.52)+'px,'+(dy*.52-arc)+'px,0) scale(.78)';
+  const endTransform='translate3d('+dx+'px,'+dy+'px,0) scale(.16)';
+  const flight=flyer.animate([{transform:'translate3d(0,0,0) scale(1)',opacity:1,offset:0},{transform:midTransform,opacity:1,offset:.55},{transform:endTransform,opacity:.2,offset:1}],{duration:650,easing:'cubic-bezier(.2,.78,.25,1)'});
+  flight.finished.then(()=>flyer.remove()).catch(()=>flyer.remove());
+  bag.animate([{transform:'scale(1)'},{transform:'scale(1.1)'},{transform:'scale(1)'}],{duration:430,delay:390,easing:'ease-out'});
+}
+function addToCart(product,sourceButton=null){
   if(state.paused){toast('Ordering is paused right now.');return}
   if(!product.stall_open){toast(`This stall is closed. It opens at ${product.opens_at}.`);return}
   if(!product.available){toast('This menu item is currently unavailable.');return}
@@ -743,11 +936,19 @@ function addToCart(product){
   const item=state.cart.get(product.id)||{...product,quantity:0};
   const limit=item.stock_count===null?50:Math.min(50,item.stock_count);
   if(item.quantity>=limit){toast(item.stock_count===null?'You can order up to 50 of each item.':`Only ${item.stock_count} available.`);return}
-  item.quantity++;state.cart.set(product.id,item);accountTools();
+  const artwork=sourceButton?.closest('.product-card')?.querySelector('.product-art-trigger')||sourceButton?.closest('#product-content')?.querySelector('.product-detail-hero')||sourceButton;
+  const startRect=artwork?.getBoundingClientRect();
+  item.quantity++;state.cart.set(product.id,item);accountTools();if(startRect)animateFoodIntoBag(product,startRect);
   if($('#cart-dialog').open)renderCart();
   toast(`${product.name} added to your bag.`);
 }
-function resetEmptyBag(){if(state.cart.size)return;state.cartNote='';state.fulfillment='pickup';state.deliveryLocation=null}
+function resetEmptyBag(){if(state.cart.size)return;state.cartNote='';state.guestName='';state.guestSchoolRole='';state.guestGrade='';state.guestSection='';state.fulfillment='pickup';state.deliveryLocation=null}
+function requireGuestOrderField(field,message){
+  if(field&&String(field.value||'').trim())return true;
+  if(field){field.setCustomValidity(message);field.reportValidity();field.setCustomValidity('');field.focus()}
+  else toast(message);
+  return false;
+}
 function changeQuantity(id,delta){const item=state.cart.get(Number(id));if(!item)return;const limit=item.stock_count===null||item.stock_count===undefined?50:Math.min(50,item.stock_count);if(item.quantity+delta>limit){toast(item.stock_count===null||item.stock_count===undefined?'You can order up to 50 of each item.':`Only ${item.stock_count} available.`);return}item.quantity+=delta;if(item.quantity<=0)state.cart.delete(Number(id));resetEmptyBag();accountTools();renderCart()}
 function renderProductDetails(id){
   const product=state.products.find(item=>item.id===Number(id));if(!product)return;
@@ -766,6 +967,7 @@ function renderProductEdit(id){
 }
 async function orderAction(button){
   const id=button.dataset.id,action=button.dataset.orderAction,payload={action};
+  if(!state.user){payload.guest_token=guestOrderToken(id);if(!payload.guest_token)throw new Error('This private order link is missing. Open this order in the browser where you placed it.')}
   if(action==='assign'){payload.runner_name=$(`[data-assign-runner="${id}"]`)?.value.trim()||'';if(!payload.runner_name)throw new Error('Type the name of the runner for this delivery.')}
   if(action==='runner-link'){
     const result=await api(`/api/orders/${id}/runner-link`,{method:'POST',body:'{}'}),shareUrl=new URL('/',location.origin);
@@ -836,7 +1038,7 @@ document.addEventListener('click',async e=>{
   if(sidebarScroll){closeSidebar();document.getElementById(sidebarScroll.dataset.sidebarScroll)?.scrollIntoView({behavior:window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'start'});return}
   if(e.target.closest('#app-sidebar a[href]'))closeSidebar();
   const stallProfile=e.target.closest('[data-stall-profile]');if(stallProfile){try{await renderStallProfile(stallProfile.dataset.stallProfile)}catch(error){toast(error.message)}return}
-  const feature=e.target.closest('[data-feature-product]');if(feature){feature.disabled=true;const active=feature.dataset.featureActive==='true';try{await api('/api/stall/feature',{method:'PATCH',body:json({product_id:Number(feature.dataset.featureProduct),featured:!active})});toast(active?'Campus pick removed.':'Featured on Today’s Campus Picks for 24 hours!');await refresh()}catch(error){toast(error.message);feature.disabled=false}return}
+  const feature=e.target.closest('[data-feature-product]');if(feature){feature.disabled=true;const active=feature.dataset.featureActive==='true';try{await api('/api/stall/feature',{method:'PATCH',body:json({product_id:Number(feature.dataset.featureProduct),featured:!active})});toast(active?'Campus pick removed.':'Featured on Fresh from our stalls for 24 hours!');await refresh()}catch(error){toast(error.message);feature.disabled=false}return}
   const moveFeatured=e.target.closest('[data-feature-move]');if(moveFeatured){const rail=$('.featured-rail'),card=rail?.querySelector('.featured-card');if(rail&&card)rail.scrollBy({left:(card.getBoundingClientRect().width+12)*Number(moveFeatured.dataset.featureMove),behavior:window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});return}
   const pauseFeatured=e.target.closest('[data-feature-pause]');if(pauseFeatured){state.featuredPaused=!state.featuredPaused;pauseFeatured.setAttribute('aria-pressed',String(state.featuredPaused));pauseFeatured.textContent=state.featuredPaused?'Play rotation':'Pause rotation';return}
   const enableAlerts=e.target.closest('[data-action="enable-notifications"]');if(enableAlerts){enableAlerts.disabled=true;try{await enablePushNotifications()}catch(error){toast(error.message);enableAlerts.disabled=false}return}
@@ -848,18 +1050,30 @@ document.addEventListener('click',async e=>{
    const mapPicker=e.target.closest('[data-map-picker]');if(mapPicker){const shell=mapPicker.closest('.campus-map-shell'),rect=shell.getBoundingClientRect(),x=e.detail===0?0.5:Math.max(0,Math.min(1,((e.clientX-rect.left)/rect.width-.5)/state.mapZoom+.5)),y=e.detail===0?0.5:Math.max(0,Math.min(1,((e.clientY-rect.top)/rect.height-.5)/state.mapZoom+.5)),point=mapLatLon(x*PNS_MAP.width,y*PNS_MAP.height);setDeliveryPoint(point.latitude,point.longitude,shell);return}
   const passwordToggle=e.target.closest('[data-toggle-password]');if(passwordToggle){e.preventDefault();const input=passwordToggle.closest('.front-input-wrap')?.querySelector('input[name="password"]');if(input){const showing=input.type==='password';input.type=showing?'text':'password';passwordToggle.setAttribute('aria-label',showing?'Hide password':'Show password');passwordToggle.setAttribute('aria-pressed',String(showing));passwordToggle.querySelector('span').textContent=showing?'Hide':'Show';input.focus({preventScroll:true})}return}
   const frontRoleChoice=e.target.closest('[data-front-role]');if(frontRoleChoice){state.authRole=frontRoleChoice.dataset.frontRole;document.querySelectorAll('[data-front-role]').forEach(choice=>{const selected=choice===frontRoleChoice;choice.classList.toggle('is-selected',selected);choice.setAttribute('aria-pressed',String(selected));choice.setAttribute('aria-label',choice.querySelector('.front-role-copy strong').textContent+(selected?' selected':''));const marker=choice.querySelector('.front-role-arrow');if(marker)marker.textContent=selected?'✓':'→'});const selectedRoleInput=$('#auth-form-slot input[name="role"]');if(selectedRoleInput)selectedRoleInput.value=state.authRole;const submit=$('#auth-form-slot .auth-front-form button[type="submit"]'),roleName=frontRoleChoice.querySelector('.front-role-copy strong').textContent;if(submit)submit.innerHTML='Log in as '+roleName+' <span aria-hidden="true">→</span>';const status=$('.auth-front-status');if(status){status.textContent='';status.classList.remove('is-visible')}return}
-  const authTab=e.target.closest('[data-auth-mode]');if(authTab){state.authRole=authTab.dataset.authRole||state.authRole;renderAuthWall(authTab.dataset.authMode==='choose'?'choose':authTab.dataset.authMode==='login-choose'?'login-choose':'login',state.authRole);return}
+  const authTab=e.target.closest('[data-auth-mode]');if(authTab){state.authRole=authTab.dataset.authRole||state.authRole;const authModes={front:'front',login:'front',choose:'choose','login-choose':'login-choose',signup:'signup'};renderAuthWall(authModes[authTab.dataset.authMode]||'front',state.authRole);window.scrollTo(0,0);return}
   const roleChoice=e.target.closest('[data-signup-role]');if(roleChoice){renderAuthWall('signup',roleChoice.dataset.signupRole);return}
   const details=e.target.closest('[data-product-details]');if(details){renderProductDetails(details.dataset.productDetails);return}
-  const add=e.target.closest('[data-add]');if(add){const product=state.products.find(p=>p.id===Number(add.dataset.add));if(product)addToCart(product);if($('#product-dialog').open)$('#product-dialog').close();return}
+  const add=e.target.closest('[data-add]');if(add){const product=state.products.find(p=>p.id===Number(add.dataset.add));if(product)addToCart(product,add);if($('#product-dialog').open)$('#product-dialog').close();return}
   const edit=e.target.closest('[data-edit-product]');if(edit){renderProductEdit(edit.dataset.editProduct);return}
-  const filter=e.target.closest('[data-filter]');if(filter){state.filter=filter.dataset.filter;renderBuyerView();return}
+  const filter=e.target.closest('[data-filter]');if(filter){const quickCategory=filter.classList.contains('market-category-tile'),pickedInsidePanel=Boolean(filter.closest('#menu-filter-panel'));state.filter=filter.dataset.filter;if(pickedInsidePanel)state.filterPanelOpen=false;renderBuyerView();if(quickCategory)requestAnimationFrame(()=>document.querySelector('#menu')?.scrollIntoView({behavior:'smooth',block:'start'}));return}
   const removeCart=e.target.closest('[data-remove-cart]');if(removeCart){state.cart.delete(Number(removeCart.dataset.removeCart));resetEmptyBag();accountTools();renderCart();return}
   const quant=e.target.closest('[data-quantity]');if(quant){changeQuantity(quant.dataset.id,Number(quant.dataset.quantity));return}
   const orderButton=e.target.closest('[data-order-action]');if(orderButton){orderButton.disabled=true;try{await orderAction(orderButton)}catch(error){toast(error.message);orderButton.disabled=false}return}
   const stallStatus=e.target.closest('[data-stall-status]');if(stallStatus){stallStatus.disabled=true;try{await api(`/api/admin/stalls/${stallStatus.dataset.stallStatus}`,{method:'PATCH',body:json({status:stallStatus.dataset.nextStatus})});toast(stallStatus.dataset.nextStatus==='paused'?'Stall paused; customers can’t order from it.':'Stall resumed and visible to customers.');await refresh()}catch(error){toast(error.message);stallStatus.disabled=false}return}
   const remove=e.target.closest('[data-delete-product]');if(remove){if(!confirm('Remove this item from your menu?'))return;try{await api(`/api/products/${remove.dataset.deleteProduct}`,{method:'DELETE'});toast('Menu item removed.');await refresh()}catch(error){toast(error.message)}return}
   const action=e.target.closest('[data-action]');if(!action)return;
+  if(action.dataset.action==='forgot-password'){showAccountEmailDialog('password-forgot');return}
+  if(action.dataset.action==='resend-verification'){
+    const email=String(action.dataset.email||$('#auth-form-slot input[name="email"]')?.value||'').trim().toLowerCase();
+    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){toast('Enter your email address first.');$('#auth-form-slot input[name="email"]')?.focus();return}
+    action.disabled=true;
+    try{const result=await api('/api/email/verification/resend',{method:'POST',body:json({email})});toast(result.message||'If this address needs verification, a new link will arrive shortly.')}
+    catch(error){toast(error.message)}finally{action.disabled=false}
+    return;
+  }
+  if(action.dataset.action==='toggle-menu-filters'){state.filterPanelOpen=!state.filterPanelOpen;renderBuyerView();$('[data-action="toggle-menu-filters"]')?.focus();return}
+  if(action.dataset.action==='clear-menu-filters'){state.filter='All';state.stallFilter='All';state.dietaryFilter='All';state.allergenFilter='All';state.sort='featured';renderBuyerView();return}
+  if(action.dataset.action==='guest-owner-login'){closeSidebar();state.publicBrowse=false;state.authRole='owner';history.pushState({},'','/');renderAuthWall('front','owner');window.scrollTo(0,0);return}
   if(action.dataset.action==='open-sidebar'){state.sidebarOpen=true;syncSidebarState();$('.sidebar-close')?.focus({preventScroll:true});return}
   if(action.dataset.action==='close-sidebar'){closeSidebar();$('.sidebar-menu-button')?.focus({preventScroll:true});return}
   if(action.dataset.action==='show-delete-account'){
@@ -877,7 +1091,7 @@ document.addEventListener('click',async e=>{
     applyTheme();return;
   }
   if(action.dataset.action==='export-report'){downloadAdminReport();return}
-  if(action.dataset.action==='guest-signin'||action.dataset.action==='guest-checkout'){if($('#cart-dialog').open)$('#cart-dialog').close();if($('#stall-dialog').open)$('#stall-dialog').close();renderAuthWall('front','buyer');return}
+  if(action.dataset.action==='continue-as-guest'){if($('#cart-dialog').open)$('#cart-dialog').close();if($('#stall-dialog').open)$('#stall-dialog').close();await continueAsGuest();return}
   if(action.dataset.action==='continue-shopping'){
     $('#cart-dialog').close();
     if(state.user?.role==='buyer'||(!state.user&&state.publicBrowse)){state.buyerView='menu';history.pushState({workspace:'buyer',view:'menu'},'','#menu');render();window.scrollTo({top:0,behavior:'smooth'})}
@@ -894,7 +1108,27 @@ document.addEventListener('click',async e=>{
   if(action.dataset.action==='clear-cart'){state.cart.clear();resetEmptyBag();accountTools();renderCart();return}
   if(action.dataset.action==='retry'){await boot();return}
   if(action.dataset.action==='toggle-pause'){try{const result=await api('/api/admin/pause',{method:'POST',body:json({paused:!state.paused})});state.paused=result.ordering_paused;toast(state.paused?'Ordering paused.':'Ordering is open.');await refresh()}catch(error){toast(error.message)}return}
-  if(action.dataset.action==='place-order'){action.disabled=true;try{const result=await api('/api/orders',{method:'POST',body:json({fulfillment:state.fulfillment,delivery_location:state.fulfillment==='delivery'?state.deliveryLocation:null,note:$('#order-note').value,items:cartEntries().map(p=>({product_id:p.id,quantity:p.quantity}))})});state.cart.clear();resetEmptyBag();accountTools();$('#cart-dialog').close();toast(`Order #${result.order_id} sent to the stall.`);await refresh()}catch(error){toast(error.message);action.disabled=false}}
+  if(action.dataset.action==='place-order'){
+    action.disabled=true;
+    try{
+      const guest=!state.user,nameInput=$('#guest-order-name'),guestName=nameInput?.value.trim()||'';
+      if(guest&&!requireGuestOrderField(nameInput,'Enter the name you want the stall to use.')){action.disabled=false;return}
+      const guestSchoolRole=$('#guest-school-role')?.value||'',guestGrade=$('#guest-order-grade')?.value||'',guestSection=$('#guest-order-section')?.value.trim()||'';
+      if(guest&&state.fulfillment==='delivery'){
+        if(!requireGuestOrderField($('#guest-school-role'),'Choose your school role.')||!requireGuestOrderField($('#guest-order-section'),'Enter your section or office.')){action.disabled=false;return}
+        if(['junior_student','senior_student'].includes(guestSchoolRole)&&!requireGuestOrderField($('#guest-order-grade'),'Choose your grade.')){action.disabled=false;return}
+      }
+      const guestDelivery=guest&&state.fulfillment==='delivery'?{guest_school_role:guestSchoolRole,guest_grade:guestGrade,guest_section:guestSection}:{};
+      const result=await api(guest?'/api/guest/orders':'/api/orders',{method:'POST',body:json({...(guest?{guest_name:guestName,...guestDelivery}:{}),fulfillment:state.fulfillment,delivery_location:state.fulfillment==='delivery'?state.deliveryLocation:null,note:$('#order-note').value,items:cartEntries().map(p=>({product_id:p.id,quantity:p.quantity}))})});
+      if(guest){if(!result.guest_token||!result.pickup_code)throw new Error('The order was created, but BiteHub could not return its private tracking details. Contact the stall with your order number.');saveGuestOrderAccess({id:result.order_id,token:result.guest_token,code:result.pickup_code});state.guestName=guestName;state.buyerView='orders';history.pushState({workspace:'buyer',view:'orders'},'','#buyer-orders')}
+      state.cart.clear();resetEmptyBag();accountTools();$('#cart-dialog').close();
+      if(guest)toast(`Order #${result.order_id} sent. Your order code is ${result.pickup_code}.`);else toast(`Order #${result.order_id} sent to the stall.`);
+      await refresh();
+    }catch(error){toast(error.message);action.disabled=false}
+  }
+});
+document.addEventListener('click',e=>{
+  if(e.target.closest('[data-front-role]')&&state.authRole==='owner'&&document.querySelector('#app.auth-open'))renderAuthForm('login','owner',true);
 });
 document.addEventListener('keydown',e=>{
   if(e.key==='Escape'&&state.sidebarOpen){closeSidebar();$('.sidebar-menu-button')?.focus({preventScroll:true})}
@@ -903,12 +1137,21 @@ document.addEventListener('scroll',e=>{if(e.target.matches?.('.featured-rail'))s
 $('#cart-dialog').addEventListener('click',e=>{if(e.target===$('#cart-dialog'))$('#cart-dialog').close()});
 $('#delete-account-dialog').addEventListener('click',e=>{if(e.target===$('#delete-account-dialog'))$('#delete-account-dialog').close()});
 $('#delete-account-dialog').addEventListener('close',()=>$('#delete-account-form').reset());
-$('#cart-dialog').addEventListener('input',e=>{if(e.target.id==='order-note')state.cartNote=e.target.value});
+$('#cart-dialog').addEventListener('input',e=>{
+  if(e.target.id==='order-note')state.cartNote=e.target.value;
+  if(e.target.id==='guest-order-name')state.guestName=e.target.value;
+  if(e.target.id==='guest-order-section')state.guestSection=e.target.value;
+});
 $('#cart-dialog').addEventListener('change',e=>{
+  if(e.target.id==='guest-school-role'){
+    state.guestSchoolRole=e.target.value;state.guestGrade='';syncGuestDeliveryFields();
+  }
+  if(e.target.id==='guest-order-grade')state.guestGrade=e.target.value;
   if(e.target.name==='fulfillment'){
     state.fulfillment=e.target.value;
     $('#delivery-map-wrap').hidden=state.fulfillment!=='delivery';
     document.querySelectorAll('.fulfillment-choice').forEach(choice=>choice.classList.toggle('is-selected',choice.querySelector('input')===e.target));
+    syncGuestDeliveryFields();
     if(state.fulfillment==='delivery')enhanceGoogleCampusMaps();
     updateCartCheckoutButton();
   }
@@ -918,6 +1161,23 @@ document.addEventListener('submit',async e=>{
   const form=e.target.closest('[data-form]');if(!form)return;e.preventDefault();const submit=form.querySelector('button[type="submit"],button:not([type])'),submitLabel=submit?.innerHTML,status=form.querySelector('.auth-front-status');if(submit){submit.disabled=true;if(form.dataset.form==='login'){submit.setAttribute('aria-busy','true');submit.innerHTML='Signing in…'}}if(status){status.textContent='';status.classList.remove('is-visible')}
   try{
     const formData=new FormData(form),values=Object.fromEntries(formData.entries());
+    if(form.dataset.form==='guest-entry'){
+      const name=String(values.guest_name||'').trim();
+      if(!name)throw new Error('Enter your name to continue as a guest.');
+      state.guestName=name;
+      await continueAsGuest();
+      return;
+    }
+    if(form.dataset.form==='password-forgot'){
+      const result=await api('/api/password/forgot',{method:'POST',body:json({email:String(values.email||'').trim().toLowerCase()})});
+      if(status){status.textContent=result.message;status.classList.add('is-visible')}
+      form.reset();return;
+    }
+    if(form.dataset.form==='password-reset'){
+      if(String(values.password||'')!==String(values.confirm_password||''))throw new Error('The passwords do not match.');
+      const result=await api('/api/password/reset',{method:'POST',body:json({token:String(values.token||''),password:String(values.password||'')})});
+      $('#auth-dialog').close();history.replaceState({},'',location.pathname+location.hash);state.user=null;renderAuthWall('front','owner');toast(result.message||'Your password has been changed. Sign in with your new password.');return;
+    }
     if(form.dataset.form==='delete-account'){
       const result=await api('/api/account/delete',{method:'POST',body:json({password:String(values.password||''),confirm:formData.get('confirm')==='yes'})});
       $('#delete-account-dialog').close();clearTimeout(refreshTimer);
@@ -944,8 +1204,13 @@ document.addEventListener('submit',async e=>{
       values.dietary_tags=formData.getAll('dietary_tags');
       values.allergen_tags=formData.getAll('allergen_tags');
     }
-    if(form.dataset.form==='login'||form.dataset.form==='signup'){
-      const result=await api(`/api/${form.dataset.form}`,{method:'POST',body:json(values)});state.user=result.user;if(state.user.role!=='buyer'){state.cart.clear();resetEmptyBag()}applyWorkspaceHash();startAutoRefresh();$('#auth-dialog').close();toast(form.dataset.form==='signup'&&result.user.role==='owner'?'Stall account created. Your stall is now open to customers.':form.dataset.form==='signup'?'Your account is ready.':'Welcome back.');await refresh();loadNotificationState();await openSharedStall();return;
+    if(form.dataset.form==='signup'){
+      const result=await api('/api/signup',{method:'POST',body:json(values)});
+      if(result.needs_email_verification){renderEmailVerificationPending(result.email,result.message);return}
+      state.user=result.user;applyWorkspaceHash();startAutoRefresh();toast('Stall account created. Your stall is now open to customers.');await refresh();loadNotificationState();await openSharedStall();return;
+    }
+    if(form.dataset.form==='login'){
+      const result=await api('/api/login',{method:'POST',body:json(values)});state.user=result.user;if(state.user.role!=='buyer'){state.cart.clear();resetEmptyBag()}applyWorkspaceHash();startAutoRefresh();$('#auth-dialog').close();toast('Welcome back.');await refresh();loadNotificationState();await openSharedStall();return;
     }
     if(form.dataset.form==='product'){
       values.price=Number(values.price);const result=await api('/api/products',{method:'POST',body:json(values)});toast(`${result.product.name} added to your menu.`);await refresh();return;
@@ -980,8 +1245,110 @@ document.addEventListener('change',e=>{
 });
 async function boot(){
   const isRunnerLink=location.hash.startsWith('#runner-track=');
-  try{if(isRunnerLink){publicRunnerTracking=runnerTrackingFromHash();document.title='Share delivery location · BiteHub';renderRunnerSharePage(publicRunnerTracking?.orderId,Boolean(publicRunnerTracking));return}const session=await api('/api/session');state.user=session.user;if(state.user){applyWorkspaceHash();startAutoRefresh();await refresh();loadNotificationState();await openSharedStall()}else if(state.publicBrowse){applyWorkspaceHash();await refresh();await openSharedStall();startAutoRefresh()}else renderAuthWall()}
+  const authLinkParams=new URLSearchParams(location.search);
+  const verificationToken=authLinkParams.get('verify_email')||'';
+  const passwordResetToken=authLinkParams.get('reset_password')||'';
+  const isAccountEmailLink=Boolean(verificationToken||passwordResetToken);
+  const finishLoading=beginSlowLoadFeedback();
+  try{if(isRunnerLink){publicRunnerTracking=runnerTrackingFromHash();document.title='Share delivery location · BiteHub';renderRunnerSharePage(publicRunnerTracking?.orderId,Boolean(publicRunnerTracking));return}if(isAccountEmailLink){history.replaceState({},'',location.pathname+location.hash);state.publicBrowse=false;state.user=null;renderAuthWall('front','owner');if(verificationToken){try{const result=await api('/api/email/verify',{method:'POST',body:json({token:verificationToken})});const status=$('.auth-front-status');if(status){status.textContent=result.message;status.classList.add('is-visible')}else toast(result.message)}catch(error){const status=$('.auth-front-status');if(status){status.textContent=error.message;status.classList.add('is-visible')}else toast(error.message)}}else showAccountEmailDialog('password-reset',passwordResetToken);return}const session=await api('/api/session');state.user=session.user;if(state.user){applyWorkspaceHash();startAutoRefresh();await refresh();loadNotificationState();await openSharedStall()}else{if(session.guest_session){state.guestSessionId=session.guest_session.id;state.guestName=session.guest_session.name;state.publicBrowse=true}if(state.publicBrowse){applyWorkspaceHash();await refresh();await openSharedStall();startAutoRefresh()}else renderAuthWall()}}
   catch(error){renderError(`${error.message} Start the server with “py server.py” from the FOODHUB folder.`)}
-  finally{const reduceMotion=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches??false,minVisibleMs=isRunnerLink||reduceMotion?0:1350,waitMs=Math.max(0,minVisibleMs-(performance.now()-openingSplashStartedAt));if(waitMs)await new Promise(resolve=>setTimeout(resolve,waitMs));dismissOpeningSplash()}
+  finally{finishLoading();dismissOpeningSplash();if(!isRunnerLink&&!isAccountEmailLink)showPrototypePolicyNotice()}
 }
+function escapePolicyHTML(value){
+  return String(value).replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));
+}
+function renderPolicyInline(value){
+  return escapePolicyHTML(value)
+    .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+    .replace(/\*([^*]+)\*/g,'<em>$1</em>')
+    .replace(/\x60([^\x60]+)\x60/g,'<code>$1</code>')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,'<span class="policy-document-reference">$1</span>');
+}
+function renderPolicyMarkdown(markdown){
+  const lines=String(markdown).replace(/\r/g,'').split('\n'),output=[];
+  let paragraph=[],listType='',listItems=[];
+  const flushParagraph=()=>{if(paragraph.length){output.push('<p>'+renderPolicyInline(paragraph.join(' '))+'</p>');paragraph=[]}};
+  const flushList=()=>{if(listType){output.push('<'+listType+'>'+listItems.map(item=>'<li>'+renderPolicyInline(item)+'</li>').join('')+'</'+listType+'>');listType='';listItems=[]}};
+  const flushBlocks=()=>{flushParagraph();flushList()};
+  for(let index=0;index<lines.length;index++){
+    const line=lines[index].trim();
+    if(!line){flushBlocks();continue}
+    if(line.startsWith('|')){
+      flushBlocks();
+      const rows=[];
+      while(index<lines.length&&lines[index].trim().startsWith('|')){
+        rows.push(lines[index].trim().replace(/^\|/,'').replace(/\|$/,'').split('|').map(cell=>cell.trim()));
+        index++;
+      }
+      index--;
+      const contentRows=rows.filter(row=>!row.every(cell=>/^:?-{3,}:?$/.test(cell)));
+      if(contentRows.length){
+        const header=contentRows[0].map(cell=>'<th>'+renderPolicyInline(cell)+'</th>').join('');
+        const body=contentRows.slice(1).map(row=>'<tr>'+row.map(cell=>'<td>'+renderPolicyInline(cell)+'</td>').join('')+'</tr>').join('');
+        output.push('<div class="policy-table-wrap"><table><thead><tr>'+header+'</tr></thead><tbody>'+body+'</tbody></table></div>');
+      }
+      continue;
+    }
+    const heading=line.match(/^(#{1,4})\s+(.+)$/);
+    if(heading){flushBlocks();const tag='h'+Math.min(heading[1].length+2,6);output.push('<'+tag+'>'+renderPolicyInline(heading[2])+'</'+tag+'>');continue}
+    if(/^(-{3,}|\*{3,})$/.test(line)){flushBlocks();output.push('<hr>');continue}
+    if(line.startsWith('> ')){flushBlocks();output.push('<blockquote>'+renderPolicyInline(line.slice(2))+'</blockquote>');continue}
+    const unordered=line.match(/^[-*]\s+(.+)$/),ordered=line.match(/^\d+\.\s+(.+)$/);
+    if(unordered||ordered){
+      flushParagraph();
+      const nextType=unordered?'ul':'ol';
+      if(listType&&listType!==nextType)flushList();
+      listType=nextType;
+      listItems.push((unordered||ordered)[1]);
+      continue;
+    }
+    if(listType)flushList();
+    paragraph.push(line);
+  }
+  flushBlocks();
+  return output.join('');
+}
+const policyDocumentDialog=$('#policy-document-dialog');
+const policyDocumentTitle=$('#policy-document-title');
+const policyDocumentContent=$('#policy-document-content');
+const policyDocumentTitles={
+  'PRIVACY_NOTICE_DRAFT.md':'Privacy Notice draft',
+  'TERMS_OF_USE_DRAFT.md':'Terms of Use draft',
+  'COOKIE_AND_LOCATION_NOTICES_DRAFT.md':'Cookies & location draft',
+  'CHILD_FRIENDLY_PRIVACY_SUMMARY_DRAFT.md':'Student privacy guide draft'
+};
+async function openPolicyDocument(href){
+  let url;
+  try{url=new URL(href,location.href)}catch{return}
+  if(url.origin!==location.origin||!url.pathname.startsWith('/legal_drafts/'))return;
+  const filename=decodeURIComponent(url.pathname.split('/').pop());
+  policyDocumentTitle.textContent=policyDocumentTitles[filename]||'BiteHub draft document';
+  policyDocumentContent.textContent='Loading document…';
+  if(!policyDocumentDialog.open)policyDocumentDialog.showModal();
+  try{
+    const response=await fetch(url.pathname,{credentials:'same-origin',headers:{Accept:'text/plain'}});
+    if(!response.ok)throw new Error('Document request failed');
+    policyDocumentContent.innerHTML=renderPolicyMarkdown(await response.text());
+    policyDocumentContent.scrollTop=0;
+  }catch{
+    policyDocumentContent.textContent='This draft could not be loaded. Please close this window and try again.';
+  }
+}
+document.addEventListener('click',event=>{
+  const link=event.target.closest('a[href^="/legal_drafts/"]');
+  if(!link)return;
+  event.preventDefault();
+  openPolicyDocument(link.href);
+});
+policyDocumentDialog?.addEventListener('click',event=>{if(event.target===policyDocumentDialog)policyDocumentDialog.close()});
+const prototypePolicyDialog=$('#prototype-policy-dialog');
+function showPrototypePolicyNotice(){
+  if(!prototypePolicyDialog||prototypePolicyDialog.open)return;
+  try{if(localStorage.getItem('bitehub-prototype-notice-v1')==='seen')return}catch{}
+  prototypePolicyDialog.showModal();
+}
+$('#prototype-policy-continue')?.addEventListener('click',()=>{
+  try{localStorage.setItem('bitehub-prototype-notice-v1','seen')}catch{}
+  prototypePolicyDialog?.close();
+});
 boot();

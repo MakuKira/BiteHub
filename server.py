@@ -1039,7 +1039,7 @@ class Handler(BaseHTTPRequestHandler):
         token_hash = hashlib.sha256(token.encode()).hexdigest()
         with connect() as db:
             row = db.execute(
-                "SELECT id,guest_name FROM guest_sessions WHERE token_hash=? AND expires_at>?",
+                "SELECT id,guest_name AS name FROM guest_sessions WHERE token_hash=? AND expires_at>?",
                 (token_hash, int(time.time())),
             ).fetchone()
         return dict(row) if row else None

@@ -1,4 +1,5 @@
 const GUEST_ORDER_STORAGE_KEY='bitehub-guest-order-access-v1';
+const GUEST_LEFT_STORAGE_KEY='bitehub-guest-left-v1';
 function savedGuestOrderAccess(){
   try{
     const records=JSON.parse(localStorage.getItem(GUEST_ORDER_STORAGE_KEY)||'[]');
@@ -6,35 +7,20 @@ function savedGuestOrderAccess(){
   }catch{return[]}
 }
 const hasSavedGuestOrders=savedGuestOrderAccess().length>0;
+const hasLeftGuestMode=(()=>{try{return sessionStorage.getItem(GUEST_LEFT_STORAGE_KEY)==='1'}catch{return false}})();
 let guestOrderAccess=savedGuestOrderAccess();
-const state={user:null,publicBrowse:new URLSearchParams(location.search).has('stall')||hasSavedGuestOrders,products:[],featuredProducts:[],heroFeaturedIndex:0,featuredScroll:0,featuredPaused:false,featuredTimer:null,orders:[],overview:null,adminReports:null,reportRange:'30',reachAnalytics:null,paused:false,cart:new Map(),cartNote:'',guestName:'',guestSessionId:null,guestSchoolRole:'',guestGrade:'',guestSection:'',fulfillment:'pickup',deliveryLocation:null,mapZoom:1,trackingWatch:null,lastLocationSent:0,runnerLinks:{},filter:'All',query:'',sort:'featured',stallFilter:'All',dietaryFilter:'All',allergenFilter:'All',filterPanelOpen:false,buyerView:'menu',ownerView:'dashboard',adminView:'overview',authRole:'buyer',pushEnabled:false,pushAvailable:false,sidebarOpen:false,sidebarSettingsOpen:false,sidebarProfileOpen:false};
-const $=s=>document.querySelector(s), root=$('#view-content'), toastNode=$('#toast'), openingSplash=$('#opening-splash'), openingSplashStartedAt=performance.now();
+const state={user:null,publicBrowse:new URLSearchParams(location.search).has('stall')||(hasSavedGuestOrders&&!hasLeftGuestMode),products:[],featuredProducts:[],heroFeaturedIndex:0,featuredScroll:0,featuredPaused:false,featuredTimer:null,orders:[],overview:null,adminReports:null,reportRange:'30',reachAnalytics:null,paused:false,cart:new Map(),cartNote:'',guestName:'',guestSessionId:null,guestSchoolRole:'',guestGrade:'',guestSection:'',fulfillment:'pickup',deliveryLocation:null,mapZoom:1,trackingWatch:null,lastLocationSent:0,runnerLinks:{},filter:'All',query:'',sort:'featured',stallFilter:'All',dietaryFilter:'All',allergenFilter:'All',filterPanelOpen:false,buyerView:'menu',ownerView:'dashboard',adminView:'overview',authRole:'buyer',frontGuestStarted:false,pushEnabled:false,pushAvailable:false,sidebarOpen:false,sidebarSettingsOpen:false,sidebarProfileOpen:false};
+const $=s=>document.querySelector(s), root=$('#view-content'), toastNode=$('#toast'), openingSplash=$('#opening-splash'), openingSplashStartedAt=performance.now(), openingSplashMinimumDuration=matchMedia('(prefers-reduced-motion: reduce)').matches?500:2600;
+let openingSplashDismissTimer=null;
 function dismissOpeningSplash(){
-  if(!openingSplash?.isConnected)return;
-  openingSplash.classList.add('is-exiting');
-  setTimeout(()=>openingSplash.remove(),460);
-}
-let slowLoadCount=0,slowLoadTimer=null;
-function beginSlowLoadFeedback(){
-  slowLoadCount++;
-  if(slowLoadCount===1)slowLoadTimer=setTimeout(()=>{
-    if(!slowLoadCount)return;
-    const skeleton=$('#slow-load-skeleton');
-    if(skeleton){skeleton.hidden=false;skeleton.setAttribute('aria-hidden','false')}
-    document.querySelector('#app')?.classList.add('is-slow-loading');
-    dismissOpeningSplash();
-  },600);
-  let finished=false;
-  return()=>{
-    if(finished)return;
-    finished=true;
-    slowLoadCount=Math.max(0,slowLoadCount-1);
-    if(slowLoadCount)return;
-    clearTimeout(slowLoadTimer);slowLoadTimer=null;
-    const skeleton=$('#slow-load-skeleton');
-    if(skeleton){skeleton.hidden=true;skeleton.setAttribute('aria-hidden','true')}
-    document.querySelector('#app')?.classList.remove('is-slow-loading');
-  };
+  if(!openingSplash?.isConnected||openingSplash.classList.contains('is-exiting')||openingSplashDismissTimer!==null)return;
+  const remainingIntroTime=Math.max(0,openingSplashMinimumDuration-(performance.now()-openingSplashStartedAt));
+  openingSplashDismissTimer=setTimeout(()=>{
+    openingSplashDismissTimer=null;
+    if(!openingSplash.isConnected||openingSplash.classList.contains('is-exiting'))return;
+    openingSplash.classList.add('is-exiting');
+    setTimeout(()=>openingSplash.remove(),460);
+  },remainingIntroTime);
 }
 let refreshTimer;
 let publicRunnerTracking=null,runnerShareTimer=null,runnerShareBusy=false;
@@ -194,7 +180,7 @@ async function refreshGuestOrders(){
 }
 function renderRunnerSharePage(orderId,tokenValid=true){
   document.body.classList.add('runner-tracking-page');
-  root.innerHTML=`<section class="runner-share-page"><header class="runner-share-brand"><a href="/" aria-label="BiteHub home"><img src="assets/bitehub-icon.png" alt=""><span><strong>BiteHub</strong><small>PALAWAN NATIONAL SCHOOL</small></span></a><span class="runner-share-live"><i></i>Delivery tracking</span></header><main class="runner-share-card"><span class="eyebrow">PNS RUNNER LINK · ORDER #${Number(orderId)||'—'}</span><div class="runner-share-illustration" aria-hidden="true"><span>📍</span><i></i><b>↗</b></div><h1>Share your live location</h1><p class="runner-share-lead">The customer can follow your delivery on the PNS campus map while you bring their order over.</p><div class="runner-share-status" id="runner-share-status" role="status" aria-live="polite">${tokenValid?'Tap start when you are ready. Your phone will ask to use its location.':'This runner link is incomplete. Ask the stall owner for a new link.'}</div><div class="runner-share-actions"><button type="button" class="button button-primary" data-runner-share-start ${tokenValid?'':'disabled'}>Start sharing location <span aria-hidden="true">→</span></button><button type="button" class="button button-outline" data-runner-share-stop hidden>Pause sharing</button></div><p class="runner-share-guidance">Updates about every 5 seconds while this page is open. Keep GPS enabled and leave this screen open during delivery. Phone location sharing requires a secure HTTPS connection.</p><div class="runner-share-privacy">🔒 Location is shared only with the customer and stall for this active order.</div></main><footer>Made for the PNS community · BiteHub</footer></section>`;
+  root.innerHTML=`<section class="runner-share-page"><header class="runner-share-brand"><a href="/" aria-label="BiteHub home"><img src="assets/bitehub-icon.png?v=bitehub-red-gold-20261102" alt=""><span><strong>BiteHub</strong><small>PALAWAN NATIONAL SCHOOL</small></span></a><span class="runner-share-live"><i></i>Delivery tracking</span></header><main class="runner-share-card"><span class="eyebrow">PNS RUNNER LINK · ORDER #${Number(orderId)||'—'}</span><div class="runner-share-illustration" aria-hidden="true"><span>📍</span><i></i><b>↗</b></div><h1>Share your live location</h1><p class="runner-share-lead">The customer can follow your delivery on the PNS campus map while you bring their order over.</p><div class="runner-share-status" id="runner-share-status" role="status" aria-live="polite">${tokenValid?'Tap start when you are ready. Your phone will ask to use its location.':'This runner link is incomplete. Ask the stall owner for a new link.'}</div><div class="runner-share-actions"><button type="button" class="button button-primary" data-runner-share-start ${tokenValid?'':'disabled'}>Start sharing location <span aria-hidden="true">→</span></button><button type="button" class="button button-outline" data-runner-share-stop hidden>Pause sharing</button></div><p class="runner-share-guidance">Updates about every 5 seconds while this page is open. Keep GPS enabled and leave this screen open during delivery. Phone location sharing requires a secure HTTPS connection.</p><div class="runner-share-privacy">🔒 Location is shared only with the customer and stall for this active order.</div></main><footer>Made for the PNS community · BiteHub</footer></section>`;
 }
 function runnerTrackingFromHash(){
   const match=location.hash.match(/^#runner-track=(\d+)\.([A-Za-z0-9_-]{40,100})$/);
@@ -276,7 +262,7 @@ function decorateProductCards(){
     const footer=card.querySelector('.product-bottom');
     if(productTags(product))footer?.insertAdjacentHTML('beforebegin',`<div class="product-tag-summary">${productTags(product)}</div>`);
     const stock=Number(product.stock_count),artwork=card.querySelector('.product-art-trigger');
-    if(product.available&&Number.isFinite(stock)&&stock>0&&stock<3&&artwork&&!artwork.querySelector('.product-stock-urgency'))artwork.insertAdjacentHTML('afterbegin','<small class="product-stock-urgency" aria-label="Almost sold out. Only '+stock+' left. Buy now"><b>ALMOST GONE</b><span>Buy now · '+stock+' left</span></small>');
+    if(product.available&&Number.isFinite(stock)&&stock>0&&stock<=3&&artwork&&!artwork.querySelector('.product-stock-urgency'))artwork.insertAdjacentHTML('afterbegin','<small class="product-stock-urgency" aria-label="Almost sold out. Only '+stock+' left. Buy now"><b>ONLY '+stock+' LEFT</b><span>Buy now</span></small>');
     const add=card.querySelector('[data-add]');
     if(add){
       const closed=!product.stall_open;
@@ -284,7 +270,7 @@ function decorateProductCards(){
       add.disabled=state.paused||closed||soldOut;
       add.textContent=state.paused?'Paused':closed?'Closed':soldOut?'Sold out':'Add +';
       if(closed)add.title=`Opens ${product.opens_at}`;
-      if(product.stock_count!==null&&product.stock_count>0)card.querySelector('.product-bottom')?.insertAdjacentHTML('afterbegin',`<small class="stock-note">${product.stock_count} left</small>`);
+      if(product.stock_count!==null&&product.stock_count>3)card.querySelector('.product-bottom')?.insertAdjacentHTML('afterbegin',`<small class="stock-note">${product.stock_count} left</small>`);
     }
   });
 }
@@ -299,12 +285,16 @@ function renderFeaturedPicks(){
   return `${categories}<section class="featured-section" aria-labelledby="featured-title"><div class="featured-heading"><div><span class="eyebrow">TODAY AT THE PNS MARKET</span><h2 id="featured-title">Fresh from our stalls <span aria-hidden="true">✦</span></h2><p>Handpicked favorites from the PNS campus market.</p></div><div class="featured-controls"><button type="button" class="featured-control" data-feature-move="-1" aria-label="Previous campus picks">←</button><button type="button" class="featured-control" data-feature-move="1" aria-label="Next campus picks">→</button><button type="button" class="featured-motion" data-feature-pause aria-pressed="${state.featuredPaused}">${state.featuredPaused?'Play':'Pause'} rotation</button></div></div><div class="featured-rail" aria-label="Featured campus menu items">${picks.map(item=>`<article class="featured-card"><div class="featured-photo">${item.photo_url?`<img src="${esc(item.photo_url)}" alt="${esc(item.name)}" loading="lazy">`:`<span aria-hidden="true">${esc(item.emoji)}</span>`}<span class="featured-ribbon">✦ TODAY’S PICK</span></div><div class="featured-copy"><button class="featured-stall featured-stall-link" data-stall-profile="${item.stall_id}"><span class="stall-mini-logo">${item.stall_logo_url?`<img src="${esc(item.stall_logo_url)}" alt="">`:`${esc(item.stall_name.trim().charAt(0).toUpperCase())}`}</span>${esc(item.stall_name)}</button><h3>${esc(item.name)}</h3><p>${esc(item.description||'A fresh campus favorite, ready for your break.')}</p><div class="featured-buy"><strong>${money(item.price)}</strong><button class="button button-primary button-small" data-add="${item.id}" ${state.paused||!item.stall_open||!item.available?'disabled':''}>${state.paused?'Paused':!item.stall_open?'Closed':!item.available?'Sold out':'Add to bag +'}</button></div></div></article>`).join('')}</div><small class="featured-fairness">Featured stalls rotate daily · Each stall can feature one item at a time</small></section>`;
 }
 function buyerHeroItems(){
-  const available=[...state.featuredProducts,...state.products].filter(item=>item.available!==false&&(item.stock_count==null||Number(item.stock_count)>0));
-  return [...new Map(available.map(item=>[item.id,item])).values()];
+  const items=[...state.featuredProducts,...state.products];
+  const unique=[...new Map(items.map(item=>[item.id,item])).values()];
+  const inStock=item=>item.available!==false&&(item.stock_count==null||Number(item.stock_count)>0);
+  return unique.sort((a,b)=>Number(inStock(b))-Number(inStock(a))||Number(Boolean(b.photo_url))-Number(Boolean(a.photo_url)));
 }
 function startFeaturedMotion(){
-  if(state.featuredTimer){clearInterval(state.featuredTimer);state.featuredTimer=null}
-  if(!buyerHeroItems().length)return;
+  const items=buyerHeroItems(),hasHero=Boolean($('.buyer-banner')),hasRail=Boolean($('.featured-rail'));
+  if(!hasHero&&!hasRail){if(state.featuredTimer){clearInterval(state.featuredTimer);state.featuredTimer=null}return}
+  if(items.length<2&&state.featuredProducts.length<2){if(state.featuredTimer){clearInterval(state.featuredTimer);state.featuredTimer=null}return}
+  if(state.featuredTimer)return;
   state.featuredTimer=setInterval(()=>{
     if(state.featuredPaused||document.visibilityState!=='visible')return;
     if(buyerHeroItems().length>1)setBuyerHeroFeature(state.heroFeaturedIndex+1);
@@ -337,7 +327,7 @@ function renderSidebar(){
     if(!state.publicBrowse)return;
     const ordersCount=state.orders.filter(order=>!['completed','declined'].includes(order.status)).length;
     account.innerHTML=`<div class="guest-sidebar-card"><span class="guest-sidebar-icon" aria-hidden="true">⌂</span><span><strong>Browsing as a guest</strong><small>No customer account needed to explore PNS stalls.</small></span></div>`;
-    navigation.innerHTML=`<button type="button" class="sidebar-nav-link ${state.buyerView==='menu'?'is-active':''}" data-workspace-role="buyer" data-workspace-view="menu" ${state.buyerView==='menu'?'aria-current="page"':''}><span class="sidebar-link-icon" aria-hidden="true">⌕</span><span>Browse food</span></button><button type="button" class="sidebar-nav-link ${state.buyerView==='orders'?'is-active':''}" data-workspace-role="buyer" data-workspace-view="orders" ${state.buyerView==='orders'?'aria-current="page"':''}><span class="sidebar-link-icon" aria-hidden="true">↗</span><span>My orders</span>${ordersCount?`<small>${ordersCount}</small>`:''}</button><button type="button" class="sidebar-nav-link guest-owner-link" data-action="guest-owner-login"><span class="sidebar-link-icon" aria-hidden="true">⌂</span><span>Stall owner sign in</span><span aria-hidden="true">→</span></button>`;
+    navigation.innerHTML=`<button type="button" class="sidebar-nav-link ${state.buyerView==='menu'?'is-active':''}" data-workspace-role="buyer" data-workspace-view="menu" ${state.buyerView==='menu'?'aria-current="page"':''}><span class="sidebar-link-icon" aria-hidden="true">⌕</span><span>Browse food</span></button><button type="button" class="sidebar-nav-link ${state.buyerView==='orders'?'is-active':''}" data-workspace-role="buyer" data-workspace-view="orders" ${state.buyerView==='orders'?'aria-current="page"':''}><span class="sidebar-link-icon" aria-hidden="true">↗</span><span>My orders</span>${ordersCount?`<small>${ordersCount}</small>`:''}</button><button type="button" class="sidebar-nav-link guest-owner-link" data-action="guest-owner-login"><span class="sidebar-link-icon" aria-hidden="true">⌂</span><span>Stall owner sign in</span><span aria-hidden="true">→</span></button><button type="button" class="sidebar-nav-link guest-leave-link" data-action="leave-guest-mode"><span class="sidebar-link-icon" aria-hidden="true">↩</span><span>Leave guest mode</span></button>`;
     if(settingsWrap)settingsWrap.hidden=false;
     const settings=$('#sidebar-settings-panel'),settingsButton=$('#sidebar-settings-toggle');
     if(settings)settings.hidden=!state.sidebarSettingsOpen;
@@ -417,15 +407,13 @@ async function refresh(includeMenu=true){
     if(!state.publicBrowse){renderAuthWall();return}
     if(refreshInFlight)return;
     refreshInFlight=true;
-    const finishLoading=beginSlowLoadFeedback();
     try{const menu=await api('/api/products');state.products=menu.products;state.featuredProducts=menu.featured_products||[];state.paused=menu.ordering_paused;await refreshGuestOrders();render()}
     catch(error){renderError(error.message)}
-    finally{refreshInFlight=false;finishLoading()}
+    finally{refreshInFlight=false}
     return;
   }
   if(refreshInFlight)return;
   refreshInFlight=true;
-  const finishLoading=beginSlowLoadFeedback();
   const userId=state.user.id;
   const role=state.user.role,now=Date.now();
   const loadMenu=includeMenu||now-lastMenuRefresh>=15000;
@@ -458,7 +446,7 @@ async function refresh(includeMenu=true){
       toast(changedOrders.length===1?`Order #${order.id} is now ${status.toLowerCase()}.`:`You have ${changedOrders.length} order status updates.`);
     }
   }catch(error){if(state.user?.id===userId){if(orderBaselineUserId===userId)toast(`Connection interrupted. Showing the last loaded information; retrying automatically. ${error.message}`);else renderError(error.message)}}
-  finally{refreshInFlight=false;finishLoading()}
+  finally{refreshInFlight=false}
 }
 function startAutoRefresh(){
   clearTimeout(refreshTimer);
@@ -474,6 +462,7 @@ function startAutoRefresh(){
 }
 async function continueAsGuest(){
   const result=await api('/api/guest/session',{method:'POST',body:json({name:state.guestName})});
+  try{sessionStorage.removeItem(GUEST_LEFT_STORAGE_KEY)}catch{}
   state.guestSessionId=result.guest_session?.id||null;
   clearTimeout(refreshTimer);
   state.publicBrowse=true;state.authRole='buyer';state.buyerView='menu';
@@ -511,9 +500,14 @@ function renderAuthWall(mode='front',role=state.authRole){
   const frontLanding=mode==='front';
   const choosingRole=choosing||loginChoosing;
   const adminEntry=role==='admin';
-  const frontCommunityBadge='<button type="button" class="auth-front-community" data-auth-mode="login" data-auth-role="'+(adminEntry?'buyer':'admin')+'" aria-label="'+(adminEntry?'Return to customer sign-in':'School administrator sign-in')+'"><img src="assets/palawan-national-school-logo.webp" alt=""><span><strong>Made for the PNS community</strong><small>Students · teachers · staff · stall owners</small></span></button>';
+  if(!frontLanding||role!=='buyer')state.frontGuestStarted=false;
+  const guestEntryStarted=frontLanding&&role==='buyer'&&state.frontGuestStarted;
   const chooserSchoolBadge='<div class="chooser-school-badge"><img src="assets/palawan-national-school-logo.webp" alt=""><span><strong>Palawan National School</strong><small>Community food hub</small></span></div>';
-  const masthead=`<div class="auth-masthead"><a class="brand auth-brand" href="#home" data-auth-mode="front" aria-label="BiteHub home"><img class="brand-mark auth-round-logo" src="assets/bitehub-icon.png?v=pns-palette-20261017" alt=""><img class="auth-wordmark" src="assets/bitehub-wordmark.png?v=pns-palette-20261017" alt="BiteHub"></a>${frontLanding?frontCommunityBadge:''}${choosingRole?chooserSchoolBadge:''}</div>`;
+  const brandArtwork='<img class="brand-mark auth-round-logo" src="assets/bitehub-icon.png?v=bitehub-red-gold-20261102" alt=""><img class="auth-wordmark" src="assets/bitehub-wordmark.png?v=bitehub-red-gold-20261102" alt="">';
+  const brandControl=frontLanding&&!adminEntry
+    ?'<button type="button" class="brand auth-brand auth-admin-trigger" data-action="open-admin-entry" aria-label="Open school administrator sign-in" title="School administrator sign-in">'+brandArtwork+'<span class="auth-admin-loading-label" role="status" hidden>Opening admin sign-in…</span></button>'
+    :'<a class="brand auth-brand" href="#home" data-auth-mode="front"'+(adminEntry?' data-auth-role="buyer"':'')+' aria-label="'+(adminEntry?'Return to guest sign-in':'BiteHub home')+'">'+brandArtwork+'</a>';
+  const masthead=`<div class="auth-masthead">${brandControl}${choosingRole?chooserSchoolBadge:''}</div>`;
   const buyerArt=`<svg viewBox="0 0 100 100" aria-hidden="true"><path d="M19 43h62l-5 39H24z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M31 42c2-13 9-20 19-20s17 7 19 20" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M33 57h34M38 67h24" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><circle cx="50" cy="34" r="5" fill="#FAB2A4"/></svg>`;
   const ownerArt=`<svg viewBox="0 0 100 100" aria-hidden="true"><path d="M20 42h60v39H20z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M16 42l8-20h52l8 20" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M17 42c0 7 11 9 16 2 4 7 13 7 17 0 4 7 13 7 17 0 5 7 16 5 16-2" fill="#FAB2A4" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/><path d="M39 81V59h22v22M28 54h6m32 0h6" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
   const adminArt=`<svg viewBox="0 0 100 100" aria-hidden="true"><path d="M18 36l32-16 32 16v45H18z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M29 44h10v10H29zM45 44h10v10H45zM61 44h10v10H61zM29 61h10v10H29zM45 61h10v10H45zM61 61h10v10H61z" fill="#8ED0C2" stroke="currentColor" stroke-width="2"/><path d="M44 81V70h12v11" fill="none" stroke="currentColor" stroke-width="3"/></svg>`;
@@ -528,19 +522,21 @@ function renderAuthWall(mode='front',role=state.authRole){
     const selected=role===item[0];
     return '<button type="button" class="front-role-choice role-'+item[0]+(selected?' is-selected':'')+'" data-front-role="'+item[0]+'" aria-pressed="'+selected+'" aria-label="'+item[2]+(selected?' selected':'')+'"><span class="front-role-icon">'+item[1]+'</span><span class="front-role-copy"><strong>'+item[2]+'</strong><small>'+item[3]+'</small></span><span class="front-role-arrow" aria-hidden="true">'+(selected?'✓':'→')+'</span></button>';
   }).join('');
-  const frontRoleLanding='<div class="auth-front-layout'+(role==='admin'?' admin-login-open':'')+'"><section class="auth-front-copy"><span class="front-eyebrow">PALAWAN NATIONAL SCHOOL · CAMPUS FOOD MARKET</span><h1>Good food.<br><span>Better breaks.</span><i aria-hidden="true">✦</i></h1><p>Discover PNS stalls, browse their menus, and find a new favorite for your next school break.</p></section><section class="auth-card auth-front-card"><header class="auth-front-heading"><span class="front-sparkle" aria-hidden="true">✦</span><span class="eyebrow">YOUR PNS FOOD MARKET</span><h2>Welcome to BiteHub!</h2><p>Browse school stalls and order as a guest, or sign in to manage your stall.</p></header><div class="auth-front-role-heading"><strong>Continue as a guest</strong><small>Or sign in as a stall owner.</small></div><div class="auth-front-role-list" role="group" aria-label="Stall owner sign in">'+frontRoleOptions+'</div><div id="auth-form-slot"></div><div class="auth-front-secure"><span aria-hidden="true">▣</span><span>Secure sign in</span><i aria-hidden="true">·</i><span>PNS Food Hub</span></div></section></div>';
+  const frontRoleLanding='<div class="auth-front-layout'+(role==='admin'?' admin-login-open':'')+(role==='buyer'?(guestEntryStarted?' guest-entry-revealed':' guest-start-idle'):'')+'"><section class="auth-front-copy"><span class="front-eyebrow">PALAWAN NATIONAL SCHOOL · CAMPUS FOOD MARKET</span><h1>Good food.<br><span>Better breaks.</span><i aria-hidden="true">✦</i></h1><p>Discover PNS stalls, browse their menus, and find a new favorite for your next school break.</p></section><section class="auth-card auth-front-card"><header class="auth-front-heading"><span class="front-sparkle" aria-hidden="true">✦</span><span class="eyebrow">YOUR PNS FOOD MARKET</span><h2>Welcome to BiteHub!</h2><p>Browse school stalls and order as a guest, or sign in to manage your stall.</p></header><div class="auth-front-role-heading"><strong>Continue as a guest</strong><small>Or sign in as a stall owner.</small></div><div class="auth-front-role-list" role="group" aria-label="Stall owner sign in">'+frontRoleOptions+'</div><div id="auth-form-slot"></div><div class="auth-front-secure"><span aria-hidden="true">▣</span><span>Secure sign in</span><i aria-hidden="true">·</i><span>PNS Food Hub</span></div></section></div>';
   const roleLanding=frontLanding?frontRoleLanding:choosingRole?`<section class="role-picker-panel" aria-labelledby="role-picker-title"><div class="role-path-heading"><div><span class="eyebrow">${loginChoosing?'SIGN IN':'PNS COMMUNITY'}</span><h2 id="role-picker-title">${loginChoosing?'Choose your workspace':'Choose your path'}</h2></div><p>${loginChoosing?'Select the account you use for BiteHub at PNS.':'Choose the space that fits you at PNS.'}</p></div><div class="role-card-grid">${roleCards}</div><p class="role-login">${loginChoosing?'New to BiteHub?':'Already have an account?'} <button class="text-button" data-auth-mode="${loginChoosing?'choose':'front'}">${loginChoosing?'Create an account':'Log in'}</button></p></section>`:`<header class="role-heading role-auth-heading"><span class="eyebrow">PNS FOOD HUB</span><h1>${mode==='login'?'Welcome back':'Join BiteHub'}</h1><p>${mode==='login'?'Log in to continue to your PNS workspace.':'Create an account for Palawan National School’s BiteHub.'}</p></header><section class="auth-card"><button class="text-button auth-back" data-auth-mode="choose">← Choose a role</button><div id="auth-form-slot"></div><p class="auth-footnote">Accounts, orders, and menus are saved to this server.</p></section>`;
    const frontTopAction=frontLanding?'<button class="front-signup-link" data-auth-mode="signup" data-auth-role="owner">Stall owner? <strong>Create account</strong><span aria-hidden="true">→</span></button>':'';
   const chooserBackAction=choosingRole?'<button type="button" class="chooser-back-link" data-auth-mode="front"><span aria-hidden="true">←</span> Back to front page</button>':'';
   root.innerHTML='<section class="role-home '+(frontLanding?'role-home--front':choosingRole?'role-home--chooser':'role-home--auth')+'">'+masthead+frontTopAction+chooserBackAction+roleLanding+'</section>';
+  const footerReturn=document.querySelector('.auth-front-footer-return');
+  if(footerReturn)footerReturn.hidden=!(frontLanding&&adminEntry);
   const authBack=$('.auth-back');
   if(authBack){authBack.dataset.authMode='front';authBack.dataset.authRole='owner';authBack.textContent='← Back to sign in'}
-  if(frontLanding&&role==='buyer')renderGuestWelcome();
+  if(frontLanding&&role==='buyer')guestEntryStarted?renderGuestWelcome():renderGuestStart();
   else if(!choosingRole)renderAuthForm(frontLanding?'login':mode,role,frontLanding);
   if(frontLanding){
     const heading=$('.auth-front-heading h2'),intro=$('.auth-front-heading p');
-    if(heading)heading.textContent=role==='admin'?'School admin sign in':role==='owner'?'Stall owner sign in':'Explore as a guest';
-     if(intro)intro.textContent=role==='admin'?'Sign in to manage the PNS food marketplace.':role==='owner'?'Sign in to manage your stall and orders.':'Enter your name to browse PNS menus and order from a stall. No customer account needed.';
+    if(heading)heading.textContent=role==='admin'?'School admin sign in':role==='owner'?'Stall owner sign in':guestEntryStarted?'Explore as a guest':'Discover the campus market';
+     if(intro)intro.textContent=role==='admin'?'Sign in to manage the PNS food marketplace.':role==='owner'?'Sign in to manage your stall and orders.':guestEntryStarted?'Enter your name to browse PNS menus and order from a stall. No customer account needed.':'Browse PNS stalls and menus as a guest. No customer account needed.';
     if(role==='buyer'){
       const guestForm=$('#auth-form-slot .guest-entry-form');
       guestForm?.classList.remove('guest-welcome');
@@ -568,6 +564,10 @@ function renderAuthWall(mode='front',role=state.authRole){
     if(secureIcon&&role==='buyer')secureIcon.textContent='✓';
     if(secureLabel)secureLabel.textContent=role==='buyer'?'No account needed':'Secure sign in';
   }
+}
+function renderGuestStart(){
+  const slot=$('#auth-form-slot');if(!slot)return;
+  slot.innerHTML=`<div class="guest-start-panel" aria-live="polite"><div class="guest-start-food" aria-hidden="true"><span>🍱</span><span>🍔</span><span>🥤</span><i class="guest-start-spark guest-start-spark--one">✦</i><i class="guest-start-spark guest-start-spark--two">✦</i><i class="guest-start-spark guest-start-spark--three">•</i></div><div class="guest-start-copy"><strong>Ready to look around?</strong><small>Just choose a name to start.</small></div><button type="button" class="guest-start-button" data-action="start-guest-entry"><span>Get started</span><span class="guest-start-arrow" aria-hidden="true">→</span></button></div>`;
 }
 function renderGuestWelcome(){
   const slot=$('#auth-form-slot');if(!slot)return;
@@ -651,9 +651,11 @@ function buyerHeroArt(item){
   else item=null;
   if(!item)return `<span class="banner-art-stamp">FRESH · LOCAL · YOURS</span>${buyerHeroFallbackArt()}<i class="banner-art-sparkle">✦</i><b>MADE FOR<br>YOUR BREAK</b>`;
   const total=items.length,index=state.heroFeaturedIndex+1;
+  const inStock=item.available!==false&&(item.stock_count==null||Number(item.stock_count)>0);
+  const displayPrice=inStock?money(item.price):'SOLD OUT';
   const food=item.photo_url?`<img src="${esc(item.photo_url)}" alt="" loading="eager" decoding="async">`:`<span aria-hidden="true">${esc(item.emoji||'🍽️')}</span>`;
   const stallMark=item.stall_logo_url?`<img src="${esc(item.stall_logo_url)}" alt="">`:`<i aria-hidden="true">${esc(item.stall_name.trim().charAt(0).toUpperCase())}</i>`;
-  return `<span class="banner-art-stamp">${total>1?`PNS STALL PICK · ${String(index).padStart(2,'0')} / ${String(total).padStart(2,'0')}`:'PNS STALL PICK'}</span><div class="banner-featured-food" role="img" aria-label="${esc(item.name)} from ${esc(item.stall_name)}">${food}</div><span class="banner-featured-note"><span class="banner-featured-owner">${stallMark}<span><small>MADE AT</small><b>${esc(item.stall_name)}</b></span></span><strong class="banner-featured-name">${esc(item.name)}</strong><span class="banner-featured-price">${money(item.price)}</span></span>`;
+  return `<span class="banner-art-stamp">${total>1?`PNS STALL PICK · ${String(index).padStart(2,'0')} / ${String(total).padStart(2,'0')}`:'PNS STALL PICK'}</span><div class="banner-featured-food" role="img" aria-label="${esc(item.name)} from ${esc(item.stall_name)}">${food}</div><span class="banner-featured-note"><span class="banner-featured-owner">${stallMark}<span><small>MADE AT</small><b>${esc(item.stall_name)}</b></span></span><strong class="banner-featured-name">${esc(item.name)}</strong><span class="banner-featured-price">${displayPrice}</span></span>`;
 }
 function buyerHeroFallbackArt(){return `<svg class="banner-food-illustration" viewBox="0 0 520 420" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><ellipse cx="260" cy="316" rx="168" ry="28" fill="#21133e" opacity=".24"/><ellipse cx="260" cy="286" rx="171" ry="43" fill="#fff8e9"/><ellipse cx="260" cy="283" rx="134" ry="26" fill="#ffd45a"/><path d="M146 228h228l-25 92c-5 19-42 31-89 31s-84-12-89-31l-25-92Z" fill="#56339b"/><path d="M165 251h190l-17 61c-15 11-43 17-78 17s-63-6-78-17l-17-61Z" fill="#704bb8"/><path d="M135 222c0-10 8-18 18-18h214c10 0 18 8 18 18s-8 17-18 17H153c-10 0-18-7-18-17Z" fill="#a98bf4"/><path d="M153 219h214" stroke="#fff8e9" stroke-width="7" stroke-linecap="round"/><path d="m307 188 25-70c2-7 11-8 15-1l22 59-15 43-47-31Z" fill="#f4b63e" stroke="#fff8e9" stroke-width="7" stroke-linejoin="round"/><path d="m320 185 20-55" stroke="#fff8e9" stroke-width="6" stroke-linecap="round"/><path d="M317 198c12 5 25 5 38 0" stroke="#c95749" stroke-width="7" stroke-linecap="round"/><path d="m294 202-12-67c-1-7 7-11 12-5l23 26-23 46Z" fill="#f7cd54" stroke="#fff8e9" stroke-width="6" stroke-linejoin="round"/><path d="m279 201-8-52c-1-7 7-11 12-5l19 20-23 37Z" fill="#ee8b31" stroke="#fff8e9" stroke-width="6" stroke-linejoin="round"/><path d="M162 190c4-38 31-66 68-66h22c33 0 60 24 63 60l-10 22H170l-8-16Z" fill="#f39b31" stroke="#fff8e9" stroke-width="7" stroke-linejoin="round"/><ellipse cx="210" cy="148" rx="4" ry="6" transform="rotate(24 210 148)" fill="#fff8e9"/><ellipse cx="234" cy="138" rx="4" ry="6" transform="rotate(24 234 138)" fill="#fff8e9"/><ellipse cx="257" cy="148" rx="4" ry="6" transform="rotate(24 257 148)" fill="#fff8e9"/><ellipse cx="197" cy="170" rx="4" ry="6" transform="rotate(24 197 170)" fill="#fff8e9"/><ellipse cx="242" cy="166" rx="4" ry="6" transform="rotate(24 242 166)" fill="#fff8e9"/><path d="M170 190c18 11 35-8 53 0s35-8 53 0 29-5 39-12v21H171l-1-9Z" fill="#69bc79"/><path d="M171 196c18 10 36-8 54 0s36-8 54 0 27-4 36-10l6 17c-20 10-42 13-64 12l-77-5-9-14Z" fill="#57329b" stroke="#fff8e9" stroke-width="6" stroke-linejoin="round"/><path d="M184 216c24 11 48 11 72 4s45-7 66 1" stroke="#e9822d" stroke-width="8" stroke-linecap="round"/><path d="M207 284h106m-84 19h62" stroke="#d8c6ff" stroke-width="8" stroke-linecap="round" opacity=".8"/><path d="M100 111v28m-14-14h28m294 150v21m-10-10h20" stroke="#ffe178" stroke-width="5" stroke-linecap="round"/></svg>`}
 function setBuyerHeroFeature(index){
@@ -677,8 +679,8 @@ function renderBuyer(){
   if(ordersView){root.innerHTML=`${buyerNavigation}<section class="workspace-page customer-orders-page" id="buyer-orders"><div class="section-title"><div><span class="eyebrow">YOUR RECENT ACTIVITY</span><h2>Order updates</h2><p class="helper-text">Check progress, pickup details, and feedback for your PNS orders.</p></div><span class="result-count">${state.orders.length} ${state.orders.length===1?'order':'orders'}</span></div>${state.orders.length?`<div class="order-list">${state.orders.slice(0,12).map(orderCard).join('')}</div>`:emptyState('↗','Your first order starts here','Browse the menu and place an order. Its progress will appear here.')}</section>`;return}
   const heroRotates=buyerHeroItems().length>1;
   const activeFilterCount=[state.filter!=='All',state.stallFilter!=='All',state.dietaryFilter!=='All',state.allergenFilter!=='All',state.sort!=='featured'].filter(Boolean).length;
-  root.innerHTML=`<section class="buyer-banner" aria-labelledby="buyer-banner-title"><div class="buyer-banner-copy"><span class="eyebrow">THE PNS CAMPUS MARKET</span><h2 id="buyer-banner-title">Fresh finds,<br><span>happy breaks.</span></h2><p>Wander through campus stalls and discover something delicious.</p><div class="buyer-banner-cycle-cue ${heroRotates?'is-rotating':'is-waiting'}"><i aria-hidden="true"></i><span>${heroRotates?'New PNS stall pick every 10 seconds':'More PNS picks appear as stalls add menu items'}</span></div></div><div class="banner-art" role="group" aria-roledescription="automatic food showcase" aria-label="Featured food from PNS school stalls">${buyerHeroArt()}</div></section>${buyerNavigation}${renderFeaturedPicks()}
-  <section class="section-block customer-menu-page" id="menu"><div class="section-title"><div><span class="eyebrow">MARKET MENU</span><h2>Find your next favorite</h2></div><div class="menu-search-tools"><label class="search-field"><span aria-hidden="true">⌕</span><input type="search" id="menu-search" value="${esc(state.query)}" placeholder="Dish, stall, or craving" aria-label="Search menu"></label><button type="button" class="menu-filter-toggle" data-action="toggle-menu-filters" aria-controls="menu-filter-panel" aria-expanded="${state.filterPanelOpen}"><span aria-hidden="true">☷</span><span>Filters &amp; sort</span>${activeFilterCount?`<small>${activeFilterCount}</small>`:''}</button></div></div><div class="menu-controls"><div class="menu-filter-panel" id="menu-filter-panel" ${state.filterPanelOpen?'':'hidden'}><div class="filter-row" role="group" aria-label="Filter menu by category">${categories.map(c=>`<button class="filter-chip ${state.filter===c?'is-active':''}" data-filter="${esc(c)}" aria-pressed="${state.filter===c}">${esc(c)}</button>`).join('')}</div><label class="sort-field">Sort<select id="menu-sort"><option value="featured" ${state.sort==='featured'?'selected':''}>Featured</option><option value="price-low" ${state.sort==='price-low'?'selected':''}>Price: low to high</option><option value="price-high" ${state.sort==='price-high'?'selected':''}>Price: high to low</option><option value="name" ${state.sort==='name'?'selected':''}>Name</option></select></label><div class="catalog-filter-options"></div><small class="allergen-disclaimer">Allergen details are stall-provided; confirm directly when needed.</small><div class="menu-filter-summary"><span class="result-count" role="status" aria-live="polite">${products.length} ${products.length===1?'item':'items'}</span><button type="button" class="menu-filter-clear" data-action="clear-menu-filters" ${activeFilterCount?'':'hidden'}>Clear filters</button></div></div></div><div class="product-grid">${products.length?products.map(p=>`<article class="product-card"><button class="product-art product-art-trigger" data-product-details="${p.id}" aria-label="View details for ${esc(p.name)}"><span>${esc(p.emoji)}</span><small>${esc(p.category)}</small></button><div class="product-details"><div class="product-stall">${esc(p.stall_name)}</div><button class="product-name-trigger" data-product-details="${p.id}"><h3>${esc(p.name)}</h3></button><p>${esc(p.description||'Fresh from the stall, ready for your break.')}</p><div class="product-bottom"><strong>${money(p.price)}</strong><button class="button button-primary button-small" data-add="${p.id}" ${state.paused?'disabled':''}>${state.paused?'Paused':'Add +'}</button></div></div></article>`).join(''):state.products.length===0?emptyState('⌂','No PNS menus yet','Stall owners can create an account and publish a menu. New items will appear here automatically.'):emptyState('⌕','No menu items found','Try another search or category.')}</div></section>`;
+  root.innerHTML=`<section class="buyer-banner" aria-labelledby="buyer-banner-title"><div class="buyer-banner-copy"><span class="eyebrow">THE PNS CAMPUS MARKET</span><h2 id="buyer-banner-title">Fresh finds,<br><span>happy breaks.</span></h2><p>Wander through campus stalls and discover something delicious.</p><div class="buyer-banner-cycle-cue ${heroRotates?'is-rotating':'is-waiting'}"><i aria-hidden="true"></i><span>${heroRotates?'Fresh food spotlight every 10 seconds':'Food picks rotate as stalls add menu items'}</span></div></div><div class="banner-art" role="group" aria-roledescription="automatic food showcase" aria-label="Featured food from PNS school stalls">${buyerHeroArt()}</div></section>${buyerNavigation}${renderFeaturedPicks()}
+  <section class="section-block customer-menu-page" id="menu"><div class="section-title"><div><span class="eyebrow">MARKET MENU</span><h2>Find your next favorite</h2></div><div class="menu-search-tools"><label class="search-field"><span aria-hidden="true">⌕</span><input type="search" id="menu-search" value="${esc(state.query)}" placeholder="Dish, stall, or craving" aria-label="Search menu"></label><button type="button" class="menu-filter-toggle" data-action="toggle-menu-filters" aria-controls="menu-filter-panel" aria-expanded="${state.filterPanelOpen}"><span aria-hidden="true">☷</span><span>Filters &amp; sort</span>${activeFilterCount?`<small>${activeFilterCount}</small>`:''}</button></div></div><div class="menu-controls"><div class="menu-filter-panel" id="menu-filter-panel" ${state.filterPanelOpen?'':'hidden'}><div class="menu-filter-controls" role="group" aria-label="Menu filters; swipe sideways to see all controls"><div class="filter-row" role="group" aria-label="Filter menu by category">${categories.map(c=>`<button class="filter-chip ${state.filter===c?'is-active':''}" data-filter="${esc(c)}" aria-pressed="${state.filter===c}">${esc(c)}</button>`).join('')}</div><label class="sort-field">Sort<select id="menu-sort"><option value="featured" ${state.sort==='featured'?'selected':''}>Featured</option><option value="price-low" ${state.sort==='price-low'?'selected':''}>Price: low to high</option><option value="price-high" ${state.sort==='price-high'?'selected':''}>Price: high to low</option><option value="name" ${state.sort==='name'?'selected':''}>Name</option></select></label><div class="catalog-filter-options"></div></div><div class="menu-filter-meta"><small class="allergen-disclaimer">Allergen details are stall-provided; confirm directly when needed.</small><div class="menu-filter-summary"><span class="result-count" role="status" aria-live="polite">${products.length} ${products.length===1?'item':'items'}</span><button type="button" class="menu-filter-clear" data-action="clear-menu-filters" ${activeFilterCount?'':'hidden'}>Clear filters</button></div></div></div></div><div class="product-grid">${products.length?products.map(p=>`<article class="product-card"><button class="product-art product-art-trigger" data-product-details="${p.id}" aria-label="View details for ${esc(p.name)}"><span>${esc(p.emoji)}</span><small>${esc(p.category)}</small></button><div class="product-details"><div class="product-stall">${esc(p.stall_name)}</div><button class="product-name-trigger" data-product-details="${p.id}"><h3>${esc(p.name)}</h3></button><p>${esc(p.description||'Fresh from the stall, ready for your break.')}</p><div class="product-bottom"><strong>${money(p.price)}</strong><button class="button button-primary button-small" data-add="${p.id}" ${state.paused?'disabled':''}>${state.paused?'Paused':'Add +'}</button></div></div></article>`).join(''):state.products.length===0?emptyState('⌂','No PNS menus yet','Stall owners can create an account and publish a menu. New items will appear here automatically.'):emptyState('⌕','No menu items found','Try another search or category.')}</div></section>`;
 }
 function renderBuyerView(){renderBuyer();const menu=$('#menu'),buyerNav=$('.workspace-nav-buyer'),categories=$('.market-category-section');if(categories&&buyerNav)buyerNav.after(categories);if(menu&&categories)categories.after(menu);else if(menu&&buyerNav)buyerNav.after(menu);addCatalogControls();decorateProductCards();const rail=$('.featured-rail');if(rail)rail.scrollLeft=state.featuredScroll;startFeaturedMotion()}
 function renderOwnerHoursPanel(){
@@ -814,6 +816,8 @@ function renderOwnerStallNotice(){
   root.insertAdjacentHTML('afterbegin',`<aside class="stall-status-notice is-paused"><strong>Stall paused</strong><p>Customers cannot see or order from your stall while it is paused. Contact an administrator to resume it.</p></aside>`);
 }
 function render(){
+  const footerReturn=document.querySelector('.auth-front-footer-return');
+  if(footerReturn)footerReturn.hidden=true;
   accountTools();
   if(!state.user){if(state.publicBrowse){document.querySelector('#app')?.classList.remove('auth-open');renderBuyerView();return}return renderAuthWall()}
   document.querySelector('#app')?.classList.remove('auth-open');
@@ -1062,6 +1066,29 @@ document.addEventListener('click',async e=>{
   const stallStatus=e.target.closest('[data-stall-status]');if(stallStatus){stallStatus.disabled=true;try{await api(`/api/admin/stalls/${stallStatus.dataset.stallStatus}`,{method:'PATCH',body:json({status:stallStatus.dataset.nextStatus})});toast(stallStatus.dataset.nextStatus==='paused'?'Stall paused; customers can’t order from it.':'Stall resumed and visible to customers.');await refresh()}catch(error){toast(error.message);stallStatus.disabled=false}return}
   const remove=e.target.closest('[data-delete-product]');if(remove){if(!confirm('Remove this item from your menu?'))return;try{await api(`/api/products/${remove.dataset.deleteProduct}`,{method:'DELETE'});toast('Menu item removed.');await refresh()}catch(error){toast(error.message)}return}
   const action=e.target.closest('[data-action]');if(!action)return;
+  if(action.dataset.action==='start-guest-entry'){
+    if(action.disabled)return;
+    action.disabled=true;
+    action.setAttribute('aria-busy','true');
+    action.classList.add('is-starting');
+    action.closest('.guest-start-panel')?.classList.add('is-opening');
+    action.setAttribute('aria-label','Opening the guest menu');
+    action.innerHTML='Opening BiteHub <span class="guest-start-spinner" aria-hidden="true"></span>';
+    const reducedMotion=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    window.setTimeout(()=>{state.frontGuestStarted=true;renderAuthWall('front','buyer')},reducedMotion?0:950);
+    return;
+  }
+  if(action.dataset.action==='open-admin-entry'){
+    if(action.disabled)return;
+    action.disabled=true;
+    action.classList.add('is-admin-opening');
+    action.setAttribute('aria-busy','true');
+    const loadingLabel=action.querySelector('.auth-admin-loading-label');
+    if(loadingLabel)loadingLabel.hidden=false;
+    const reducedMotion=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    window.setTimeout(()=>{state.authRole='admin';renderAuthWall('front','admin')},reducedMotion?0:560);
+    return;
+  }
   if(action.dataset.action==='forgot-password'){showAccountEmailDialog('password-forgot');return}
   if(action.dataset.action==='resend-verification'){
     const email=String(action.dataset.email||$('#auth-form-slot input[name="email"]')?.value||'').trim().toLowerCase();
@@ -1073,6 +1100,19 @@ document.addEventListener('click',async e=>{
   }
   if(action.dataset.action==='toggle-menu-filters'){state.filterPanelOpen=!state.filterPanelOpen;renderBuyerView();$('[data-action="toggle-menu-filters"]')?.focus();return}
   if(action.dataset.action==='clear-menu-filters'){state.filter='All';state.stallFilter='All';state.dietaryFilter='All';state.allergenFilter='All';state.sort='featured';renderBuyerView();return}
+  if(action.dataset.action==='leave-guest-mode'){
+    action.disabled=true;
+    try{await api('/api/guest/logout',{method:'POST',body:json({})})}
+    catch(error){action.disabled=false;toast(error.message);return}
+    closeSidebar();
+    clearTimeout(refreshTimer);
+    try{sessionStorage.setItem(GUEST_LEFT_STORAGE_KEY,'1')}catch{}
+    state.publicBrowse=false;state.guestSessionId=null;state.guestName='';state.authRole='buyer';
+    history.pushState({},'','/');
+    renderAuthWall('front','buyer');
+    window.scrollTo(0,0);
+    return;
+  }
   if(action.dataset.action==='guest-owner-login'){closeSidebar();state.publicBrowse=false;state.authRole='owner';history.pushState({},'','/');renderAuthWall('front','owner');window.scrollTo(0,0);return}
   if(action.dataset.action==='open-sidebar'){state.sidebarOpen=true;syncSidebarState();$('.sidebar-close')?.focus({preventScroll:true});return}
   if(action.dataset.action==='close-sidebar'){closeSidebar();$('.sidebar-menu-button')?.focus({preventScroll:true});return}
@@ -1249,10 +1289,9 @@ async function boot(){
   const verificationToken=authLinkParams.get('verify_email')||'';
   const passwordResetToken=authLinkParams.get('reset_password')||'';
   const isAccountEmailLink=Boolean(verificationToken||passwordResetToken);
-  const finishLoading=beginSlowLoadFeedback();
   try{if(isRunnerLink){publicRunnerTracking=runnerTrackingFromHash();document.title='Share delivery location · BiteHub';renderRunnerSharePage(publicRunnerTracking?.orderId,Boolean(publicRunnerTracking));return}if(isAccountEmailLink){history.replaceState({},'',location.pathname+location.hash);state.publicBrowse=false;state.user=null;renderAuthWall('front','owner');if(verificationToken){try{const result=await api('/api/email/verify',{method:'POST',body:json({token:verificationToken})});const status=$('.auth-front-status');if(status){status.textContent=result.message;status.classList.add('is-visible')}else toast(result.message)}catch(error){const status=$('.auth-front-status');if(status){status.textContent=error.message;status.classList.add('is-visible')}else toast(error.message)}}else showAccountEmailDialog('password-reset',passwordResetToken);return}const session=await api('/api/session');state.user=session.user;if(state.user){applyWorkspaceHash();startAutoRefresh();await refresh();loadNotificationState();await openSharedStall()}else{if(session.guest_session){state.guestSessionId=session.guest_session.id;state.guestName=session.guest_session.name;state.publicBrowse=true}if(state.publicBrowse){applyWorkspaceHash();await refresh();await openSharedStall();startAutoRefresh()}else renderAuthWall()}}
   catch(error){renderError(`${error.message} Start the server with “py server.py” from the FOODHUB folder.`)}
-  finally{finishLoading();dismissOpeningSplash();if(!isRunnerLink&&!isAccountEmailLink)showPrototypePolicyNotice()}
+  finally{dismissOpeningSplash();if(!isRunnerLink&&!isAccountEmailLink)showPrototypePolicyNotice()}
 }
 function escapePolicyHTML(value){
   return String(value).replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));

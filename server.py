@@ -921,6 +921,13 @@ class ApiError(Exception):
         self.status, self.message = status, message
 
 
+class BiteHubHTTPServer(ThreadingHTTPServer):
+    # The stdlib TCP server backlog defaults to 5. Leave room for short request
+    # bursts while the threaded handlers acquire a database connection.
+    request_queue_size = 128
+    daemon_threads = True
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "BiteHub/1.0"
 
@@ -1659,6 +1666,12 @@ class Handler(BaseHTTPRequestHandler):
             guest_session, cookie_header = self.create_guest_session(guest_name)
             self.send_json(201, {"guest_session": guest_session}, {"Set-Cookie": cookie_header})
             return
+        if path == "/api/guest/logout":
+            secure = "; Secure" if getattr(self.server, "is_https", False) else ""
+            self.send_json(200, {"ok": True}, {
+                "Set-Cookie": f"bitehub_guest_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0{secure}"
+            })
+            return
         if path == "/api/email/verify":
             if not email_delivery_ready():
                 raise ApiError(503, "Email verification is not enabled yet. You can sign in with your password.")
@@ -2339,6 +2352,7 @@ class Handler(BaseHTTPRequestHandler):
             "assets/bitehub-icon.png", "assets/bitehub-wordmark.png",
             "assets/palawan-national-school-logo.webp",
             "assets/bitehub-food-market-4k.webp",
+            "assets/bitehub-campus-food-bg.webp",
             "assets/palawan-campus-map.png",
             "assets/pns-campus-safe-routes.jpg",
             "assets/pns-campus-hero.jpg",
@@ -2381,7 +2395,7 @@ def create_admin(email, name, password):
 def main():
     parser = argparse.ArgumentParser(description="Run the BiteHub server and SQLite database.")
     parser.add_argument("--host",default=os.environ.get("HOST", "127.0.0.1"),help="Interface to bind")
-    parser.add_argument("--port",type=int,default=int(os.environ.get("PORT", "8000")),help="Port to bind")
+    parser.add_argument("--port",type=int,default=int(os.environ.get("PORT", "8001")),help="Port to bind")
     parser.add_argument("--https-cert",help="PEM server certificate for HTTPS (use with --https-key)")
     parser.add_argument("--https-key",help="PEM private key for HTTPS (use with --https-cert)")
     parser.add_argument("--behind-proxy",action="store_true",help="Serve behind a reverse proxy that terminates HTTPS")
@@ -2402,7 +2416,7 @@ def main():
         parser.error("Use either local HTTPS certificates or --behind-proxy, not both.")
     if args.host in ("0.0.0.0", "::") and not (args.https_cert or args.behind_proxy):
         parser.error("Binding to the network requires HTTPS. Use start-secure.cmd or --behind-proxy behind a trusted HTTPS proxy.")
-    httpd = ThreadingHTTPServer((args.host,args.port),Handler)
+    httpd = BiteHubHTTPServer((args.host,args.port),Handler)
     httpd.is_https = bool(args.https_cert or args.behind_proxy)
     scheme = "http"
     if args.https_cert:

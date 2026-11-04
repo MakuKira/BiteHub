@@ -5,3 +5,10 @@ Map data credits from the supplied license: Buildings, roads, waterways, and gre
 Geographic bounds printed on source map: SW 9.736753, 118.737108; NE 9.740445, 118.740839.
 
 Updated delivery guide: `pns-campus-safe-routes.jpg` is the user-provided PNS campus map preview from `tmp/pdfs/map-preview.png`, saved with its correct JPEG extension. The blue walking paths are traced into the app route graph by hand; confirm path and handoff points on campus.
+
+Guest front-page food background
+
+Photo: “Burger, fries, and drinks on a tray” by HANVIN CHEONG (@hktram0311), from Unsplash.
+Source: https://unsplash.com/photos/burger-fries-and-drinks-on-a-tray-NI6C6cfLfh8
+License: https://unsplash.com/license
+Locally bundled as `bitehub-campus-food-bg.webp` (optimized WebP); the guest landing page uses this local copy and does not request the image from Unsplash at runtime.

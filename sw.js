@@ -3,8 +3,8 @@ self.addEventListener('push', event => {
   try { message = event.data ? event.data.json() : {}; } catch (_) {}
   event.waitUntil(self.registration.showNotification(message.title || 'BiteHub update', {
     body: message.body || 'There is an update to your campus order.',
-    icon: '/bitehub-mark.svg',
-    badge: '/bitehub-mark.svg',
+    icon: '/assets/bitehub-icon.png',
+    badge: '/assets/bitehub-icon.png',
     tag: message.tag || `bitehub-order-${Date.now()}`,
     data: { url: message.url || '/#buyer-orders' }
   }));

@@ -1,6 +1,6 @@
 @echo off
 setlocal
-set "BITEHUB_PORT=8000"
+set "BITEHUB_PORT=8001"
 set "BITEHUB_CERT=%~dp0.local-certs\server.crt"
 set "BITEHUB_KEY=%~dp0.local-certs\server.key"
 if not exist "%BITEHUB_CERT%" (

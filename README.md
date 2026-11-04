@@ -10,7 +10,7 @@ Open PowerShell in this folder and run:
 .\start.ps1
 ```
 
-The launcher uses Python 3 from your system, or the Python runtime bundled with Codex when available. Open [http://127.0.0.1:8000](http://127.0.0.1:8000). Keep the terminal open while using the site; press `Ctrl+C` to stop it.
+The launcher uses Python 3 from your system, or the Python runtime bundled with Codex when available. Open [http://127.0.0.1:8001](http://127.0.0.1:8001). Keep the terminal open while using the site; press `Ctrl+C` to stop it.
 
 The database is created as `bitehub.sqlite3` in this folder. It survives server restarts and is excluded from source control. To put the database somewhere else, set the `BITEHUB_DB` environment variable before starting the server. New signups and the customer facing menu are limited to Palawan National School.
 
@@ -29,7 +29,7 @@ GPS and push notifications are restricted by phone browsers to HTTPS. The regula
 3. From the FOODHUB folder, run `py generate_local_cert.py --host-ip 192.168.1.25`, replacing the sample address with the address you noted. If you will browse by the PC name, add `--host-name YOUR-PC-NAME` too. Run this again if the computer gets a different LAN IP; the local CA remains the same and only the server certificate is renewed.
 4. Transfer `.local-certs/root-ca.crt` to the phone and install it as a trusted certificate authority using the phone's certificate settings. On iPhone/iPad, after installing the profile, enable full trust for the root certificate in Certificate Trust Settings. On Android, install it as a CA certificate and allow the browser to trust user-installed certificates if that setting is available. Windows browsers on the server PC also need the root certificate installed in the current user's Trusted Root Certification Authorities store if they are opened by LAN IP.
 5. Keep `.local-certs/root-ca.key` private. Transfer only `root-ca.crt` to devices; it is the public certificate used to verify the server.
-6. Run `start-secure.cmd` on the computer. If Windows Firewall asks, allow access only on the Private network profile. On the phone, open `https://192.168.1.25:8000` using the same IP on the certificate. Replace the sample IP with your own. The browser should show a secure connection without a certificate warning before you sign in or enable GPS.
+6. Run `start-secure.cmd` on the computer. If Windows Firewall asks, allow access only on the Private network profile. On the phone, open `https://192.168.1.25:8001` using the same IP on the certificate. Replace the sample IP with your own. The browser should show a secure connection without a certificate warning before you sign in or enable GPS.
 
 The phone and computer must stay on the same trusted network. Do not allow the server through the Public firewall profile or use this local prototype on an untrusted/public Wi-Fi network. The launcher uses HTTPS and binds to the computer's network interfaces; the normal server command stays limited to localhost. The server rejects a direct all-interface HTTP bind. Render uses `--behind-proxy` because its platform terminates HTTPS before forwarding requests to the app.
 

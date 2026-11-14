@@ -1,5 +1,7 @@
 # BiteHub + Supabase development setup
 
+For a plain-language explanation and relationship diagram, see [BiteHub database guide](BITEHUB_DATABASE_GUIDE.md). To add readable descriptions inside Postgres without changing data, apply `migrations/202611140002_plain_language_schema_comments.sql` to the intended project.
+
 This folder contains BiteHub's Supabase database setup. The schema migration has been applied to **BiteHub-Dev** and **MakuKira's Project** (Production). The synthetic demo seed was applied only to BiteHub-Dev. No local SQLite data was uploaded, Production has no demo orders, and existing Supabase `public` tables were left untouched.
 
 ## What this prepares

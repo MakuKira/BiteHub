@@ -1,6 +1,18 @@
 const GUEST_ORDER_STORAGE_KEY='bitehub-guest-order-access-v1';
 const GUEST_LEFT_STORAGE_KEY='bitehub-guest-left-v1';
 const SAVED_MENU_STORAGE_KEY='bitehub-saved-menu-v1';
+const STARTUP_WELCOME_STORAGE_KEY='bitehub-startup-welcome-seen-v1';
+function hasSeenStartupWelcome(){
+  try{
+    if(localStorage.getItem(STARTUP_WELCOME_STORAGE_KEY)==='seen')return true;
+    for(let index=0;index<localStorage.length;index++){
+      const key=localStorage.key(index)||'';
+      if(key.startsWith('bitehub-')&&key!==STARTUP_WELCOME_STORAGE_KEY)return true;
+    }
+  }catch{}
+  return false;
+}
+function rememberStartupWelcomeSeen(){try{localStorage.setItem(STARTUP_WELCOME_STORAGE_KEY,'seen')}catch{}}
 function readSavedMenu(){
   try{
     const saved=JSON.parse(localStorage.getItem(SAVED_MENU_STORAGE_KEY)||'{}');
@@ -18,18 +30,25 @@ function savedGuestOrderAccess(){
 const hasSavedGuestOrders=savedGuestOrderAccess().length>0;
 const hasLeftGuestMode=(()=>{try{return sessionStorage.getItem(GUEST_LEFT_STORAGE_KEY)==='1'}catch{return false}})();
 let guestOrderAccess=savedGuestOrderAccess();
-const state={user:null,publicBrowse:new URLSearchParams(location.search).has('stall')||(hasSavedGuestOrders&&!hasLeftGuestMode),products:[],featuredProducts:[],weeklyMenu:[],weeklyMenuAvailable:true,notificationInboxAvailable:true,notifications:[],notificationUnreadCount:0,notificationInboxLoading:false,heroFeaturedIndex:0,featuredScroll:0,featuredPaused:false,featuredTimer:null,orders:[],ownerChatNewOrderIds:new Set(),overview:null,adminReports:null,adminReportsError:'',reportRange:'30',reachAnalytics:null,paused:false,cart:new Map(),cartNote:'',guestName:'',guestSessionId:null,guestSchoolRole:'',guestGrade:'',guestSection:'',fulfillment:'pickup',deliveryLocation:null,stallLocationDraft:null,stallLocationDraftOwnerId:null,stallFinderStalls:[],stallFinderQuery:'',stallFinderOpenOnly:false,selectedStallFinderId:null,mapZoom:1,trackingWatch:null,lastLocationSent:0,runnerLinks:{},filter:'All',budgetMax:'All',query:'',sort:'featured',stallFilter:'All',dietaryFilter:'All',allergenFilter:'All',filterPanelOpen:false,showSavedOnly:false,savedProducts:initialSavedMenu.products,savedStalls:initialSavedMenu.stalls,buyerView:'menu',ownerView:'dashboard',adminView:'overview',adminStallSearch:'',adminStallStatusFilter:'all',adminStallOpenFilter:'all',adminStallProductFilter:'all',adminDeleteConfirm:'',runnerView:'summary',authRole:'buyer',frontGuestStarted:false,pushEnabled:false,pushAvailable:false,pushServerReady:false,pushPublicKey:'',pushRegistration:null,pushPermission:'default',notificationPromptDismissed:false,orderMessagesAvailable:true,orderCancellationAvailable:true,guestFeedbackAvailable:true,sidebarOpen:false,sidebarSettingsOpen:false,sidebarProfileOpen:false};
+const state={user:null,publicBrowse:new URLSearchParams(location.search).has('stall')||(hasSavedGuestOrders&&!hasLeftGuestMode),products:[],featuredProducts:[],weeklyMenu:[],weeklyMenuAvailable:true,notificationInboxAvailable:true,notifications:[],notificationUnreadCount:0,notificationInboxLoading:false,heroFeaturedIndex:0,featuredScroll:0,featuredPaused:false,featuredTimer:null,orders:[],ownerChatNewOrderIds:new Set(),overview:null,adminReports:null,adminReportsError:'',adminActivity:[],adminActivityError:'',adminActivityLoaded:false,adminActivityLoading:false,adminRestoreConfirm:null,reportRange:'30',reachAnalytics:null,paused:false,cart:new Map(),cartNote:'',guestName:'',guestSessionId:null,guestSchoolRole:'',guestGrade:'',guestSection:'',fulfillment:'pickup',deliveryLocation:null,stallLocationDraft:null,stallLocationDraftOwnerId:null,stallFinderStalls:[],stallFinderQuery:'',stallFinderOpenOnly:false,selectedStallFinderId:null,mapZoom:1,trackingWatch:null,lastLocationSent:0,runnerLinks:{},filter:'All',budgetMax:'All',query:'',sort:'featured',stallFilter:'All',dietaryFilter:'All',allergenFilter:'All',filterPanelOpen:false,showSavedOnly:false,savedProducts:initialSavedMenu.products,savedStalls:initialSavedMenu.stalls,buyerView:'menu',ownerView:'dashboard',adminView:'overview',adminStallSearch:'',adminStallStatusFilter:'all',adminStallOpenFilter:'all',adminStallProductFilter:'all',adminDeleteConfirm:'',runnerView:'summary',authRole:'buyer',frontGuestStarted:false,pushEnabled:false,pushAvailable:false,pushServerReady:false,pushPublicKey:'',pushRegistration:null,pushPermission:'default',notificationPromptDismissed:false,orderMessagesAvailable:true,orderCancellationAvailable:true,guestFeedbackAvailable:true,sidebarOpen:false,sidebarSettingsOpen:false,sidebarProfileOpen:false};
 let activeOrderMessageOrderId=null,orderMessageRefreshTimer=null,orderMessageRequestSequence=0,ownerMessageKnownOrderIds=new Set(),ownerOrderCheckInFlight=false,guestNotificationStateRequested=false,notificationInboxTimer=null,pendingOrderAction=null;
-const $=s=>document.querySelector(s), root=$('#view-content'), toastNode=$('#toast'), openingSplash=$('#opening-splash'), openingSplashStartedAt=performance.now(), openingSplashMinimumDuration=matchMedia('(prefers-reduced-motion: reduce)').matches?500:2600;
+const $=s=>document.querySelector(s), root=$('#view-content'), toastNode=$('#toast'), openingSplash=$('#opening-splash'), openingSplashStartedAt=performance.now(), openingSplashMinimumDuration=matchMedia('(prefers-reduced-motion: reduce)').matches?400:1750;
 let openingSplashDismissTimer=null;
+let startupWelcomePending=false;
 function dismissOpeningSplash(){
-  if(!openingSplash?.isConnected||openingSplash.classList.contains('is-exiting')||openingSplashDismissTimer!==null)return;
+  if(!openingSplash?.isConnected||openingSplash.classList.contains('is-exiting')||openingSplashDismissTimer!==null){
+    if(startupWelcomePending){startupWelcomePending=false;createStartupWelcomeTransition()}
+    return;
+  }
   const remainingIntroTime=Math.max(0,openingSplashMinimumDuration-(performance.now()-openingSplashStartedAt));
   openingSplashDismissTimer=setTimeout(()=>{
     openingSplashDismissTimer=null;
     if(!openingSplash.isConnected||openingSplash.classList.contains('is-exiting'))return;
     openingSplash.classList.add('is-exiting');
-    setTimeout(()=>openingSplash.remove(),460);
+    setTimeout(()=>{
+      openingSplash.remove();
+      if(startupWelcomePending){startupWelcomePending=false;createStartupWelcomeTransition()}
+    },460);
   },remainingIntroTime);
 }
 let refreshTimer;
@@ -673,7 +692,7 @@ async function continueAsGuest(){
   toast(`Welcome, ${state.guestName}. Add items to your bag when you’re ready to order.`);
 }
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&(state.user||state.publicBrowse)){clearTimeout(refreshTimer);refresh(false).finally(startAutoRefresh)}});
-const workspaceHashMap={'#menu':['buyer','menu'],'#buyer-orders':['buyer','orders'],'#runner-summary':['runner','summary'],'#runner-queue':['runner','queue'],'#owner-dashboard':['owner','dashboard'],'#owner-orders':['owner','orders'],'#owner-menu':['owner','menu'],'#owner-stall':['owner','stall'],'#owner-insights':['owner','insights'],'#admin-overview':['admin','overview'],'#admin-stalls':['admin','stalls'],'#admin-orders':['admin','orders'],'#admin-reports':['admin','reports'],'#admin-accounts':['admin','accounts']};
+const workspaceHashMap={'#menu':['buyer','menu'],'#buyer-orders':['buyer','orders'],'#runner-summary':['runner','summary'],'#runner-queue':['runner','queue'],'#owner-dashboard':['owner','dashboard'],'#owner-orders':['owner','orders'],'#owner-menu':['owner','menu'],'#owner-stall':['owner','stall'],'#owner-insights':['owner','insights'],'#admin-overview':['admin','overview'],'#admin-stalls':['admin','stalls'],'#admin-orders':['admin','orders'],'#admin-reports':['admin','reports'],'#admin-accounts':['admin','accounts'],'#admin-activity':['admin','activity']};
 function applyWorkspaceHash(){
   const before=`${state.buyerView}|${state.ownerView}|${state.adminView}|${state.runnerView}`;
   const target=workspaceHashMap[location.hash],role=target?.[0],view=target?.[1];
@@ -725,7 +744,7 @@ function renderAuthWall(mode='front',role=state.authRole){
     const selected=role===item[0];
     return '<button type="button" class="front-role-choice role-'+item[0]+(selected?' is-selected':'')+'" data-front-role="'+item[0]+'" aria-pressed="'+selected+'" aria-label="'+item[2]+(selected?' selected':'')+'"><span class="front-role-icon">'+item[1]+'</span><span class="front-role-copy"><strong>'+item[2]+'</strong><small>'+item[3]+'</small></span><span class="front-role-arrow" aria-hidden="true">'+(selected?'✓':'→')+'</span></button>';
   }).join('');
-  const frontRoleLanding='<div class="auth-front-layout'+(role==='admin'?' admin-login-open':'')+(role==='buyer'?(guestEntryStarted?' guest-entry-revealed':' guest-start-idle'):'')+'"><section class="auth-front-copy"><span class="front-eyebrow">PALAWAN NATIONAL SCHOOL · CAMPUS FOOD MARKET</span><h1>Good food.<br><span>Better breaks.</span><i aria-hidden="true">✦</i></h1><p>Discover PNS stalls, browse their menus, and find a new favorite for your next school break.</p></section><section class="auth-card auth-front-card"><header class="auth-front-heading"><span class="front-sparkle" aria-hidden="true">✦</span><span class="eyebrow">YOUR PNS FOOD MARKET</span><h2>Welcome to BiteHub!</h2><p>Browse school stalls and order as a guest, or sign in to manage your stall.</p></header><div class="auth-front-role-heading"><strong>Continue as a guest</strong><small>Or sign in as a stall owner.</small></div><div class="auth-front-role-list" role="group" aria-label="Stall owner sign in">'+frontRoleOptions+'</div><div id="auth-form-slot"></div><div class="auth-front-secure"><span aria-hidden="true">▣</span><span>Secure sign in</span><i aria-hidden="true">·</i><span>PNS Food Hub</span></div></section></div>';
+  const frontRoleLanding='<div class="auth-front-layout'+(role==='admin'?' admin-login-open':'')+(role==='buyer'?(guestEntryStarted?' guest-entry-revealed':' guest-start-idle'):'')+'"><section class="auth-front-copy"><span class="front-eyebrow">PALAWAN NATIONAL SCHOOL · CAMPUS FOOD MARKET</span><h1>Good food.<br><span>Better breaks.</span><i aria-hidden="true">✦</i></h1><p>Discover PNS stalls, browse their menus, and find a new favorite for your next school break.</p></section><section class="auth-card auth-front-card"><header class="auth-front-heading"><span class="front-sparkle" aria-hidden="true">✦</span><span class="eyebrow">YOUR PNS FOOD MARKET</span><h2>Choose how to use BiteHub</h2><p>Browse PNS stalls as a guest or sign in to manage your stall.</p></header><div class="auth-front-role-heading"><strong>Continue as a guest</strong><small>Or sign in as a stall owner.</small></div><div class="auth-front-role-list" role="group" aria-label="Stall owner sign in">'+frontRoleOptions+'</div><div id="auth-form-slot"></div><div class="auth-front-secure"><span aria-hidden="true">▣</span><span>Secure sign in</span><i aria-hidden="true">·</i><span>PNS Food Hub</span></div></section></div>';
   const roleLanding=frontLanding?frontRoleLanding:choosingRole?`<section class="role-picker-panel" aria-labelledby="role-picker-title"><div class="role-path-heading"><div><span class="eyebrow">${loginChoosing?'SIGN IN':'PNS COMMUNITY'}</span><h2 id="role-picker-title">${loginChoosing?'Choose your workspace':'Choose your path'}</h2></div><p>${loginChoosing?'Select the account you use for BiteHub at PNS.':'Choose the space that fits you at PNS.'}</p></div><div class="role-card-grid">${roleCards}</div><p class="role-login">${loginChoosing?'New to BiteHub?':'Already have an account?'} <button class="text-button" data-auth-mode="${loginChoosing?'choose':'front'}">${loginChoosing?'Create an account':'Log in'}</button></p></section>`:`<header class="role-heading role-auth-heading"><span class="eyebrow">PNS FOOD HUB</span><h1>${mode==='login'?'Welcome back':'Join BiteHub'}</h1><p>${mode==='login'?'Log in to continue to your PNS workspace.':'Create an account for Palawan National School’s BiteHub.'}</p></header><section class="auth-card"><button class="text-button auth-back" data-auth-mode="choose">← Choose a role</button><div id="auth-form-slot"></div><p class="auth-footnote">Accounts, orders, and menus are saved to this server.</p></section>`;
    const frontTopAction=frontLanding?'<button class="front-signup-link" data-auth-mode="signup" data-auth-role="owner">Stall owner? <strong>Create account</strong><span aria-hidden="true">→</span></button>':'';
   const chooserBackAction=choosingRole?'<button type="button" class="chooser-back-link" data-auth-mode="front"><span aria-hidden="true">←</span> Back to front page</button>':'';
@@ -782,7 +801,39 @@ function renderAuthWall(mode='front',role=state.authRole){
 }
 function renderGuestStart(){
   const slot=$('#auth-form-slot');if(!slot)return;
-  slot.innerHTML=`<div class="guest-start-panel" aria-live="polite"><div class="guest-start-food" aria-hidden="true"><span>🍱</span><span>🍔</span><span>🥤</span><i class="guest-start-spark guest-start-spark--one">✦</i><i class="guest-start-spark guest-start-spark--two">✦</i><i class="guest-start-spark guest-start-spark--three">•</i></div><div class="guest-start-copy"><strong>Ready to look around?</strong><small>Just choose a name to start.</small></div><button type="button" class="guest-start-button" data-action="start-guest-entry"><span>Get started</span><span class="guest-start-arrow" aria-hidden="true">→</span></button></div>`;
+  slot.innerHTML=`<div class="guest-start-panel" aria-live="polite"><div class="guest-start-food" aria-hidden="true"><span>🍱</span><span>🍔</span><span>🥤</span><i class="guest-start-spark guest-start-spark--one">✦</i><i class="guest-start-spark guest-start-spark--two">✦</i><i class="guest-start-spark guest-start-spark--three">•</i></div><div class="guest-start-copy"><strong>Ready to look around?</strong><small>Just choose a name to start.</small></div><button type="button" class="guest-start-button" data-action="start-guest-entry"><span>Browse as a guest</span><span class="guest-start-arrow" aria-hidden="true">→</span></button></div>`;
+}
+function createStartupWelcomeTransition(){
+  const transition=document.createElement('div');
+  transition.className='guest-welcome-transition';
+  transition.setAttribute('role','dialog');
+  transition.setAttribute('aria-modal','true');
+  transition.setAttribute('aria-label','BiteHub welcome note');
+  transition.setAttribute('aria-describedby','guest-welcome-status');
+  transition.innerHTML=`<div class="guest-welcome-scene" aria-hidden="true"><span class="guest-welcome-flight guest-welcome-flight--one">🍔</span><span class="guest-welcome-flight guest-welcome-flight--two">🍱</span><span class="guest-welcome-flight guest-welcome-flight--three">🥤</span><span class="guest-welcome-flight guest-welcome-flight--four">🍟</span><span class="guest-welcome-flight guest-welcome-flight--five">🍩</span><i class="guest-welcome-spark guest-welcome-spark--one">✦</i><i class="guest-welcome-spark guest-welcome-spark--two">✦</i><i class="guest-welcome-spark guest-welcome-spark--three">✧</i><div class="guest-welcome-envelope"><div class="guest-welcome-envelope-back"></div><div class="guest-welcome-letter"><img src="assets/bitehub-icon.png?v=bitehub-red-gold-20261102" alt=""><span>A NOTE FROM BITEHUB</span><strong id="guest-welcome-title">Good food awaits!</strong><small>Welcome to your PNS campus market.</small><i>FOR YOUR NEXT SCHOOL BREAK <b aria-hidden="true">✦</b></i></div><div class="guest-welcome-envelope-front"></div><div class="guest-welcome-envelope-flap"></div><span class="guest-welcome-seal">✦</span></div></div><p class="guest-welcome-status" id="guest-welcome-status" role="status" aria-live="polite">Your BiteHub note is arriving.</p><button type="button" class="guest-welcome-start" data-action="welcome-get-started" disabled>Get started <span aria-hidden="true">→</span></button>`;
+  const app=document.querySelector('#app');
+  rememberStartupWelcomeSeen();
+  document.body.classList.remove('startup-welcome-pending');
+  if(app){app.classList.add('startup-welcome-hidden');app.inert=true}
+  document.body.classList.add('guest-welcome-active');
+  transition.addEventListener('keydown',event=>{
+    if(event.key==='Escape'){event.preventDefault();return}
+    if(event.key==='Tab'){
+      event.preventDefault();
+      transition.querySelector('.guest-welcome-start')?.focus();
+    }
+  });
+  document.body.append(transition);
+  window.requestAnimationFrame(()=>transition.classList.add('is-visible'));
+  const reducedMotion=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches===true;
+  window.setTimeout(()=>{
+    if(!transition.isConnected)return;
+    transition.classList.add('is-ready');
+    transition.querySelector('.guest-welcome-status').textContent='Your campus market is ready when you are.';
+    const start=transition.querySelector('.guest-welcome-start');
+    if(start){start.disabled=false;start.focus({preventScroll:true})}
+  },reducedMotion?90:2200);
+  return transition;
 }
 function renderGuestWelcome(){
   const slot=$('#auth-form-slot');if(!slot)return;
@@ -1148,13 +1199,43 @@ function ensureLocationSharing(){
     catch(error){toast(`Location update failed: ${error.message}`)}
   },error=>{toast(error.code===1?'Allow location access to share your delivery progress.':'Could not read your location. Check GPS and try again.');navigator.geolocation.clearWatch(state.trackingWatch);state.trackingWatch=null},{enableHighAccuracy:true,maximumAge:0,timeout:15000});
 }
+async function loadAdminActivity(force=false){
+  if(!state.user||state.user.role!=='admin'||state.adminActivityLoading||(!force&&state.adminActivityLoaded))return;
+  const userId=state.user.id;
+  state.adminActivityLoading=true;state.adminActivityError='';
+  try{
+    const result=await api('/api/admin/activity');
+    if(state.user?.id!==userId)return;
+    state.adminActivity=Array.isArray(result.entries)?result.entries:[];
+    state.adminActivityLoaded=true;
+  }catch(error){
+    if(state.user?.id===userId){state.adminActivityError=apiErrorMessage(error);state.adminActivityLoaded=true}
+  }finally{
+    state.adminActivityLoading=false;
+    if(state.user?.id===userId&&state.user.role==='admin'&&state.adminView==='activity')renderAdmin();
+  }
+}
+function renderAdminActivity(){
+  if(!state.adminActivityLoaded&&!state.adminActivityLoading)queueMicrotask(()=>loadAdminActivity());
+  const rows=state.adminActivity.map(entry=>{
+    const actionNames={stall_policy:'Stall access changed',ordering_pause:'Ordering control changed',stall_status:'Stall status changed',delete_stall:'Stall account removed',delete_product:'Food item removed',restore:'Item restored'};
+    const date=entry.created_at?new Date(entry.created_at):null;
+    const dateLabel=date&&!Number.isNaN(date.valueOf())?date.toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'}):'Date unavailable';
+    const restored=entry.restored_at?`<span class="admin-activity-restored">Restored ${esc(new Date(entry.restored_at).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'}))}</span>`:'';
+    const restoreButton=entry.can_restore?`<button type="button" class="button ${state.adminRestoreConfirm===entry.id?'button-primary':'button-outline'} button-small" data-admin-restore="${entry.id}">${state.adminRestoreConfirm===entry.id?'Confirm restore':'Restore'}</button>`:'';
+    return `<article class="admin-activity-item"><span class="admin-activity-mark" aria-hidden="true">${entry.action==='restore'?'↶':entry.action.startsWith('delete_')?'⌫':'⚙'}</span><div class="admin-activity-copy"><div class="admin-activity-topline"><strong>${esc(actionNames[entry.action]||'Admin action')}</strong><time datetime="${esc(entry.created_at||'')}">${esc(dateLabel)}</time></div><p>${esc(entry.target)} <span>·</span> ${esc(entry.summary)}</p><small>By ${esc(entry.actor||'School administrator')}</small>${restored}</div>${restoreButton}</article>`;
+  }).join('');
+  const status=state.adminActivityError?`<p class="admin-activity-status" role="alert">History could not load. ${esc(state.adminActivityError)}</p>`:state.adminActivityLoading||!state.adminActivityLoaded?'<p class="admin-activity-status" role="status">Loading recent admin actions…</p>':'';
+  const body=rows||(state.adminActivityLoaded&&!state.adminActivityLoading&&!state.adminActivityError?emptyState('↺','No admin changes yet','Stall access, ordering controls, and removals will be recorded here.'): '');
+  return `<section class="panel admin-activity-panel workspace-page" id="admin-activity"><div class="section-title"><div><span class="eyebrow">ADMIN RECORD</span><h2>Activity history</h2><p class="helper-text">Recent admin changes are stored in the connected BiteHub database. Removed stalls and food can be restored for 24 hours.</p></div><button type="button" class="button button-outline button-small" data-action="refresh-admin-activity" ${state.adminActivityLoading?'disabled':''}>Refresh</button></div>${status}<div class="admin-activity-list">${body}</div><p class="admin-activity-footnote">Restoring a stall closes its old sessions, so the owner will need to sign in again. Orders and order history are preserved.</p></section>`;
+}
 function renderAdmin(){
   const totals=state.overview||{users:{},stalls:0,products:0,orders:[],ordering_paused:state.paused};
   const amount=totals.orders.filter(order=>order.status==='completed').reduce((sum,order)=>sum+order.sales,0)/100;
-  const view=state.adminView||'overview',tabs=[['overview','Overview','◷'],['stalls','Stalls','⌂',totals.stalls],['orders','Orders','▣',state.orders.length],['reports','Reports','▤'],['accounts','Accounts','◎']];
+  const view=state.adminView||'overview',tabs=[['overview','Overview','◷'],['stalls','Stalls','⌂',totals.stalls],['orders','Orders','▣',state.orders.length],['reports','Reports','▤'],['accounts','Accounts','◎'],['activity','Activity','↺']];
   const overview=`<section class="stats-grid admin-stats" id="admin-overview">${stat('Campus accounts',Object.values(totals.users).reduce((a,b)=>a+b,0),'Across all account types','◎')}${stat('Campus stalls',totals.stalls,'Registered stall owners','⌂')}${stat('Menu items',totals.products,'Listed on the hub','▦')}${stat('Completed order value',money(amount),'Value of completed orders','₱')}</section><div class="admin-overview-grid"><section class="panel admin-recent-orders"><div class="section-title"><div><span class="eyebrow">CAMPUS ACTIVITY</span><h2>Recent orders</h2></div><button type="button" class="text-button" data-workspace-role="admin" data-workspace-view="orders">View all →</button></div>${state.orders.length?`<div class="order-list">${state.orders.slice(0,4).map(orderCard).join('')}</div>`:emptyState('▤','No orders yet','New orders across campus will appear here.')}</section><section class="panel admin-quick-actions"><div class="section-title"><div><span class="eyebrow">QUICK ACCESS</span><h2>Campus controls</h2></div></div><button type="button" class="admin-shortcut" data-workspace-role="admin" data-workspace-view="stalls"><span>⌂</span><span><strong>Manage stalls</strong><small>Check availability and stall status</small></span><b>${totals.stalls} →</b></button><button type="button" class="admin-shortcut" data-workspace-role="admin" data-workspace-view="reports"><span>▤</span><span><strong>Study reports</strong><small>Review aggregated reach and orders</small></span><b>Open →</b></button><button type="button" class="admin-shortcut" data-workspace-role="admin" data-workspace-view="accounts"><span>◎</span><span><strong>Account overview</strong><small>See users by campus role</small></span><b>Open →</b></button></section></div>`;
   const accounts=`<section class="panel admin-accounts workspace-page" id="admin-accounts"><div class="section-title"><div><span class="eyebrow">ACCOUNT DIRECTORY</span><h2>Campus roles</h2><p class="helper-text">A quick count of accounts using the campus hub.</p></div><span class="result-count">${Object.values(totals.users).reduce((a,b)=>a+b,0)} accounts</span></div><div class="role-directory">${[['buyer','Campus customers','🥡'],['owner','Stall owners','⌂'],['runner','Campus runners','↗'],['admin','Administrators','⚙']].map(([key,label,icon])=>`<article><span>${icon}</span><div><strong>${esc(label)}</strong><small>${totals.users[key]||0} accounts</small></div></article>`).join('')}</div></section>`;
-  let page=view==='overview'?overview:view==='stalls'?renderStallApprovals():view==='orders'?renderAdminOrders():view==='reports'?renderAdminReports():accounts;
+  let page=view==='overview'?overview:view==='stalls'?renderStallApprovals():view==='orders'?renderAdminOrders():view==='reports'?renderAdminReports():view==='activity'?renderAdminActivity():accounts;
   root.innerHTML=`${heading('CAMPUS MARKET CONTROL','The hub, at a glance.','Keep campus ordering, stalls, and study activity organized.',`<button class="button ${state.paused?'button-primary':'button-dark'}" data-action="toggle-pause">${state.paused?'Resume ordering':'Pause ordering'}</button>`)}${workspaceNav('admin',tabs,view)}<main class="workspace-content admin-workspace-content">${page}</main>`;
 }
 function renderAdminOrders(){
@@ -1612,13 +1693,27 @@ document.addEventListener('click',async e=>{
     if(role==='buyer'&&(state.user?.role==='buyer'||(!state.user&&state.publicBrowse))||state.user?.role===role){
       if(state[`${role}View`]===view)return;
       state[`${role}View`]=view;
-      const hashes={buyer:{menu:'#menu',orders:'#buyer-orders'},owner:{dashboard:'#owner-dashboard',orders:'#owner-orders',menu:'#owner-menu',stall:'#owner-stall',insights:'#owner-insights'},admin:{overview:'#admin-overview',stalls:'#admin-stalls',orders:'#admin-orders',reports:'#admin-reports',accounts:'#admin-accounts'},runner:{summary:'#runner-summary',queue:'#runner-queue'}};
+      const hashes={buyer:{menu:'#menu',orders:'#buyer-orders'},owner:{dashboard:'#owner-dashboard',orders:'#owner-orders',menu:'#owner-menu',stall:'#owner-stall',insights:'#owner-insights'},admin:{overview:'#admin-overview',stalls:'#admin-stalls',orders:'#admin-orders',reports:'#admin-reports',accounts:'#admin-accounts',activity:'#admin-activity'},runner:{summary:'#runner-summary',queue:'#runner-queue'}};
       const hash=hashes[role]?.[view];if(hash)history.pushState({workspace:role,view},'',hash);
       render();window.scrollTo({top:0,behavior:window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});
       if(fromBottomNav)document.querySelector(`#role-bottom-nav [data-workspace-role="${role}"][data-workspace-view="${view}"]`)?.focus({preventScroll:true});
       else if(fromSidebar)focusSidebarTrigger();
       else root.querySelector(`[data-workspace-role="${role}"][data-workspace-view="${view}"]`)?.focus({preventScroll:true});
     }
+    return;
+  }
+  const restoreActivity=e.target.closest('[data-admin-restore]');
+  if(restoreActivity){
+    const eventId=Number(restoreActivity.dataset.adminRestore);
+    if(!Number.isSafeInteger(eventId)||eventId<1)return;
+    if(state.adminRestoreConfirm!==eventId){state.adminRestoreConfirm=eventId;renderAdmin();return}
+    restoreActivity.disabled=true;
+    try{
+      await api(`/api/admin/activity/${eventId}/restore`,{method:'POST',body:json({})});
+      state.adminRestoreConfirm=null;state.adminActivityLoaded=false;
+      toast('The item was restored. The owner may need to sign in again.');
+      await refresh(false);await loadAdminActivity(true);
+    }catch(error){toast(error.message);restoreActivity.disabled=false}
     return;
   }
   const sidebarScroll=e.target.closest('[data-sidebar-scroll]');
@@ -1660,6 +1755,7 @@ document.addEventListener('click',async e=>{
   const remove=e.target.closest('[data-delete-product]');if(remove){if(!confirm('Remove this item from your menu?'))return;try{await api(`/api/products/${remove.dataset.deleteProduct}`,{method:'DELETE'});toast('Menu item removed.');await refresh()}catch(error){toast(error.message)}return}
   const action=e.target.closest('[data-action]');if(!action)return;
   if(action.dataset.action==='dismiss-order-action'){pendingOrderAction=null;$('#order-action-dialog')?.close();return}
+  if(action.dataset.action==='refresh-admin-activity'){state.adminActivityLoaded=false;await loadAdminActivity(true);return}
   if(action.dataset.action==='confirm-order-action'){action.disabled=true;await confirmPendingOrderAction();action.disabled=false;return}
   if(action.dataset.action==='open-notification-inbox'){closeSidebar();await openNotificationInbox();return}
   if(action.dataset.action==='mark-notifications-read'){action.disabled=true;try{await api('/api/notifications/inbox/read-all',{method:'PATCH',body:json({})});await loadNotificationInbox()}catch(error){toast(error.message);action.disabled=false}return}
@@ -1688,16 +1784,36 @@ document.addEventListener('click',async e=>{
     catch{toast('The guest photo could not be removed. Try again.')}
     return;
   }
+  if(action.dataset.action==='welcome-get-started'){
+    if(action.disabled)return;
+    action.disabled=true;
+    rememberStartupWelcomeSeen();
+    const welcome=action.closest('.guest-welcome-transition');
+    const reducedMotion=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches===true;
+    welcome?.classList.add('is-leaving');
+    window.setTimeout(()=>{
+      welcome?.remove();
+      document.body.classList.remove('guest-welcome-active');
+      const app=document.querySelector('#app');
+      if(app){app.inert=false;app.classList.remove('startup-welcome-hidden')}
+      state.frontGuestStarted=false;
+      state.authRole='buyer';
+      renderAuthWall('front','buyer');
+      document.querySelector('.guest-start-button')?.focus({preventScroll:true});
+      showPrototypePolicyNotice();
+    },reducedMotion?0:300);
+    return;
+  }
   if(action.dataset.action==='start-guest-entry'){
     if(action.disabled)return;
     action.disabled=true;
     action.setAttribute('aria-busy','true');
     action.classList.add('is-starting');
     action.closest('.guest-start-panel')?.classList.add('is-opening');
-    action.setAttribute('aria-label','Opening the guest menu');
-    action.innerHTML='Opening BiteHub <span class="guest-start-spinner" aria-hidden="true"></span>';
-    const reducedMotion=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    window.setTimeout(()=>{state.frontGuestStarted=true;renderAuthWall('front','buyer')},reducedMotion?0:950);
+    action.setAttribute('aria-label','Opening guest ordering');
+    action.innerHTML='Opening guest ordering <span class="guest-start-spinner" aria-hidden="true"></span>';
+    const reducedMotion=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches===true;
+    window.setTimeout(()=>{state.frontGuestStarted=true;renderAuthWall('front','buyer')},reducedMotion?0:360);
     return;
   }
   if(action.dataset.action==='open-admin-entry'){
@@ -1926,10 +2042,10 @@ document.addEventListener('submit',async e=>{
     if(form.dataset.form==='signup'){
       const result=await api('/api/signup',{method:'POST',body:json(values)});
       if(result.needs_email_verification){renderEmailVerificationPending(result.email,result.message);return}
-      state.user=result.user;applyWorkspaceHash();startAutoRefresh();toast('Stall account created. Your stall is now open to customers.');await refresh();loadNotificationState();await openSharedStall();return;
+      rememberStartupWelcomeSeen();state.user=result.user;applyWorkspaceHash();startAutoRefresh();toast('Stall account created. Your stall is now open to customers.');await refresh();loadNotificationState();await openSharedStall();return;
     }
     if(form.dataset.form==='login'){
-      const result=await api('/api/login',{method:'POST',body:json(values)});state.user=result.user;if(state.user.role!=='buyer'){state.cart.clear();resetEmptyBag()}applyWorkspaceHash();startAutoRefresh();$('#auth-dialog').close();toast('Welcome back.');await refresh();loadNotificationState();await openSharedStall();return;
+      const result=await api('/api/login',{method:'POST',body:json(values)});rememberStartupWelcomeSeen();state.user=result.user;if(state.user.role!=='buyer'){state.cart.clear();resetEmptyBag()}applyWorkspaceHash();startAutoRefresh();$('#auth-dialog').close();toast('Welcome back.');await refresh();loadNotificationState();await openSharedStall();return;
     }
     if(form.dataset.form==='weekly-menu-plan'){
       values.product_id=Number(values.product_id);values.weekday=Number(values.weekday);
@@ -1988,9 +2104,9 @@ async function boot(){
   const verificationToken=authLinkParams.get('verify_email')||'';
   const passwordResetToken=authLinkParams.get('reset_password')||'';
   const isAccountEmailLink=Boolean(verificationToken||passwordResetToken);
-  try{if(isRunnerLink){publicRunnerTracking=runnerTrackingFromHash();document.title='Share delivery location · BiteHub';renderRunnerSharePage(publicRunnerTracking?.orderId,Boolean(publicRunnerTracking));return}if(isAccountEmailLink){history.replaceState({},'',location.pathname+location.hash);state.publicBrowse=false;state.user=null;renderAuthWall('front','owner');if(verificationToken){try{const result=await api('/api/email/verify',{method:'POST',body:json({token:verificationToken})});const status=$('.auth-front-status');if(status){status.textContent=result.message;status.classList.add('is-visible')}else toast(result.message)}catch(error){const status=$('.auth-front-status');if(status){status.textContent=error.message;status.classList.add('is-visible')}else toast(error.message)}}else showAccountEmailDialog('password-reset',passwordResetToken);return}const session=await api('/api/session');state.user=session.user;state.orderMessagesAvailable=session.order_messages_available!==false;state.orderCancellationAvailable=session.order_cancellation_available!==false;state.guestFeedbackAvailable=session.guest_feedback_available!==false;state.notificationInboxAvailable=session.notification_inbox_available!==false;state.weeklyMenuAvailable=session.weekly_menu_available!==false;if(state.user){applyWorkspaceHash();startAutoRefresh();await refresh();loadNotificationState();await openSharedStall()}else{if(session.guest_session){state.guestSessionId=session.guest_session.id;state.guestName=session.guest_session.name;state.publicBrowse=true}if(state.publicBrowse){applyWorkspaceHash();await refresh();await openSharedStall();startAutoRefresh()}else renderAuthWall()}}
+  try{if(isRunnerLink){publicRunnerTracking=runnerTrackingFromHash();document.title='Share delivery location · BiteHub';renderRunnerSharePage(publicRunnerTracking?.orderId,Boolean(publicRunnerTracking));return}if(isAccountEmailLink){history.replaceState({},'',location.pathname+location.hash);state.publicBrowse=false;state.user=null;renderAuthWall('front','owner');if(verificationToken){try{const result=await api('/api/email/verify',{method:'POST',body:json({token:verificationToken})});const status=$('.auth-front-status');if(status){status.textContent=result.message;status.classList.add('is-visible')}else toast(result.message)}catch(error){const status=$('.auth-front-status');if(status){status.textContent=error.message;status.classList.add('is-visible')}else toast(error.message)}}else showAccountEmailDialog('password-reset',passwordResetToken);return}const session=await api('/api/session');state.user=session.user;state.orderMessagesAvailable=session.order_messages_available!==false;state.orderCancellationAvailable=session.order_cancellation_available!==false;state.guestFeedbackAvailable=session.guest_feedback_available!==false;state.notificationInboxAvailable=session.notification_inbox_available!==false;state.weeklyMenuAvailable=session.weekly_menu_available!==false;if(state.user){applyWorkspaceHash();startAutoRefresh();await refresh();loadNotificationState();await openSharedStall()}else{if(session.guest_session){state.guestSessionId=session.guest_session.id;state.guestName=session.guest_session.name;state.publicBrowse=true}if(state.publicBrowse){applyWorkspaceHash();await refresh();await openSharedStall();startAutoRefresh()}else{renderAuthWall();if(!hasSeenStartupWelcome()){startupWelcomePending=true;document.body.classList.add("startup-welcome-pending");document.querySelector("#app")?.classList.add("startup-welcome-hidden")}}}}
   catch(error){renderError(`${apiErrorMessage(error)} Start the server with “py server.py” from the FOODHUB folder.`)}
-  finally{dismissOpeningSplash();if(!isRunnerLink&&!isAccountEmailLink)showPrototypePolicyNotice()}
+  finally{dismissOpeningSplash();if(!isRunnerLink&&!isAccountEmailLink&&!startupWelcomePending)showPrototypePolicyNotice()}
 }
 function escapePolicyHTML(value){
   return String(value).replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));

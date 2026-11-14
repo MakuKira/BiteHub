@@ -8618,3 +8618,29 @@ body.dark-mode .stall-status-notice.is-pending { background: #30291e; }
   .admin-stall-search { grid-column: auto; }
   .admin-stall-products li { align-items: flex-start; flex-direction: column; }
 }
+
+.admin-activity-panel .section-title { align-items: center; }
+.admin-activity-list { display: grid; gap: 9px; margin-top: 16px; }
+.admin-activity-item { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 11px; padding: 13px; border: 1px solid var(--line); border-radius: 14px; background: var(--paper); }
+.admin-activity-mark { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 12px; background: color-mix(in srgb, var(--market-mango) 42%, var(--paper)); color: var(--market-red); font-size: 17px; font-weight: 850; }
+.admin-activity-copy { min-width: 0; }
+.admin-activity-topline { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 3px 12px; }
+.admin-activity-topline strong { color: var(--ink); font-size: 13px; }
+.admin-activity-topline time, .admin-activity-copy small { color: var(--muted); font-size: 10px; }
+.admin-activity-copy p { margin: 4px 0; color: var(--ink); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+.admin-activity-copy p span { color: var(--market-teal); font-weight: 800; }
+.admin-activity-restored { display: block; margin-top: 5px; color: var(--market-teal); font-size: 10px; font-weight: 750; }
+.admin-activity-item > .button { min-width: 110px; }
+.admin-activity-status { margin: 12px 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.admin-activity-footnote { margin: 14px 0 0; padding: 10px 12px; border-radius: 11px; background: color-mix(in srgb, var(--market-mango) 28%, var(--paper)); color: var(--muted); font-size: 11px; line-height: 1.5; }
+body.dark-mode .admin-activity-item { border-color: var(--line); background: var(--paper); }
+body.dark-mode .admin-activity-mark { background: rgba(224, 119, 67, .17); color: #ffd19b; }
+body.dark-mode .admin-activity-topline strong, body.dark-mode .admin-activity-copy p { color: var(--ink); }
+body.dark-mode .admin-activity-footnote { background: rgba(245, 190, 107, .10); }
+@media (max-width: 520px) {
+  .admin-activity-panel .section-title { align-items: flex-start; }
+  .admin-activity-item { grid-template-columns: 32px minmax(0, 1fr); gap: 9px; padding: 10px; }
+  .admin-activity-mark { width: 31px; height: 31px; }
+  .admin-activity-item > .button { grid-column: 2; justify-self: start; min-height: 34px; }
+  .admin-activity-topline { display: grid; gap: 3px; }
+}

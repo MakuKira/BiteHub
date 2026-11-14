@@ -98,6 +98,7 @@ except ImportError:
     WEBAUTHN_AVAILABLE = False
 
 PASSKEYS_AVAILABLE = WEBAUTHN_AVAILABLE and not bool(DATABASE_URL)
+ADMIN_ACTIVITY_AVAILABLE = False
 WEBAUTHN_RP_ID = os.environ.get("BITEHUB_WEBAUTHN_RP_ID", "").strip().lower()
 WEBAUTHN_ORIGIN = os.environ.get("BITEHUB_WEBAUTHN_ORIGIN", "").strip().rstrip("/")
 
@@ -304,10 +305,64 @@ def get_stall_registration_mode(db):
     return mode if mode in STALL_REGISTRATION_MODES else "allow_all"
 
 
+def require_admin_activity():
+    if not ADMIN_ACTIVITY_AVAILABLE:
+        raise ApiError(503, "Apply supabase/migrations/202611140001_admin_activity_restore.sql to this BiteHub database, then restart the server.")
+
+
+def log_admin_activity(db, actor, action, target_type, target_id, target_label, details=None, created_at=None):
+    return insert_id(db, """INSERT INTO admin_activity
+        (actor_user_id,actor_label,action,target_type,target_id,target_label,details_json,created_at)
+        VALUES(?,?,?,?,?,?,?,?)""",
+        (actor["id"], str(actor.get("name") or "School administrator")[:120], action,
+         target_type, target_id, str(target_label or "Campus setting")[:180],
+         json.dumps(details or {}, ensure_ascii=False, separators=(",", ":")), created_at or now()))
+
+
+def admin_activity_restore_allowed(db, row, details=None):
+    if row["action"] not in ("delete_stall", "delete_product") or row["restored_at"]:
+        return False
+    try:
+        created_at = datetime.fromisoformat(str(row["created_at"]).replace("Z", "+00:00"))
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        age = datetime.now(timezone.utc) - created_at.astimezone(timezone.utc)
+        if age < timedelta(0) or age > timedelta(hours=24):
+            return False
+        snapshot = details if isinstance(details, dict) else json.loads(row["details_json"] or "{}")
+        deleted_at = snapshot.get("deleted_at")
+        if not deleted_at:
+            return False
+        if row["action"] == "delete_product":
+            current = db.execute("SELECT deleted_at FROM products WHERE id=?", (row["target_id"],)).fetchone()
+        else:
+            current = db.execute("""SELECT u.deleted_at FROM stalls s JOIN users u ON u.id=s.owner_id
+                WHERE s.id=? AND u.school_id='pns'""", (row["target_id"],)).fetchone()
+        return bool(current and current["deleted_at"] and str(current["deleted_at"]) == str(deleted_at))
+    except (TypeError, ValueError, KeyError, json.JSONDecodeError):
+        return False
+
+
+def admin_activity_summary(action, details):
+    if action == "stall_policy":
+        return "Stall access changed from {0} to {1}.".format(details.get("before", "unknown"), details.get("after", "unknown"))
+    if action == "ordering_pause":
+        return "Campus ordering {0}.".format("paused" if details.get("after") else "resumed")
+    if action == "stall_status":
+        return "Stall status changed from {0} to {1}.".format(details.get("before", "unknown"), details.get("after", "unknown"))
+    if action == "delete_stall":
+        return "Stall account removed. Its sessions were closed; the owner must sign in again after restore."
+    if action == "delete_product":
+        return "Food item removed from the customer catalog."
+    if action == "restore":
+        return "Restored from the activity history."
+    return "Admin action recorded."
+
+
 def initialize_postgres():
     global ORDER_MESSAGES_AVAILABLE, GUEST_PUSH_AVAILABLE, ORDER_CANCELLATION_AVAILABLE, GUEST_FEEDBACK_AVAILABLE
     global NOTIFICATION_INBOX_AVAILABLE, WEEKLY_MENU_AVAILABLE
-    global PASSKEYS_AVAILABLE
+    global PASSKEYS_AVAILABLE, ADMIN_ACTIVITY_AVAILABLE
     required_tables = (
         "schools", "users", "sessions", "guest_sessions", "stalls", "products", "reach_views",
         "settings", "orders", "order_items", "feedback", "delivery_positions",
@@ -363,6 +418,15 @@ def initialize_postgres():
             "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=? AND table_name=?",
             ("bitehub_app", "weekly_menu_slots"),
         ).fetchone()[0])
+        activity_table = db.execute(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=? AND table_name=?",
+            ("bitehub_app", "admin_activity"),
+        ).fetchone()[0]
+        product_deleted_column = db.execute(
+            "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=? AND table_name=? AND column_name=?",
+            ("bitehub_app", "products", "deleted_at"),
+        ).fetchone()[0]
+        ADMIN_ACTIVITY_AVAILABLE = bool(activity_table and product_deleted_column)
         db.execute(
             "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING",
             ("reach_signing_secret", secrets.token_hex(32)),
@@ -387,7 +451,7 @@ def initialize_postgres():
 
 def initialize():
     global ORDER_MESSAGES_AVAILABLE, GUEST_PUSH_AVAILABLE, ORDER_CANCELLATION_AVAILABLE, GUEST_FEEDBACK_AVAILABLE
-    global NOTIFICATION_INBOX_AVAILABLE, WEEKLY_MENU_AVAILABLE, PASSKEYS_AVAILABLE
+    global NOTIFICATION_INBOX_AVAILABLE, WEEKLY_MENU_AVAILABLE, PASSKEYS_AVAILABLE, ADMIN_ACTIVITY_AVAILABLE
     if REQUIRE_POSTGRES and not DATABASE_URL:
         raise RuntimeError(
             "This deployment requires Supabase PostgreSQL. Set the private "
@@ -559,6 +623,24 @@ def initialize():
         CREATE INDEX IF NOT EXISTS products_stall_idx ON products(stall_id, available);
         CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions(expires_at);
         """)
+        product_columns = {row["name"] for row in db.execute("PRAGMA table_info(products)")}
+        if "deleted_at" not in product_columns:
+            db.execute("ALTER TABLE products ADD COLUMN deleted_at TEXT")
+        db.execute("""CREATE TABLE IF NOT EXISTS admin_activity (
+            id INTEGER PRIMARY KEY,
+            actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            actor_label TEXT NOT NULL,
+            action TEXT NOT NULL,
+            target_type TEXT NOT NULL,
+            target_id INTEGER,
+            target_label TEXT NOT NULL,
+            details_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            restored_at TEXT,
+            restored_by INTEGER REFERENCES users(id) ON DELETE SET NULL
+        )""")
+        db.execute("CREATE INDEX IF NOT EXISTS admin_activity_created_idx ON admin_activity(created_at DESC,id DESC)")
+        ADMIN_ACTIVITY_AVAILABLE = True
         school_columns = {row["name"]: row for row in db.execute("PRAGMA table_info(schools)")}
         if school_columns["latitude"]["notnull"] or school_columns["longitude"]["notnull"]:
             # School pins are optional during sign-up. Rebuild the legacy table
@@ -1511,6 +1593,26 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(500, {"error": "The server could not complete that request."})
 
     def api_get(self, path):
+        if path == "/api/admin/activity":
+            self.require_role("admin")
+            require_admin_activity()
+            with connect() as db:
+                rows = db.execute("""SELECT id,actor_label,action,target_type,target_id,target_label,
+                    details_json,created_at,restored_at FROM admin_activity
+                    ORDER BY id DESC LIMIT 100""").fetchall()
+                items = []
+                for row in rows:
+                    try:
+                        details = json.loads(row["details_json"] or "{}")
+                    except (TypeError, ValueError):
+                        details = {}
+                    items.append({"id": row["id"], "actor": row["actor_label"], "action": row["action"],
+                        "target_type": row["target_type"], "target_id": row["target_id"],
+                        "target": row["target_label"], "summary": admin_activity_summary(row["action"], details),
+                        "created_at": str(row["created_at"]), "restored_at": str(row["restored_at"]) if row["restored_at"] else None,
+                        "can_restore": admin_activity_restore_allowed(db, row, details)})
+            self.send_json(200, {"entries": items, "restore_window_hours": 24})
+            return
         if path == "/api/admin/passkeys/status":
             admin = self.require_role("admin")
             if not PASSKEYS_AVAILABLE:
@@ -1593,9 +1695,9 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 rows = db.execute("""SELECT s.id,s.name,s.description,s.status,s.opens_at,s.closes_at,s.logo_type,
         s.pickup_lat pickup_latitude,s.pickup_lon pickup_longitude,
-        COUNT(CASE WHEN p.available=1 THEN 1 END) menu_count,
+        COUNT(CASE WHEN p.available=1 AND p.deleted_at IS NULL THEN 1 END) menu_count,
         (SELECT value FROM settings WHERE key='stall_break:' || CAST(s.id AS TEXT)) stall_break_value FROM stalls s
-                    JOIN users u ON u.id=s.owner_id LEFT JOIN products p ON p.stall_id=s.id
+                    JOIN users u ON u.id=s.owner_id LEFT JOIN products p ON p.stall_id=s.id AND p.deleted_at IS NULL
                     WHERE s.status='approved' AND u.school_id='pns' AND u.deleted_at IS NULL
                     GROUP BY s.id ORDER BY s.name""").fetchall()
             stall_list = []
@@ -1632,7 +1734,7 @@ class Handler(BaseHTTPRequestHandler):
                     LEFT JOIN (SELECT oi.product_id,COUNT(DISTINCT o.id) order_count,
                         SUM(oi.quantity) units_ordered FROM order_items oi JOIN orders o ON o.id=oi.order_id
                         WHERE o.status!='declined' GROUP BY oi.product_id) o ON o.product_id=p.id
-                    WHERE p.stall_id=? ORDER BY p.name""", (week_ago,stall_id)).fetchall()
+                    WHERE p.stall_id=? AND p.deleted_at IS NULL ORDER BY p.name""", (week_ago,stall_id)).fetchall()
             self.send_json(200, {"stall_views": {"total": stall_views["total"] or 0,
                 "last_7_days": stall_views["last_7_days"] or 0},
                 "products": [{"id":row["id"],"name":row["name"],"views_total":row["views_total"] or 0,
@@ -1676,7 +1778,7 @@ class Handler(BaseHTTPRequestHandler):
                 owner = stall and user and user["role"] == "owner" and user["id"] == stall["owner_id"]
                 if not stall or not (public or owner): raise ApiError(404, "Stall not found.")
                 products = db.execute("""SELECT p.id,p.name,p.description,p.ingredients,p.category,p.price_cents,p.emoji,
-                    p.available,p.stock_count,p.photo_type,p.dietary_tags,p.allergen_tags FROM products p WHERE p.stall_id=? AND p.available=1
+                    p.available,p.stock_count,p.photo_type,p.dietary_tags,p.allergen_tags FROM products p WHERE p.stall_id=? AND p.available=1 AND p.deleted_at IS NULL
                     ORDER BY p.category,p.name""", (stall["id"],)).fetchall()
                 payload = dict(stall)
                 payload.pop("stall_break_value", None)
@@ -1706,7 +1808,7 @@ class Handler(BaseHTTPRequestHandler):
                 stall_mode = get_stall_registration_mode(db)
                 row = db.execute("""SELECT p.photo_data,p.photo_type,p.available,s.status stall_status,s.owner_id,u.school_id
                     FROM products p JOIN stalls s ON s.id=p.stall_id JOIN users u ON u.id=s.owner_id
-                    WHERE p.id=? AND u.deleted_at IS NULL""", (product_id,)).fetchone()
+                    WHERE p.id=? AND p.deleted_at IS NULL AND u.deleted_at IS NULL""", (product_id,)).fetchone()
             if not row or not row["photo_data"] or not row["photo_type"]:
                 raise ApiError(404, "Food photo not found.")
             public = (stall_mode != "stop_all" and row["available"]
@@ -1766,7 +1868,7 @@ class Handler(BaseHTTPRequestHandler):
             with connect() as db:
                 stall_mode = get_stall_registration_mode(db)
                 paused = db.execute("SELECT value FROM settings WHERE key='ordering_paused'").fetchone()[0] == "true"
-                where, args = "WHERE u.school_id='pns' AND u.deleted_at IS NULL", []
+                where, args = "WHERE p.deleted_at IS NULL AND u.school_id='pns' AND u.deleted_at IS NULL", []
                 if not user or user["role"] not in ("admin", "owner"):
                     where += " AND p.available=1 AND s.status='approved'"
                     if stall_mode == "stop_all":
@@ -1790,10 +1892,10 @@ class Handler(BaseHTTPRequestHandler):
                 # Keep them hidden when sales are stopped, while still letting
                 # owners and admins inspect their own/admin schedule views.
                 if WEEKLY_MENU_AVAILABLE and (stall_mode != "stop_all" or (user and user["role"] in ("owner", "admin"))):
-                    schedule_where = "u.school_id='pns' AND u.deleted_at IS NULL AND s.status='approved'"
+                    schedule_where = "p.deleted_at IS NULL AND u.school_id='pns' AND u.deleted_at IS NULL AND s.status='approved'"
                     schedule_args = []
                     if user and user["role"] == "owner":
-                        schedule_where = "s.owner_id=?"
+                        schedule_where = "p.deleted_at IS NULL AND s.owner_id=?"
                         schedule_args = [user["id"]]
                     weekly_rows = db.execute(f"""SELECT wm.id schedule_id,wm.weekday,wm.service_period,
                         p.id,p.stall_id,p.name,p.description,p.category,p.price_cents,p.emoji,p.available,
@@ -1923,7 +2025,7 @@ class Handler(BaseHTTPRequestHandler):
                     (SELECT value FROM settings WHERE key='stall_break:' || CAST(s.id AS TEXT)) stall_break_value,
                     u.name owner_name,u.email owner_email,
                     COUNT(p.id) product_count FROM stalls s JOIN users u ON u.id=s.owner_id
-                    LEFT JOIN products p ON p.stall_id=s.id WHERE u.school_id='pns' AND u.deleted_at IS NULL
+                    LEFT JOIN products p ON p.stall_id=s.id AND p.deleted_at IS NULL WHERE u.school_id='pns' AND u.deleted_at IS NULL
                     GROUP BY s.id,u.name,u.email,s.opens_at,s.closes_at ORDER BY
                     CASE s.status WHEN 'paused' THEN 0 ELSE 1 END,s.name""").fetchall()
                 stall_list = []
@@ -1934,7 +2036,7 @@ class Handler(BaseHTTPRequestHandler):
                         and item["stall_break_value"] != "true")
                     item.pop("stall_break_value", None)
                     stall_list.append(item)
-                products = db.execute("SELECT COUNT(*) FROM products p JOIN stalls s ON s.id=p.stall_id JOIN users owner ON owner.id=s.owner_id WHERE owner.school_id='pns' AND owner.deleted_at IS NULL").fetchone()[0]
+                products = db.execute("SELECT COUNT(*) FROM products p JOIN stalls s ON s.id=p.stall_id JOIN users owner ON owner.id=s.owner_id WHERE p.deleted_at IS NULL AND owner.school_id='pns' AND owner.deleted_at IS NULL").fetchone()[0]
                 rows = db.execute("""SELECT o.status,COUNT(*) count,COALESCE(SUM(o.total_cents),0) sales
                     FROM orders o JOIN stalls s ON s.id=o.stall_id JOIN users owner ON owner.id=s.owner_id
                     WHERE owner.school_id='pns' GROUP BY o.status""").fetchall()
@@ -2013,6 +2115,45 @@ class Handler(BaseHTTPRequestHandler):
                 if row["id"] in feedback_by_order else None)} for row in rows]
 
     def api_post(self, path, data):
+        admin_restore_match = re.fullmatch(r"/api/admin/activity/(\d+)/restore", path)
+        if admin_restore_match:
+            admin = self.require_role("admin")
+            require_admin_activity()
+            event_id = int(admin_restore_match.group(1))
+            with connect() as db:
+                event = db.execute("SELECT * FROM admin_activity WHERE id=?", (event_id,)).fetchone()
+                if not event or not admin_activity_restore_allowed(db, event):
+                    raise ApiError(409, "This item can no longer be restored. Refresh the activity history.")
+                details = json.loads(event["details_json"] or "{}")
+                restored_at = now()
+                if event["action"] == "delete_product":
+                    changed = db.execute("""UPDATE products SET deleted_at=NULL,available=?,featured_until=?
+                        WHERE id=? AND deleted_at=?""",
+                        (bool(details.get("available")), details.get("featured_until"), event["target_id"], details["deleted_at"]))
+                    if not changed.rowcount:
+                        raise ApiError(409, "That food item has changed since it was removed, so it was not restored.")
+                elif event["action"] == "delete_stall":
+                    stall = db.execute("""SELECT s.owner_id FROM stalls s JOIN users u ON u.id=s.owner_id
+                        WHERE s.id=? AND u.school_id='pns' AND u.deleted_at=?""",
+                        (event["target_id"], details["deleted_at"])).fetchone()
+                    if not stall:
+                        raise ApiError(409, "That stall account has changed since it was removed, so it was not restored.")
+                    db.execute("UPDATE users SET deleted_at=NULL WHERE id=?", (stall["owner_id"],))
+                    db.execute("UPDATE stalls SET status=? WHERE id=?", (details.get("status", "paused"), event["target_id"]))
+                    for product in details.get("products", []):
+                        db.execute("""UPDATE products SET available=?,featured_until=?
+                            WHERE id=? AND stall_id=? AND deleted_at IS NULL""",
+                            (bool(product.get("available")), product.get("featured_until"), product["id"], event["target_id"]))
+                else:
+                    raise ApiError(409, "This activity item does not support restore.")
+                changed = db.execute("UPDATE admin_activity SET restored_at=?,restored_by=? WHERE id=? AND restored_at IS NULL",
+                    (restored_at, admin["id"], event_id))
+                if not changed.rowcount:
+                    raise ApiError(409, "This item has already been restored.")
+                log_admin_activity(db, admin, "restore", event["target_type"], event["target_id"], event["target_label"],
+                    {"restored_event_id": event_id}, restored_at)
+            self.send_json(200, {"ok": True, "restored": True})
+            return
         if path == "/api/admin/passkeys/register/options":
             admin = self.require_role("admin")
             if not PASSKEYS_AVAILABLE:
@@ -2188,7 +2329,7 @@ class Handler(BaseHTTPRequestHandler):
             if not stall_id:
                 raise ApiError(403, "This owner account does not have a stall to plan for.")
             with connect() as db:
-                product = db.execute("SELECT id FROM products WHERE id=? AND stall_id=?",
+                product = db.execute("SELECT id FROM products WHERE id=? AND stall_id=? AND deleted_at IS NULL",
                     (product_id, stall_id)).fetchone()
                 if not product:
                     raise ApiError(404, "Choose one of your own menu items.")
@@ -2287,7 +2428,7 @@ class Handler(BaseHTTPRequestHandler):
                 stall = db.execute("SELECT id FROM stalls WHERE id=? AND status='approved'",(stall_id,)).fetchone()
                 if not stall: raise ApiError(404,"Stall not found.")
                 if product_id is not None:
-                    product = db.execute("SELECT id FROM products WHERE id=? AND stall_id=? AND available=1",
+                    product = db.execute("SELECT id FROM products WHERE id=? AND stall_id=? AND available=1 AND deleted_at IS NULL",
                         (product_id,stall_id)).fetchone()
                     if not product: raise ApiError(404,"Menu item not found.")
                 viewer_key = hashlib.sha256(viewer_id.encode()).hexdigest()
@@ -2788,7 +2929,7 @@ class Handler(BaseHTTPRequestHandler):
                 marks = ",".join("?" for _ in ids)
                 products = db.execute(f"""SELECT p.*,s.id stall_id,s.name stall_name,s.status stall_status,s.opens_at,s.closes_at
                     FROM products p JOIN stalls s ON s.id=p.stall_id
-                    WHERE p.id IN ({marks}) AND p.available=1 AND s.status='approved'""", list(ids)).fetchall()
+                    WHERE p.id IN ({marks}) AND p.available=1 AND p.deleted_at IS NULL AND s.status='approved'""", list(ids)).fetchall()
                 if len(products) != len(ids): raise ApiError(409, "One or more items are no longer available. Refresh the menu and try again.")
                 if len({row["stall_id"] for row in products}) != 1: raise ValueError("Place separate orders for each stall.")
                 stall = products[0]
@@ -2864,22 +3005,34 @@ class Handler(BaseHTTPRequestHandler):
                     raise ApiError(409, "Feedback has already been submitted for this order.")
             self.send_json(201, {"ok":True}); return
         if path == "/api/admin/pause":
-            self.require_role("admin")
+            admin = self.require_role("admin")
+            require_admin_activity()
             paused = bool(data.get("paused"))
-            with connect() as db: db.execute("UPDATE settings SET value=? WHERE key='ordering_paused'", ("true" if paused else "false",))
+            with connect() as db:
+                setting = db.execute("SELECT value FROM settings WHERE key='ordering_paused'").fetchone()
+                before = bool(setting and setting["value"] == "true")
+                db.execute("UPDATE settings SET value=? WHERE key='ordering_paused'", ("true" if paused else "false",))
+                if before != paused:
+                    log_admin_activity(db, admin, "ordering_pause", "campus", None, "Campus ordering",
+                        {"before": before, "after": paused})
             self.send_json(200, {"ordering_paused": paused})
             return
         raise ApiError(404, "That API route does not exist.")
 
     def api_patch(self, path, data):
         if path == "/api/admin/stall-policy":
-            self.require_role("admin")
+            admin = self.require_role("admin")
+            require_admin_activity()
             mode = data.get("mode")
             if mode not in STALL_REGISTRATION_MODES:
                 raise ValueError("Choose Allow all, Limited approval, or Stop all.")
             with connect() as db:
+                before = get_stall_registration_mode(db)
                 db.execute("INSERT INTO settings(key,value) VALUES('stall_registration_mode',?) "
                     "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (mode,))
+                if before != mode:
+                    log_admin_activity(db, admin, "stall_policy", "campus", None, "Stall registration access",
+                        {"before": before, "after": mode})
             labels = {"allow_all":"All stalls may register and sell.",
                       "limited":"New stall accounts need admin approval before selling.",
                       "stop_all":"New stall accounts and stall sales are stopped."}
@@ -2957,7 +3110,7 @@ class Handler(BaseHTTPRequestHandler):
             with connect() as db:
                 product = db.execute("""SELECT p.id,p.available,p.stock_count,s.id stall_id,s.status stall_status
                     FROM products p JOIN stalls s ON s.id=p.stall_id
-                    WHERE p.id=? AND s.owner_id=?""", (product_id, owner["id"])).fetchone()
+                    WHERE p.id=? AND p.deleted_at IS NULL AND s.owner_id=?""", (product_id, owner["id"])).fetchone()
                 if not product: raise ApiError(404, "Menu item not found.")
                 if featured and product["stall_status"] != "approved": raise ApiError(409, "Your stall must be open to feature an item.")
                 if featured and (not product["available"] or product["stock_count"] == 0):
@@ -3021,21 +3174,26 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200,{"opens_at":opens_at,"closes_at":closes_at,"prep_minutes":prep_minutes}); return
         stall_match = re.fullmatch(r"/api/admin/stalls/(\d+)", path)
         if stall_match:
-            self.require_role("admin")
+            admin = self.require_role("admin")
+            require_admin_activity()
             status = data.get("status")
             if status not in ("approved", "paused"):
                 raise ValueError("Choose approved or paused stall status.")
             with connect() as db:
-                cur = db.execute("""UPDATE stalls SET status=? WHERE id=? AND owner_id IN
-                    (SELECT id FROM users WHERE school_id='pns' AND deleted_at IS NULL)""", (status,int(stall_match.group(1))))
-                if not cur.rowcount: raise ApiError(404,"Stall not found.")
+                stall = db.execute("""SELECT s.id,s.name,s.status FROM stalls s WHERE s.id=? AND s.owner_id IN
+                    (SELECT id FROM users WHERE school_id='pns' AND deleted_at IS NULL)""", (int(stall_match.group(1)),)).fetchone()
+                if not stall: raise ApiError(404,"Stall not found.")
+                db.execute("UPDATE stalls SET status=? WHERE id=?", (status, stall["id"]))
+                if stall["status"] != status:
+                    log_admin_activity(db, admin, "stall_status", "stall", stall["id"], stall["name"],
+                        {"before": stall["status"], "after": status})
             self.send_json(200,{"status":status}); return
         product_match = re.fullmatch(r"/api/products/(\d+)", path)
         if product_match:
             owner = self.require_role("owner")
             product_id = int(product_match.group(1))
             with connect() as db:
-                row = db.execute("SELECT p.* FROM products p JOIN stalls s ON s.id=p.stall_id WHERE p.id=? AND s.owner_id=?", (product_id,owner["id"])).fetchone()
+                row = db.execute("SELECT p.* FROM products p JOIN stalls s ON s.id=p.stall_id WHERE p.id=? AND p.deleted_at IS NULL AND s.owner_id=?", (product_id,owner["id"])).fetchone()
                 if not row: raise ApiError(404, "Menu item not found.")
                 if set(data) == {"available"}:
                     available = data["available"]
@@ -3212,14 +3370,21 @@ class Handler(BaseHTTPRequestHandler):
     def api_delete(self, path):
         admin_stall_match = re.fullmatch(r"/api/admin/stalls/(\d+)", path)
         if admin_stall_match:
-            self.require_role("admin")
+            admin = self.require_role("admin")
+            require_admin_activity()
             stall_id = int(admin_stall_match.group(1))
             with connect() as db:
-                stall = db.execute("""SELECT s.id,s.owner_id FROM stalls s JOIN users u ON u.id=s.owner_id
+                stall = db.execute("""SELECT s.id,s.owner_id,s.name,s.status FROM stalls s JOIN users u ON u.id=s.owner_id
                     WHERE s.id=? AND u.school_id='pns' AND u.deleted_at IS NULL""", (stall_id,)).fetchone()
                 if not stall:
                     raise ApiError(404, "Stall account not found.")
                 removed_at = now()
+                product_rows = db.execute("""SELECT id,available,featured_until FROM products
+                    WHERE stall_id=? AND deleted_at IS NULL ORDER BY id""", (stall_id,)).fetchall()
+                snapshot = {"deleted_at": removed_at, "status": stall["status"],
+                    "products": [{"id": row["id"], "available": bool(row["available"]),
+                        "featured_until": row["featured_until"]} for row in product_rows]}
+                log_admin_activity(db, admin, "delete_stall", "stall", stall_id, stall["name"], snapshot, removed_at)
                 db.execute("UPDATE users SET deleted_at=? WHERE id=?", (removed_at, stall["owner_id"]))
                 db.execute("UPDATE stalls SET status='paused' WHERE id=?", (stall_id,))
                 db.execute("UPDATE products SET available=FALSE,featured_until=NULL WHERE stall_id=?", (stall_id,))
@@ -3228,14 +3393,22 @@ class Handler(BaseHTTPRequestHandler):
             return
         admin_product_match = re.fullmatch(r"/api/admin/products/(\d+)", path)
         if admin_product_match:
-            self.require_role("admin")
+            admin = self.require_role("admin")
+            require_admin_activity()
             product_id = int(admin_product_match.group(1))
             with connect() as db:
-                result = db.execute("""DELETE FROM products WHERE id=? AND stall_id IN (
-                    SELECT s.id FROM stalls s JOIN users u ON u.id=s.owner_id
-                    WHERE u.school_id='pns' AND u.deleted_at IS NULL)""", (product_id,))
-                if result.rowcount != 1:
+                product = db.execute("""SELECT p.id,p.name,p.available,p.featured_until,s.id stall_id,s.name stall_name
+                    FROM products p JOIN stalls s ON s.id=p.stall_id JOIN users u ON u.id=s.owner_id
+                    WHERE p.id=? AND p.deleted_at IS NULL AND u.school_id='pns' AND u.deleted_at IS NULL""", (product_id,)).fetchone()
+                if not product:
                     raise ApiError(404, "Food item not found.")
+                removed_at = now()
+                db.execute("UPDATE products SET deleted_at=?,available=FALSE,featured_until=NULL WHERE id=?",
+                    (removed_at, product_id))
+                log_admin_activity(db, admin, "delete_product", "product", product_id, product["name"],
+                    {"deleted_at": removed_at, "available": bool(product["available"]),
+                     "featured_until": product["featured_until"], "stall_id": product["stall_id"],
+                     "stall_name": product["stall_name"]}, removed_at)
             self.send_json(200, {"ok":True,"removed_from_catalog_and_menu":True,"order_history_preserved":True})
             return
         schedule_match = re.fullmatch(r"/api/menu-schedule/(\d+)", path)
@@ -3254,7 +3427,7 @@ class Handler(BaseHTTPRequestHandler):
         if not match: raise ApiError(404,"That API route does not exist.")
         owner = self.require_role("owner")
         with connect() as db:
-            cur = db.execute("DELETE FROM products WHERE id=? AND stall_id=?", (int(match.group(1)),owner["stall_id"]))
+            cur = db.execute("DELETE FROM products WHERE id=? AND stall_id=? AND deleted_at IS NULL", (int(match.group(1)),owner["stall_id"]))
             if not cur.rowcount: raise ApiError(404,"Menu item not found.")
         self.send_json(200,{"ok":True})
 

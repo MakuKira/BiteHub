@@ -1653,6 +1653,416 @@ html[data-theme="dark"] .policy-document-footer small{color:#c6bca8}
   }
 }
 
+/* Keep the role landing covered until the startup welcome is dismissed. */
+body.startup-welcome-pending { background: #FFF4E1 !important; }
+#app.startup-welcome-hidden { visibility: hidden !important; }
+
+/* The app opens with a warm, cinematic BiteHub welcome note. */
+.guest-welcome-transition {
+  position: fixed;
+  z-index: 120000;
+  inset: 0;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding: max(16px, env(safe-area-inset-top)) 14px max(16px, env(safe-area-inset-bottom));
+  overflow: hidden;
+  color: #432A20;
+  background:
+    radial-gradient(ellipse at 50% 43%, rgba(255,255,255,.98) 0%, rgba(255,250,232,.97) 36%, rgba(255,229,180,.97) 100%),
+    #FFF2D5;
+  opacity: 0;
+  pointer-events: auto;
+  transition: opacity .2s ease;
+  isolation: isolate;
+}
+
+.guest-welcome-transition::before {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  background:
+    radial-gradient(circle at 10% 17%, rgba(222,57,42,.12) 0 2px, transparent 3px),
+    radial-gradient(circle at 88% 24%, rgba(237,181,50,.28) 0 2px, transparent 3px),
+    radial-gradient(circle at 18% 78%, rgba(237,181,50,.24) 0 3px, transparent 4px),
+    radial-gradient(circle at 86% 82%, rgba(222,57,42,.11) 0 2px, transparent 3px),
+    radial-gradient(ellipse at 50% 57%, transparent 0 150px, rgba(225,169,64,.12) 151px 152px, transparent 153px 195px, rgba(216,63,43,.07) 196px 197px, transparent 198px);
+  content: "";
+}
+
+.guest-welcome-transition.is-visible { opacity: 1; }
+.guest-welcome-transition.is-leaving { opacity: 0; }
+body.guest-welcome-active { overflow: hidden !important; overscroll-behavior: none; }
+
+.guest-welcome-scene {
+  position: relative;
+  width: min(94vw, 430px);
+  height: clamp(250px, 43vh, 330px);
+  perspective: 900px;
+  contain: layout paint;
+}
+
+.guest-welcome-scene::before {
+  position: absolute;
+  z-index: 0;
+  top: 48%;
+  left: 50%;
+  width: min(88vw, 360px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255,255,255,.92) 0%, rgba(255,231,165,.6) 34%, rgba(255,207,100,.22) 55%, transparent 72%);
+  opacity: 0;
+  transform: translate(-50%,-50%) scale(.28);
+  animation: guest-note-bloom 1.15s .34s cubic-bezier(.16,.72,.25,1) forwards;
+  pointer-events: none;
+}
+
+.guest-welcome-envelope {
+  position: absolute;
+  z-index: 1;
+  bottom: 22px;
+  left: 50%;
+  width: min(74vw, 304px);
+  aspect-ratio: 1.7 / 1;
+  opacity: 0;
+  transform: translateX(-50%) scale(.72) rotate(-5deg);
+  transform-origin: 50% 70%;
+  filter: drop-shadow(0 20px 25px rgba(105,52,26,.2));
+  animation: guest-note-arrive .78s .08s cubic-bezier(.16,.88,.24,1) forwards;
+  will-change: transform, opacity;
+}
+
+.guest-welcome-envelope-back,
+.guest-welcome-envelope-front,
+.guest-welcome-envelope-flap {
+  position: absolute;
+  inset: 0;
+  border-radius: 16px;
+}
+
+.guest-welcome-envelope-back {
+  z-index: 1;
+  border: 1px solid rgba(201,145,40,.7);
+  background: linear-gradient(145deg, #FFFDF7, #FFE9B3);
+  box-shadow: inset 0 2px 0 rgba(255,255,255,.96), 0 0 0 5px rgba(255,255,255,.48);
+}
+
+.guest-welcome-letter {
+  position: absolute;
+  z-index: 2;
+  bottom: 9px;
+  left: 50%;
+  display: grid;
+  justify-items: center;
+  width: min(88%, 264px);
+  min-height: 168px;
+  box-sizing: border-box;
+  padding: 13px 12px 12px;
+  border: 1px solid #F0DDBD;
+  border-radius: 16px;
+  color: #4C3023;
+  text-align: center;
+  background: linear-gradient(152deg, #FFFFFF 0%, #FFFEFA 68%, #FFF7E8 100%);
+  box-shadow: 0 10px 25px rgba(120,68,37,.16), inset 0 1px 0 #fff;
+  opacity: 0;
+  transform: translate(-50%, 68px) scale(.86);
+  animation: guest-note-letter-rise .7s .87s cubic-bezier(.18,.78,.22,1) forwards;
+  will-change: transform, opacity;
+}
+
+.guest-welcome-letter img {
+  width: 34px;
+  height: 34px;
+  margin-bottom: 5px;
+  object-fit: contain;
+  filter: drop-shadow(0 3px 4px rgba(183,47,34,.16));
+}
+
+.guest-welcome-letter > span {
+  color: #A34A2C;
+  font: 900 8px/1.2 "DM Sans", sans-serif;
+  letter-spacing: .14em;
+}
+
+.guest-welcome-letter strong {
+  margin-top: 4px;
+  color: #34271F;
+  font: 850 clamp(19px, 5.5vw, 24px)/1.08 Manrope, sans-serif;
+  letter-spacing: -.045em;
+}
+
+.guest-welcome-letter small {
+  margin-top: 4px;
+  color: #766354;
+  font: 600 10px/1.4 "DM Sans", sans-serif;
+}
+
+.guest-welcome-letter > i {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 9px;
+  padding: 6px 10px;
+  border: 1px solid rgba(240,196,83,.7);
+  border-radius: 999px;
+  color: #8E321F;
+  background: #FFF1C8;
+  font: 900 8px/1 "DM Sans", sans-serif;
+  font-style: normal;
+  letter-spacing: .1em;
+}
+
+.guest-welcome-letter > i b {
+  display: grid;
+  width: 15px;
+  height: 15px;
+  place-items: center;
+  border-radius: 50%;
+  color: #FFF9E6;
+  background: #C82D25;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.guest-welcome-envelope-front {
+  z-index: 3;
+  overflow: hidden;
+  border: 1px solid rgba(201,145,40,.76);
+  background: linear-gradient(145deg, #FFF8E7, #F7D995 74%, #F1C76B);
+  clip-path: polygon(0 0, 50% 57%, 100% 0, 100% 100%, 0 100%);
+}
+
+.guest-welcome-envelope-front::before,
+.guest-welcome-envelope-front::after {
+  position: absolute;
+  top: 0;
+  width: 52%;
+  height: 100%;
+  background: linear-gradient(145deg, rgba(255,255,255,.72), rgba(255,243,211,.2));
+  content: "";
+}
+
+.guest-welcome-envelope-front::before {
+  left: 0;
+  clip-path: polygon(0 0, 100% 57%, 0 100%);
+}
+
+.guest-welcome-envelope-front::after {
+  right: 0;
+  clip-path: polygon(100% 0, 0 57%, 100% 100%);
+}
+
+.guest-welcome-envelope-flap {
+  z-index: 4;
+  inset: 0 0 auto;
+  height: 67%;
+  border-radius: 15px 15px 0 0;
+  background: linear-gradient(145deg, #FFE8AA 0%, #F4C65D 78%, #E9B94A 100%);
+  clip-path: polygon(0 0, 100% 0, 50% 88%);
+  transform: rotateX(0deg);
+  transform-origin: 50% 0;
+  backface-visibility: hidden;
+  animation: guest-note-flap-open .46s .76s cubic-bezier(.22,.72,.2,1) forwards;
+  will-change: transform;
+}
+
+.guest-welcome-seal {
+  position: absolute;
+  z-index: 5;
+  top: 42%;
+  left: 50%;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 2px solid #FFF0C6;
+  border-radius: 50%;
+  color: #FFF5D6;
+  background: linear-gradient(145deg, #E24432, #B72320);
+  box-shadow: 0 3px 9px rgba(115,43,26,.22);
+  font-size: 18px;
+  transform: translate(-50%,-50%) scale(1);
+  animation: guest-note-seal-pop .32s 1.02s ease-out forwards;
+  will-change: transform, opacity;
+}
+
+.guest-welcome-flight {
+  position: absolute;
+  z-index: 3;
+  display: grid;
+  width: clamp(34px, 11vw, 46px);
+  height: clamp(34px, 11vw, 46px);
+  place-items: center;
+  border: 1.5px solid rgba(255,255,255,.94);
+  border-radius: 50%;
+  color: initial;
+  background: linear-gradient(145deg, #FFFDF6, #FFE7B1);
+  box-shadow: 0 6px 14px rgba(112,63,31,.15), 0 0 0 1px rgba(222,173,70,.25);
+  font-size: clamp(17px, 5vw, 22px);
+  opacity: 0;
+  animation: guest-note-food-fly .8s cubic-bezier(.19,.75,.2,1) both;
+  will-change: transform, opacity;
+}
+
+.guest-welcome-flight--one { top: 16%; left: 4%; --note-x: clamp(65px, 23vw, 132px); --note-y: clamp(40px, 11vh, 74px); animation-delay: .02s; }
+.guest-welcome-flight--two { top: 10%; right: 5%; --note-x: clamp(-132px, -23vw, -65px); --note-y: clamp(46px, 13vh, 86px); animation-delay: .08s; }
+.guest-welcome-flight--three { bottom: 13%; left: 12%; --note-x: clamp(50px, 18vw, 102px); --note-y: clamp(-68px, -11vh, -38px); animation-delay: .13s; }
+.guest-welcome-flight--four { right: 12%; bottom: 13%; --note-x: clamp(-102px, -18vw, -50px); --note-y: clamp(-70px, -12vh, -40px); animation-delay: .18s; }
+.guest-welcome-flight--five { top: 48%; left: 0; --note-x: clamp(75px, 27vw, 150px); --note-y: 0px; animation-delay: .22s; }
+
+.guest-welcome-spark {
+  position: absolute;
+  z-index: 2;
+  color: #E2A62C;
+  font: 900 clamp(13px, 4vw, 18px)/1 Manrope, sans-serif;
+  font-style: normal;
+  opacity: 0;
+  animation: guest-note-sparkle .6s .7s ease-out both;
+}
+
+.guest-welcome-spark--one { top: 12%; left: 28%; --spark-x: -20px; --spark-y: -18px; }
+.guest-welcome-spark--two { top: 21%; right: 27%; --spark-x: 20px; --spark-y: -10px; animation-delay: .82s; }
+.guest-welcome-spark--three { bottom: 17%; left: 38%; --spark-x: 0px; --spark-y: 20px; animation-delay: .94s; }
+
+.guest-welcome-status {
+  margin: 0;
+  color: #8B6540;
+  font: 800 9px/1.2 "DM Sans", sans-serif;
+  letter-spacing: .16em;
+  text-align: center;
+  text-transform: uppercase;
+  animation: guest-note-status-in .5s .18s both;
+}
+
+.guest-welcome-start {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-width: min(220px, 74vw);
+  min-height: 48px;
+  box-sizing: border-box;
+  padding: 0 22px;
+  border: 1px solid #A91F1D;
+  border-radius: 999px;
+  color: #FFFDF8;
+  background: linear-gradient(100deg, #E74332 0%, #C82724 100%);
+  box-shadow: 0 9px 21px rgba(155,44,30,.22), inset 0 1px 0 rgba(255,255,255,.28);
+  font: 900 14px/1 "DM Sans", sans-serif;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(9px) scale(.96);
+  transition: opacity .38s ease, transform .38s cubic-bezier(.2,.75,.25,1), visibility .38s ease, box-shadow .2s ease;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.guest-welcome-transition.is-ready .guest-welcome-start {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0) scale(1);
+}
+
+.guest-welcome-start:hover:not(:disabled) {
+  box-shadow: 0 12px 25px rgba(155,44,30,.29), inset 0 1px 0 rgba(255,255,255,.32);
+}
+
+.guest-welcome-start:focus-visible {
+  outline: 3px solid #E4A92D;
+  outline-offset: 4px;
+}
+
+.guest-welcome-start:disabled { cursor: default; }
+.guest-welcome-start span { font-size: 18px; }
+
+@keyframes guest-note-bloom {
+  0% { opacity: 0; transform: translate(-50%,-50%) scale(.28); }
+  42% { opacity: .92; transform: translate(-50%,-50%) scale(.86); }
+  100% { opacity: .48; transform: translate(-50%,-50%) scale(1.12); }
+}
+
+@keyframes guest-note-arrive {
+  0% { opacity: 0; transform: translateX(-50%) translateY(18px) scale(.68) rotate(-7deg); }
+  58% { opacity: 1; transform: translateX(-50%) translateY(-7px) scale(1.045) rotate(2deg); }
+  80% { transform: translateX(-50%) translateY(2px) scale(.985) rotate(-1deg); }
+  100% { opacity: 1; transform: translateX(-50%) translateY(0) scale(1) rotate(0); }
+}
+
+@keyframes guest-note-food-fly {
+  0% { opacity: 0; transform: translate(0,0) scale(.55) rotate(-18deg); }
+  18% { opacity: 1; transform: translate(0,-7px) scale(1.13) rotate(5deg); }
+  73% { opacity: 1; transform: translate(calc(var(--note-x) * .82),calc(var(--note-y) * .82)) scale(.94) rotate(-7deg); }
+  100% { opacity: 0; transform: translate(var(--note-x),var(--note-y)) scale(.18) rotate(18deg); }
+}
+
+@keyframes guest-note-flap-open {
+  0%, 30% { transform: rotateX(0); }
+  100% { transform: rotateX(178deg); }
+}
+
+@keyframes guest-note-letter-rise {
+  0% { opacity: 0; transform: translate(-50%,68px) scale(.88); }
+  62% { opacity: 1; transform: translate(-50%,-116px) scale(1.025); }
+  100% { opacity: 1; transform: translate(-50%,-106px) scale(1); }
+}
+
+@keyframes guest-note-seal-pop {
+  0%, 38% { opacity: 1; transform: translate(-50%,-50%) scale(1); }
+  100% { opacity: 0; transform: translate(-50%,-50%) scale(.12) rotate(35deg); }
+}
+
+@keyframes guest-note-sparkle {
+  0% { opacity: 0; transform: translate(0,0) scale(.2) rotate(-15deg); }
+  36% { opacity: 1; transform: translate(calc(var(--spark-x) * .45),calc(var(--spark-y) * .45)) scale(1.3) rotate(12deg); }
+  100% { opacity: 0; transform: translate(var(--spark-x),var(--spark-y)) scale(.45) rotate(35deg); }
+}
+
+@keyframes guest-note-status-in {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 380px) {
+  .guest-welcome-scene { width: min(94vw, 340px); height: clamp(242px, 44vh, 300px); }
+  .guest-welcome-envelope { width: min(76vw, 270px); bottom: 18px; }
+  .guest-welcome-letter { width: 90%; min-height: 160px; padding: 11px 10px; }
+  .guest-welcome-letter img { width: 30px; height: 30px; }
+  .guest-welcome-letter small { font-size: 9px; }
+  .guest-welcome-letter > i { margin-top: 7px; }
+  .guest-welcome-start { min-height: 46px; font-size: 13px; }
+}
+
+@media (max-height: 540px) {
+  .guest-welcome-scene { height: 220px; }
+  .guest-welcome-envelope { width: min(66vw, 240px); bottom: 12px; }
+  .guest-welcome-letter { min-height: 146px; padding: 9px 8px; }
+  .guest-welcome-letter img { width: 27px; height: 27px; margin-bottom: 3px; }
+  .guest-welcome-letter > i { margin-top: 5px; padding: 5px 8px; }
+  .guest-welcome-start { min-height: 42px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .guest-welcome-transition,
+  .guest-welcome-transition::before,
+  .guest-welcome-transition *,
+  .guest-welcome-transition *::before,
+  .guest-welcome-transition *::after {
+    animation-duration: .01ms !important;
+    animation-delay: 0ms !important;
+    transition-duration: .01ms !important;
+  }
+  .guest-welcome-envelope { opacity: 1; transform: translateX(-50%) scale(1); }
+  .guest-welcome-envelope-flap { transform: rotateX(178deg); }
+  .guest-welcome-letter { opacity: 1; transform: translate(-50%,-106px) scale(1); }
+  .guest-welcome-flight,
+  .guest-welcome-spark,
+  .guest-welcome-seal { opacity: 0; }
+}
+
 /* Customer menu refinements: one-row filters, compact cards, and a clearer food spotlight. */
 #app:has(.buyer-banner) .menu-controls {
   display: block;
@@ -5688,4 +6098,172 @@ html[data-theme='dark'] .order-action-mark { border-color: #705633; background: 
       linear-gradient(0deg, #54150d3b, transparent 48%, #ffcb4a24),
       url("assets/bitehub-food-market-mobile.webp") !important;
   }
+}
+
+/* Lightweight startup sequence: assemble the mark with compositor-friendly
+   motion and keep the food photo still so low-power phones do less repainting. */
+#opening-splash.opening-splash {
+  background-color: #A82A1D !important;
+  background-image: linear-gradient(135deg, #A82A1D, #DA442C 58%, #F2A92F) !important;
+  animation: none !important;
+}
+#opening-splash.opening-splash::before {
+  z-index: 0 !important;
+  background-image:
+    radial-gradient(ellipse at 50% 48%, #FFF5D8E8 0%, #FFD46698 24%, #F0A32818 53%, transparent 72%),
+    linear-gradient(112deg, #A81E18B8 0%, #D73825A6 36%, #E76A2491 69%, #F6B52B8F 100%),
+    linear-gradient(0deg, #54150D3B, transparent 48%, #FFCB4A24),
+    url("assets/bitehub-food-market-medium.webp") !important;
+  background-position: center, center, center, 50% 52% !important;
+  background-size: 100% 100%, 100% 100%, 100% 100%, cover !important;
+  background-repeat: no-repeat !important;
+  opacity: .96 !important;
+  transform: none !important;
+  will-change: auto !important;
+  animation: none !important;
+}
+#opening-splash.opening-splash::after {
+  z-index: 1 !important;
+  width: min(70vmin, 360px) !important;
+  border-color: #FFF9EBA0 !important;
+  background: radial-gradient(circle, #FFF9EB38 0%, #FFE07A24 44%, transparent 72%) !important;
+  box-shadow: none !important;
+  animation: bitehub-splash-stage-halo 2.5s ease-out infinite !important;
+  will-change: transform, opacity;
+}
+#opening-splash.opening-splash .splash-intro {
+  z-index: 3 !important;
+  animation: bitehub-splash-intro .38s ease-out both !important;
+  will-change: transform, opacity;
+}
+#opening-splash.opening-splash .splash-logo-loader {
+  isolation: isolate;
+  contain: layout;
+}
+#opening-splash.opening-splash .splash-logo-loader::before {
+  z-index: 2 !important;
+  width: 125% !important;
+  background: radial-gradient(circle, #FFFFFFD9 0 3%, #FFD34E84 16%, #E7463238 36%, transparent 70%) !important;
+  animation: bitehub-splash-core 2.2s ease-out infinite !important;
+  will-change: transform, opacity;
+}
+#opening-splash.opening-splash .splash-logo-loader::after {
+  z-index: 4 !important;
+  width: 116% !important;
+  border: 1px solid #FFFFFFB8 !important;
+  background: none !important;
+  box-shadow: 0 0 22px #FFD04A32 !important;
+  animation: bitehub-splash-ring 2.2s cubic-bezier(.16, .72, .25, 1) .34s infinite !important;
+  will-change: transform, opacity;
+}
+#opening-splash.opening-splash .splash-logo-loader img {
+  clip-path: none !important;
+  filter: drop-shadow(0 10px 17px #69201652) !important;
+  transform-origin: center;
+  backface-visibility: hidden;
+  will-change: transform, opacity;
+  animation: bitehub-splash-mark-build 1.08s cubic-bezier(.18, .76, .22, 1) both,
+    bitehub-splash-mark-rest 3.4s ease-in-out 1.08s infinite !important;
+}
+#opening-splash.opening-splash .splash-logo-ring {
+  box-shadow: none !important;
+  will-change: transform, opacity;
+}
+#opening-splash.opening-splash .splash-logo-ring.ring-one {
+  border: 2px solid #FFFFFFDE !important;
+  animation: bitehub-splash-ring 2.2s cubic-bezier(.16, .72, .25, 1) .16s infinite !important;
+}
+#opening-splash.opening-splash .splash-logo-ring.ring-two {
+  border: 1px solid #FFD45C !important;
+  animation: bitehub-splash-ring 2.2s cubic-bezier(.16, .72, .25, 1) .72s infinite !important;
+}
+#opening-splash.opening-splash .splash-logo-particle {
+  display: none !important;
+  box-shadow: 0 0 7px 1px var(--particle-glow) !important;
+  will-change: transform, opacity;
+}
+#opening-splash.opening-splash .splash-logo-particle::before,
+#opening-splash.opening-splash .splash-logo-particle::after,
+#opening-splash.opening-splash .splash-logo-sweep {
+  display: none !important;
+  animation: none !important;
+}
+#opening-splash.opening-splash .splash-logo-particle:is(
+  .particle-one, .particle-three, .particle-six, .particle-nine,
+  .particle-twelve, .particle-fifteen, .particle-eighteen
+) {
+  display: block !important;
+  animation: bitehub-splash-particle 2.2s cubic-bezier(.2, .7, .2, 1) var(--particle-delay) infinite !important;
+}
+#opening-splash.opening-splash .splash-brand-lockup {
+  opacity: 0;
+  transform: translateY(7px);
+  animation: bitehub-splash-wordmark .54s cubic-bezier(.18, .76, .22, 1) .48s both !important;
+  will-change: transform, opacity;
+}
+#opening-splash.opening-splash .splash-brand-lockup img {
+  filter: drop-shadow(0 3px 8px #6920163D) !important;
+}
+@keyframes bitehub-splash-intro {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes bitehub-splash-mark-build {
+  0% { opacity: 0; transform: translateY(10px) scale(.74) rotate(-7deg); }
+  52% { opacity: 1; transform: translateY(-4px) scale(1.07) rotate(1.7deg); }
+  76% { opacity: 1; transform: translateY(1px) scale(.98) rotate(-.6deg); }
+  100% { opacity: 1; transform: translateY(0) scale(1) rotate(0); }
+}
+@keyframes bitehub-splash-mark-rest {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-4px) scale(1.025); }
+}
+@keyframes bitehub-splash-wordmark {
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes bitehub-splash-core {
+  0%, 100% { opacity: .12; transform: translate(-50%, -50%) scale(.72); }
+  56% { opacity: .72; transform: translate(-50%, -50%) scale(1.06); }
+}
+@keyframes bitehub-splash-ring {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(.66); }
+  42% { opacity: .62; }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.72); }
+}
+@keyframes bitehub-splash-stage-halo {
+  0%, 12% { opacity: .12; transform: translate(-50%, -50%) scale(.82); }
+  58% { opacity: .5; transform: translate(-50%, -50%) scale(1.04); }
+  100% { opacity: .1; transform: translate(-50%, -50%) scale(1.22); }
+}
+@keyframes bitehub-splash-particle {
+  0%, 4% { opacity: 0; transform: translate(calc(-50% + var(--start-x)), calc(-50% + var(--start-y))) scale(.08); }
+  15% { opacity: .98; transform: translate(calc(-50% + var(--start-x)), calc(-50% + var(--start-y))) scale(1.12); }
+  36% { opacity: .94; transform: translate(calc(-50% + var(--orbit-one-x)), calc(-50% + var(--orbit-one-y))) scale(.86); }
+  48% { opacity: 1; transform: translate(calc(-50% + var(--pull-x)), calc(-50% + var(--pull-y))) scale(.72); }
+  55% { opacity: 1; transform: translate(-50%, -50%) scale(1.28); }
+  70% { opacity: .96; transform: translate(calc(-50% + var(--burst-x)), calc(-50% + var(--burst-y))) scale(.94); }
+  100% { opacity: 0; transform: translate(calc(-50% + var(--far-x)), calc(-50% + var(--far-y))) scale(.18); }
+}
+@media (max-width: 640px) {
+  #opening-splash.opening-splash::before {
+    background-image:
+      radial-gradient(ellipse at 50% 48%, #fff5d8e8 0%, #ffd46698 24%, #f0a32818 53%, transparent 72%),
+      linear-gradient(112deg, #a81e18b8 0%, #d73825a6 36%, #e76a2491 69%, #f6b52b8f 100%),
+      linear-gradient(0deg, #54150d3b, transparent 48%, #ffcb4a24),
+      url("assets/bitehub-food-market-mobile.webp") !important;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  #opening-splash.opening-splash::after,
+  #opening-splash.opening-splash::before,
+  #opening-splash.opening-splash .splash-intro,
+  #opening-splash.opening-splash .splash-logo-loader::before,
+  #opening-splash.opening-splash .splash-logo-loader::after,
+  #opening-splash.opening-splash .splash-logo-loader img,
+  #opening-splash.opening-splash .splash-logo-ring,
+  #opening-splash.opening-splash .splash-logo-particle,
+  #opening-splash.opening-splash .splash-brand-lockup { animation: none !important; }
+  #opening-splash.opening-splash .splash-logo-loader img { opacity: 1 !important; clip-path: none !important; transform: none !important; }
+  #opening-splash.opening-splash .splash-logo-particle { display: none !important; }
+  #opening-splash.opening-splash .splash-brand-lockup { opacity: 1 !important; transform: none !important; }
 }

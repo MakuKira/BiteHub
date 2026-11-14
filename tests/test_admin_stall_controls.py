@@ -208,7 +208,7 @@ class AdminStallControlsTests(unittest.TestCase):
         self.assertEqual(status, 201)
         self.assertEqual(result["product"]["name"], "Approved item")
 
-    def test_admin_food_removal_preserves_order_line_snapshot(self):
+    def test_admin_food_removal_preserves_order_line_and_can_be_restored(self):
         _email, owner, owner_client = self.create_owner("Product Removal")
         status, created = self.request("/api/products", "POST", self.product_payload("Historic item"), owner_client)
         self.assertEqual(status, 201)
@@ -224,11 +224,34 @@ class AdminStallControlsTests(unittest.TestCase):
         self.assertTrue(result["order_history_preserved"])
         with server.connect() as db:
             line = db.execute("SELECT product_id,name,price_cents FROM order_items WHERE order_id=?", (order["order_id"],)).fetchone()
-        self.assertIsNone(line["product_id"])
+            archived = db.execute("SELECT available,deleted_at FROM products WHERE id=?", (product["id"],)).fetchone()
+        self.assertEqual(line["product_id"], product["id"])
         self.assertEqual(line["name"], "Historic item")
+        self.assertEqual(line["price_cents"], 4200)
+        self.assertFalse(archived["available"])
+        self.assertIsNotNone(archived["deleted_at"])
         status, catalog = self.request("/api/products")
         self.assertEqual(status, 200)
         self.assertNotIn(product["id"], {item["id"] for item in catalog["products"]})
+
+        status, activity = self.request("/api/admin/activity", opener=self.admin)
+        self.assertEqual(status, 200, activity)
+        removal = next(entry for entry in activity["entries"]
+            if entry["action"] == "delete_product" and entry["target_id"] == product["id"])
+        self.assertTrue(removal["can_restore"])
+
+        status, restored = self.request(f"/api/admin/activity/{removal['id']}/restore", "POST", {}, self.admin)
+        self.assertEqual(status, 200, restored)
+        with server.connect() as db:
+            active = db.execute("SELECT available,deleted_at FROM products WHERE id=?", (product["id"],)).fetchone()
+        self.assertTrue(active["available"])
+        self.assertIsNone(active["deleted_at"])
+        status, catalog = self.request("/api/products")
+        self.assertEqual(status, 200)
+        self.assertIn(product["id"], {item["id"] for item in catalog["products"]})
+
+        status, repeated = self.request(f"/api/admin/activity/{removal['id']}/restore", "POST", {}, self.admin)
+        self.assertEqual(status, 409, repeated)
 
     def test_admin_stall_removal_disables_login_but_preserves_orders(self):
         email, owner, owner_client = self.create_owner("Account Removal")

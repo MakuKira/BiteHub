@@ -6,6 +6,7 @@ import argparse
 import atexit
 import base64
 import binascii
+import gzip
 import hashlib
 import hmac
 from html import escape as html_escape
@@ -34,6 +35,13 @@ BASE = Path(__file__).resolve().parent
 DB_PATH = Path(os.environ.get("BITEHUB_DB", BASE / "bitehub.sqlite3"))
 DATABASE_URL = os.environ.get("BITEHUB_DATABASE_URL", "").strip()
 REQUIRE_POSTGRES = os.environ.get("BITEHUB_REQUIRE_POSTGRES", "").strip().lower() in {"1", "true", "yes"}
+REQUIRE_VAPID_SECRET = os.environ.get("BITEHUB_REQUIRE_VAPID_SECRET", "").strip().lower() in {"1", "true", "yes"}
+ORDER_MESSAGES_AVAILABLE = not bool(DATABASE_URL)
+GUEST_PUSH_AVAILABLE = not bool(DATABASE_URL)
+ORDER_CANCELLATION_AVAILABLE = not bool(DATABASE_URL)
+GUEST_FEEDBACK_AVAILABLE = not bool(DATABASE_URL)
+NOTIFICATION_INBOX_AVAILABLE = not bool(DATABASE_URL)
+WEEKLY_MENU_AVAILABLE = not bool(DATABASE_URL)
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "").strip()
 BITEHUB_EMAIL_FROM = os.environ.get("BITEHUB_EMAIL_FROM", "").strip()
 BITEHUB_PUBLIC_URL = (os.environ.get("BITEHUB_PUBLIC_URL", "") or
@@ -69,6 +77,29 @@ try:
     import psycopg as _psycopg
 except ImportError:
     _psycopg = None
+
+try:
+    from webauthn import (
+        base64url_to_bytes,
+        generate_authentication_options,
+        generate_registration_options,
+        options_to_json,
+        verify_authentication_response,
+        verify_registration_response,
+    )
+    from webauthn.helpers.structs import (
+        AuthenticatorSelectionCriteria,
+        PublicKeyCredentialDescriptor,
+        ResidentKeyRequirement,
+        UserVerificationRequirement,
+    )
+    WEBAUTHN_AVAILABLE = True
+except ImportError:
+    WEBAUTHN_AVAILABLE = False
+
+PASSKEYS_AVAILABLE = WEBAUTHN_AVAILABLE and not bool(DATABASE_URL)
+WEBAUTHN_RP_ID = os.environ.get("BITEHUB_WEBAUTHN_RP_ID", "").strip().lower()
+WEBAUTHN_ORIGIN = os.environ.get("BITEHUB_WEBAUTHN_ORIGIN", "").strip().rstrip("/")
 
 
 class _PostgresRow:
@@ -220,13 +251,20 @@ def _get_postgres_pool():
             conninfo=DATABASE_URL,
             min_size=1,
             max_size=pool_size,
+            max_lifetime=300,
+            max_idle=60,
             timeout=10,
             open=True,
+            check=ConnectionPool.check_connection,
             kwargs={
                 "autocommit": False,
                 "connect_timeout": 10,
                 "sslmode": "require",
-                "options": "-c search_path=bitehub_app,public",
+                "keepalives": 1,
+                "keepalives_idle": 10,
+                "keepalives_interval": 5,
+                "keepalives_count": 3,
+                "options": "-c search_path=bitehub_app,public -c statement_timeout=15000",
             },
         )
         try:
@@ -257,7 +295,19 @@ def connect():
     return db
 
 
+STALL_REGISTRATION_MODES = {"allow_all", "stop_all", "limited"}
+
+
+def get_stall_registration_mode(db):
+    row = db.execute("SELECT value FROM settings WHERE key='stall_registration_mode'").fetchone()
+    mode = row["value"] if row else "allow_all"
+    return mode if mode in STALL_REGISTRATION_MODES else "allow_all"
+
+
 def initialize_postgres():
+    global ORDER_MESSAGES_AVAILABLE, GUEST_PUSH_AVAILABLE, ORDER_CANCELLATION_AVAILABLE, GUEST_FEEDBACK_AVAILABLE
+    global NOTIFICATION_INBOX_AVAILABLE, WEEKLY_MENU_AVAILABLE
+    global PASSKEYS_AVAILABLE
     required_tables = (
         "schools", "users", "sessions", "guest_sessions", "stalls", "products", "reach_views",
         "settings", "orders", "order_items", "feedback", "delivery_positions",
@@ -284,9 +334,42 @@ def initialize_postgres():
                 "Supabase is missing the guest-session order link. Apply "
                 "supabase/migrations/202610300002_guest_sessions.sql first."
             )
+        passkey_tables = db.execute(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=? AND table_name IN (?,?)",
+            ("bitehub_app", "admin_passkeys", "webauthn_challenges"),
+        ).fetchone()[0]
+        PASSKEYS_AVAILABLE = WEBAUTHN_AVAILABLE and passkey_tables == 2
+        ORDER_MESSAGES_AVAILABLE = bool(db.execute(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=? AND table_name=?",
+            ("bitehub_app", "order_messages"),
+        ).fetchone()[0])
+        GUEST_PUSH_AVAILABLE = bool(db.execute(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=? AND table_name=?",
+            ("bitehub_app", "guest_push_subscriptions"),
+        ).fetchone()[0])
+        ORDER_CANCELLATION_AVAILABLE = bool(db.execute(
+            "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=? AND table_name=? AND column_name=?",
+            ("bitehub_app", "orders", "buyer_cancelled"),
+        ).fetchone()[0])
+        GUEST_FEEDBACK_AVAILABLE = bool(db.execute(
+            "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=? AND table_name=? AND column_name=? AND is_nullable='YES'",
+            ("bitehub_app", "feedback", "buyer_id"),
+        ).fetchone()[0])
+        NOTIFICATION_INBOX_AVAILABLE = bool(db.execute(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=? AND table_name=?",
+            ("bitehub_app", "notifications"),
+        ).fetchone()[0])
+        WEEKLY_MENU_AVAILABLE = bool(db.execute(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=? AND table_name=?",
+            ("bitehub_app", "weekly_menu_slots"),
+        ).fetchone()[0])
         db.execute(
             "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING",
             ("reach_signing_secret", secrets.token_hex(32)),
+        )
+        db.execute(
+            "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING",
+            ("stall_registration_mode", "allow_all"),
         )
         db.execute("DELETE FROM sessions WHERE expires_at <= ?", (int(time.time()),))
         db.execute("DELETE FROM guest_sessions WHERE expires_at <= ?", (int(time.time()),))
@@ -299,9 +382,12 @@ def initialize_postgres():
             "WHERE status!='out' OR fulfillment!='delivery'"
         )
         db.execute("UPDATE orders SET delivery_lat=NULL,delivery_lon=NULL WHERE status='completed'")
+        ensure_active_pickup_codes(db)
 
 
 def initialize():
+    global ORDER_MESSAGES_AVAILABLE, GUEST_PUSH_AVAILABLE, ORDER_CANCELLATION_AVAILABLE, GUEST_FEEDBACK_AVAILABLE
+    global NOTIFICATION_INBOX_AVAILABLE, WEEKLY_MENU_AVAILABLE, PASSKEYS_AVAILABLE
     if REQUIRE_POSTGRES and not DATABASE_URL:
         raise RuntimeError(
             "This deployment requires Supabase PostgreSQL. Set the private "
@@ -374,7 +460,26 @@ def initialize():
         CREATE TABLE IF NOT EXISTS settings (
           key TEXT PRIMARY KEY, value TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS admin_passkeys (
+          credential_id BLOB PRIMARY KEY,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          credential_public_key BLOB NOT NULL,
+          sign_count INTEGER NOT NULL DEFAULT 0,
+          transports TEXT NOT NULL DEFAULT '[]',
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS admin_passkeys_user_idx ON admin_passkeys(user_id);
+        CREATE TABLE IF NOT EXISTS webauthn_challenges (
+          challenge_token_hash TEXT PRIMARY KEY,
+          purpose TEXT NOT NULL CHECK(purpose IN ('register','login')),
+          challenge BLOB NOT NULL,
+          user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+          session_hash TEXT,
+          expires_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS webauthn_challenges_expiry_idx ON webauthn_challenges(expires_at);
         INSERT OR IGNORE INTO settings(key,value) VALUES('ordering_paused','false');
+        INSERT OR IGNORE INTO settings(key,value) VALUES('stall_registration_mode','allow_all');
         CREATE TABLE IF NOT EXISTS orders (
           id INTEGER PRIMARY KEY, buyer_id INTEGER REFERENCES users(id),
           stall_id INTEGER NOT NULL REFERENCES stalls(id), runner_id INTEGER REFERENCES users(id),
@@ -389,7 +494,8 @@ def initialize():
           guest_name TEXT NOT NULL DEFAULT '', guest_school_role TEXT NOT NULL DEFAULT '',
           guest_grade TEXT NOT NULL DEFAULT '', guest_section TEXT NOT NULL DEFAULT '',
           guest_access_token_hash TEXT NOT NULL DEFAULT '',
-          guest_pickup_code TEXT NOT NULL DEFAULT ''
+          guest_pickup_code TEXT NOT NULL DEFAULT '',
+          buyer_cancelled INTEGER NOT NULL DEFAULT 0 CHECK(buyer_cancelled IN (0,1))
         );
         CREATE TABLE IF NOT EXISTS order_items (
           id INTEGER PRIMARY KEY, order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
@@ -398,9 +504,18 @@ def initialize():
         );
         CREATE TABLE IF NOT EXISTS feedback (
                     order_id INTEGER PRIMARY KEY REFERENCES orders(id) ON DELETE CASCADE,
-                    buyer_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          buyer_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
                     rating INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),
                     comment TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS order_messages (
+          id INTEGER PRIMARY KEY,
+          order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+          sender_role TEXT NOT NULL CHECK(sender_role IN ('guest','buyer','owner')),
+          sender_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          sender_name TEXT NOT NULL,
+          message TEXT NOT NULL CHECK(length(message) BETWEEN 1 AND 1000),
+          created_at TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS delivery_positions (
           order_id INTEGER PRIMARY KEY REFERENCES orders(id) ON DELETE CASCADE,
@@ -412,9 +527,35 @@ def initialize():
           endpoint TEXT NOT NULL UNIQUE, subscription_json TEXT NOT NULL,
           created_at TEXT NOT NULL, updated_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS guest_push_subscriptions (
+          id INTEGER PRIMARY KEY, guest_session_id INTEGER NOT NULL REFERENCES guest_sessions(id) ON DELETE CASCADE,
+          endpoint TEXT NOT NULL UNIQUE, subscription_json TEXT NOT NULL,
+          created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS notifications (
+          id INTEGER PRIMARY KEY, user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+          guest_session_id INTEGER REFERENCES guest_sessions(id) ON DELETE CASCADE,
+          title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '/',
+          tag TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, read_at TEXT,
+          CHECK ((user_id IS NOT NULL AND guest_session_id IS NULL) OR
+                 (user_id IS NULL AND guest_session_id IS NOT NULL))
+        );
+        CREATE TABLE IF NOT EXISTS weekly_menu_slots (
+          id INTEGER PRIMARY KEY, stall_id INTEGER NOT NULL REFERENCES stalls(id) ON DELETE CASCADE,
+          product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+          weekday INTEGER NOT NULL CHECK(weekday BETWEEN 0 AND 6),
+          service_period TEXT NOT NULL CHECK(service_period IN ('Morning break','Lunch','Afternoon break')),
+          created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+          UNIQUE(stall_id,product_id,weekday,service_period)
+        );
         CREATE INDEX IF NOT EXISTS orders_buyer_idx ON orders(buyer_id, id DESC);
         CREATE INDEX IF NOT EXISTS orders_stall_idx ON orders(stall_id, id DESC);
         CREATE INDEX IF NOT EXISTS orders_runner_idx ON orders(runner_id, id DESC);
+        CREATE INDEX IF NOT EXISTS order_messages_order_idx ON order_messages(order_id, id);
+        CREATE INDEX IF NOT EXISTS guest_push_subscriptions_session_idx ON guest_push_subscriptions(guest_session_id);
+        CREATE INDEX IF NOT EXISTS notifications_user_unread_idx ON notifications(user_id,read_at,id DESC);
+        CREATE INDEX IF NOT EXISTS notifications_guest_unread_idx ON notifications(guest_session_id,read_at,id DESC);
+        CREATE INDEX IF NOT EXISTS weekly_menu_weekday_idx ON weekly_menu_slots(weekday,service_period,stall_id);
         CREATE INDEX IF NOT EXISTS products_stall_idx ON products(stall_id, available);
         CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions(expires_at);
         """)
@@ -486,6 +627,8 @@ def initialize():
             db.execute("ALTER TABLE orders ADD COLUMN runner_tracking_expires_at TEXT")
         if "pickup_offer_status" not in order_columns:
             db.execute("ALTER TABLE orders ADD COLUMN pickup_offer_status TEXT NOT NULL DEFAULT 'none' CHECK(pickup_offer_status IN ('none','pending','accepted','declined'))")
+        if "buyer_cancelled" not in order_columns:
+            db.execute("ALTER TABLE orders ADD COLUMN buyer_cancelled INTEGER NOT NULL DEFAULT 0 CHECK(buyer_cancelled IN (0,1))")
         for name in ("delivery_lat", "delivery_lon"):
             if name not in order_columns:
                 db.execute(f"ALTER TABLE orders ADD COLUMN {name} REAL")
@@ -524,17 +667,20 @@ def initialize():
                   guest_name TEXT NOT NULL DEFAULT '', guest_school_role TEXT NOT NULL DEFAULT '',
                   guest_grade TEXT NOT NULL DEFAULT '', guest_section TEXT NOT NULL DEFAULT '',
                   guest_access_token_hash TEXT NOT NULL DEFAULT '',
-                  guest_pickup_code TEXT NOT NULL DEFAULT ''
+                  guest_pickup_code TEXT NOT NULL DEFAULT '',
+                  buyer_cancelled INTEGER NOT NULL DEFAULT 0 CHECK(buyer_cancelled IN (0,1))
                 );
                 INSERT INTO orders_guest_migration(
                   id,buyer_id,stall_id,runner_id,fulfillment,status,total_cents,buyer_note,created_at,
                   updated_at,estimated_ready_at,pickup_at,delivery_lat,delivery_lon,runner_name,
                   runner_tracking_token_hash,runner_tracking_expires_at,pickup_offer_status,
-                  guest_name,guest_school_role,guest_grade,guest_section,guest_access_token_hash,guest_pickup_code
+                  guest_name,guest_school_role,guest_grade,guest_section,guest_access_token_hash,guest_pickup_code,
+                  buyer_cancelled
                 ) SELECT id,buyer_id,stall_id,runner_id,fulfillment,status,total_cents,buyer_note,created_at,
                   updated_at,estimated_ready_at,pickup_at,delivery_lat,delivery_lon,runner_name,
                   runner_tracking_token_hash,runner_tracking_expires_at,pickup_offer_status,
-                  guest_name,guest_school_role,guest_grade,guest_section,guest_access_token_hash,guest_pickup_code FROM orders;
+                  guest_name,guest_school_role,guest_grade,guest_section,guest_access_token_hash,guest_pickup_code,
+                  buyer_cancelled FROM orders;
                 DROP TABLE orders;
                 ALTER TABLE orders_guest_migration RENAME TO orders;
                 CREATE INDEX orders_buyer_idx ON orders(buyer_id, id DESC);
@@ -572,10 +718,56 @@ def initialize():
         db.execute("UPDATE orders SET runner_tracking_token_hash=NULL,runner_tracking_expires_at=NULL WHERE status!='out' OR fulfillment!='delivery'")
         # Precise handoff coordinates are no longer needed after delivery.
         db.execute("UPDATE orders SET delivery_lat=NULL,delivery_lon=NULL WHERE status='completed'")
+        feedback_info = {row["name"]: row for row in db.execute("PRAGMA table_info(feedback)")}
+        if feedback_info.get("buyer_id") and feedback_info["buyer_id"]["notnull"]:
+            # Guest reviews are still tied to a completed order and its private
+            # order token; the nullable user link keeps anonymous reviews safe.
+            db.execute("""CREATE TABLE feedback_guest_migration (
+                order_id INTEGER PRIMARY KEY REFERENCES orders(id) ON DELETE CASCADE,
+                buyer_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                rating INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),
+                comment TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+            )""")
+            db.execute("""INSERT INTO feedback_guest_migration(order_id,buyer_id,rating,comment,created_at)
+                SELECT order_id,buyer_id,rating,comment,created_at FROM feedback""")
+            db.execute("DROP TABLE feedback")
+            db.execute("ALTER TABLE feedback_guest_migration RENAME TO feedback")
+        ensure_active_pickup_codes(db)
+
+    # The SQLite development schema above creates these optional tables and
+    # columns. Recompute the capabilities after a Dev process switches away
+    # from a PostgreSQL-configured environment; otherwise stale startup flags
+    # can leave working SQLite features returning 503.
+    PASSKEYS_AVAILABLE = WEBAUTHN_AVAILABLE
+    ORDER_MESSAGES_AVAILABLE = True
+    GUEST_PUSH_AVAILABLE = True
+    ORDER_CANCELLATION_AVAILABLE = True
+    GUEST_FEEDBACK_AVAILABLE = True
+    NOTIFICATION_INBOX_AVAILABLE = True
+    WEEKLY_MENU_AVAILABLE = True
 
 
 def now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def new_pickup_code(db):
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    for _ in range(10):
+        code = "".join(secrets.choice(alphabet) for _ in range(8))
+        if not db.execute("SELECT 1 FROM orders WHERE guest_pickup_code=?", (code,)).fetchone():
+            return code
+    raise ApiError(503, "Could not create a unique pickup code. Please try again.")
+
+
+def ensure_active_pickup_codes(db):
+    rows = db.execute("""SELECT id FROM orders
+        WHERE fulfillment='pickup' AND status NOT IN ('completed','declined')
+          AND COALESCE(guest_pickup_code,'')=''""").fetchall()
+    for row in rows:
+        code = new_pickup_code(db)
+        db.execute("UPDATE orders SET guest_pickup_code=? WHERE id=? AND COALESCE(guest_pickup_code,'')=''",
+            (code, row["id"]))
 
 
 _vapid_cache = None
@@ -592,19 +784,37 @@ def vapid_keys():
         try:
             from cryptography.hazmat.primitives import serialization
             from cryptography.hazmat.primitives.asymmetric import ec
-            private_path = Path(os.environ.get("BITEHUB_VAPID_PRIVATE_KEY", BASE / ".local-certs" / "vapid_private.pem"))
-            private_path.parent.mkdir(parents=True, exist_ok=True)
-            if private_path.exists():
+            encoded_private_key = os.environ.get("BITEHUB_VAPID_PRIVATE_KEY_B64", "").strip()
+            configured_private_path = os.environ.get("BITEHUB_VAPID_PRIVATE_KEY", "").strip()
+            if encoded_private_key:
+                pem = base64.urlsafe_b64decode(encoded_private_key + "=" * (-len(encoded_private_key) % 4))
+                private_key = serialization.load_pem_private_key(pem, password=None)
+            elif configured_private_path:
+                private_path = Path(configured_private_path)
                 private_key = serialization.load_pem_private_key(private_path.read_bytes(), password=None)
+            elif REQUIRE_VAPID_SECRET:
+                _vapid_cache = (None, None)
+                return _vapid_cache
             else:
-                private_key = ec.generate_private_key(ec.SECP256R1())
-                private_path.write_bytes(private_key.private_bytes(serialization.Encoding.PEM,
-                    serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+                private_path = BASE / ".local-certs" / "vapid_private.pem"
+                private_path.parent.mkdir(parents=True, exist_ok=True)
+                if private_path.exists():
+                    private_key = serialization.load_pem_private_key(private_path.read_bytes(), password=None)
+                else:
+                    private_key = ec.generate_private_key(ec.SECP256R1())
+                    private_path.write_bytes(private_key.private_bytes(serialization.Encoding.PEM,
+                        serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+            if not isinstance(private_key, ec.EllipticCurvePrivateKey) or not isinstance(private_key.curve, ec.SECP256R1):
+                _vapid_cache = (None, None)
+                print("BiteHub Web Push key must be an EC P-256 private key; device alerts are unavailable.", file=sys.stderr)
+                return _vapid_cache
             public_bytes = private_key.public_key().public_bytes(serialization.Encoding.X962,
                 serialization.PublicFormat.UncompressedPoint)
-            _vapid_cache = (base64.urlsafe_b64encode(public_bytes).decode().rstrip("="), private_path)
-        except (ImportError, OSError, ValueError):
+            _vapid_cache = (base64.urlsafe_b64encode(public_bytes).decode().rstrip("="), private_key)
+        except (ImportError, OSError, TypeError, ValueError, binascii.Error):
             _vapid_cache = (None, None)
+            if os.environ.get("BITEHUB_VAPID_PRIVATE_KEY_B64", "").strip() or os.environ.get("BITEHUB_VAPID_PRIVATE_KEY", "").strip():
+                print("BiteHub Web Push key could not be loaded; check the Render VAPID secret configuration.", file=sys.stderr)
     return _vapid_cache
 
 
@@ -621,29 +831,101 @@ def push_available():
         return False
 
 
+def safe_notification_url(value):
+    if not isinstance(value, str):
+        return "/"
+    value = value.strip()
+    if (not value.startswith("/") or value.startswith("//") or "\\" in value
+            or any(ord(character) < 32 for character in value)):
+        return "/"
+    return value[:500]
+
+
+def persist_inbox_notifications(user_ids=(), guest_session_ids=(), payload=None):
+    if not NOTIFICATION_INBOX_AVAILABLE:
+        return
+    payload = payload if isinstance(payload, dict) else {}
+    title = str(payload.get("title") or "BiteHub update").strip()[:120]
+    body = str(payload.get("body") or "").strip()[:500]
+    url = safe_notification_url(payload.get("url"))
+    tag = str(payload.get("tag") or "").strip()[:120]
+    users = set()
+    guests = set()
+    for value in user_ids:
+        try:
+            identifier = int(value)
+        except (TypeError, ValueError):
+            continue
+        if identifier > 0:
+            users.add(identifier)
+    for value in guest_session_ids:
+        try:
+            identifier = int(value)
+        except (TypeError, ValueError):
+            continue
+        if identifier > 0:
+            guests.add(identifier)
+    if not users and not guests:
+        return
+    try:
+        created_at = now()
+        with connect() as db:
+            for user_id in users:
+                db.execute("""INSERT INTO notifications(user_id,guest_session_id,title,body,url,tag,created_at)
+                    VALUES(?,NULL,?,?,?,?,?)""", (user_id, title, body, url, tag, created_at))
+            for guest_session_id in guests:
+                db.execute("""INSERT INTO notifications(user_id,guest_session_id,title,body,url,tag,created_at)
+                    VALUES(NULL,?,?,?,?,?,?)""", (guest_session_id, title, body, url, tag, created_at))
+    except Exception as error:
+        print(f"Could not save BiteHub notification to the inbox: {error}", file=sys.stderr)
+
+
 def dispatch_push(user_ids, payload):
+    user_ids = tuple(set(user_ids))
+    persist_inbox_notifications(user_ids=user_ids, payload=payload)
     if not push_available():
         return
-    threading.Thread(target=send_push, args=(tuple(set(user_ids)), payload), daemon=True).start()
+    threading.Thread(target=send_push, args=(user_ids, payload), daemon=True).start()
 
 
-def send_push(user_ids, payload):
+def dispatch_guest_push(guest_session_ids, payload):
+    guest_session_ids = tuple(set(guest_session_ids))
+    persist_inbox_notifications(guest_session_ids=guest_session_ids, payload=payload)
+    if not GUEST_PUSH_AVAILABLE or not push_available():
+        return
+    threading.Thread(target=send_push, args=((), payload, guest_session_ids), daemon=True).start()
+
+
+def dispatch_order_buyer_push(user_id, guest_session_id, payload):
+    if user_id is not None:
+        dispatch_push([user_id], payload)
+    elif guest_session_id is not None:
+        dispatch_guest_push([guest_session_id], payload)
+
+
+def send_push(user_ids, payload, guest_session_ids=()):
     try:
         from cryptography.hazmat.primitives import hashes, serialization
         from cryptography.hazmat.primitives.asymmetric import ec
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         from cryptography.hazmat.primitives.kdf.hkdf import HKDF, HKDFExpand
         from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
-        _, private_key_path = vapid_keys()
-        private_key = serialization.load_pem_private_key(private_key_path.read_bytes(), password=None)
+        _, private_key = vapid_keys()
+        if private_key is None:
+            return
         public_bytes = private_key.public_key().public_bytes(serialization.Encoding.X962,
             serialization.PublicFormat.UncompressedPoint)
         public_token = base64.urlsafe_b64encode(public_bytes).decode().rstrip("=")
-        subject = os.environ.get("BITEHUB_VAPID_SUBJECT", "mailto:bitehub-notifications@example.com")
+        subject = os.environ.get("BITEHUB_VAPID_SUBJECT", "").strip() or BITEHUB_PUBLIC_URL or "mailto:bitehub-notifications@example.com"
         with connect() as db:
-            subscriptions = db.execute("SELECT id,endpoint,subscription_json FROM push_subscriptions WHERE user_id IN (%s)" %
-                ",".join("?" for _ in user_ids), user_ids).fetchall() if user_ids else []
-        for subscription in subscriptions:
+            subscriptions = [(row, "user") for row in db.execute(
+                "SELECT id,endpoint,subscription_json FROM push_subscriptions WHERE user_id IN (%s)" %
+                ",".join("?" for _ in user_ids), user_ids).fetchall()] if user_ids else []
+            if guest_session_ids and GUEST_PUSH_AVAILABLE:
+                subscriptions.extend((row, "guest") for row in db.execute(
+                    "SELECT id,endpoint,subscription_json FROM guest_push_subscriptions WHERE guest_session_id IN (%s)" %
+                    ",".join("?" for _ in guest_session_ids), guest_session_ids).fetchall())
+        for subscription, subscription_kind in subscriptions:
             try:
                 info = json.loads(subscription["subscription_json"])
                 endpoint = info["endpoint"]
@@ -683,9 +965,12 @@ def send_push(user_ids, payload):
             except urllib.error.HTTPError as error:
                 if error.code in (404, 410):
                     with connect() as db:
-                        db.execute("DELETE FROM push_subscriptions WHERE id=?", (subscription["id"],))
-            except Exception:
-                pass
+                        table = "guest_push_subscriptions" if subscription_kind == "guest" else "push_subscriptions"
+                        db.execute(f"DELETE FROM {table} WHERE id=?", (subscription["id"],))
+                else:
+                    print(f"BiteHub Web Push delivery returned HTTP {error.code}.", file=sys.stderr)
+            except Exception as error:
+                print(f"BiteHub Web Push delivery failed ({type(error).__name__}).", file=sys.stderr)
     except ImportError:
         return
 
@@ -862,6 +1147,13 @@ def stall_is_open(opens_at, closes_at, moment=None):
     return current >= opening or current < closing
 
 
+def stall_on_break(db, stall_id):
+    if stall_id is None:
+        return False
+    row = db.execute("SELECT value FROM settings WHERE key=?", (f"stall_break:{int(stall_id)}",)).fetchone()
+    return bool(row and row["value"] == "true")
+
+
 def ceil_pickup_slot(moment):
     moment = moment.replace(second=0, microsecond=0)
     remainder = moment.minute % PICKUP_SLOT_MINUTES
@@ -958,6 +1250,68 @@ class Handler(BaseHTTPRequestHandler):
     def clear_rate_limit(self, scope, identity):
         with _rate_limit_lock:
             _rate_limit_events.pop((scope, identity), None)
+
+    def webauthn_context(self):
+        host_header = str(self.headers.get("Host") or "").strip()
+        if not host_header or any(char in host_header for char in "\r\n/\\"):
+            raise ApiError(400, "This BiteHub address cannot be used for passkey sign-in.")
+        parsed_host = urlparse("//" + host_header)
+        hostname = (parsed_host.hostname or "").lower().rstrip(".")
+        if not hostname:
+            raise ApiError(400, "This BiteHub address cannot be used for passkey sign-in.")
+        if hostname in {"127.0.0.1", "::1"}:
+            local_port = f":{parsed_host.port}" if parsed_host.port else ""
+            raise ApiError(400,
+                f"For local passkey testing, open BiteHub at http://localhost{local_port} and sign in again. "
+                "Passkeys cannot use a numeric loopback address as their domain.")
+
+        origin = WEBAUTHN_ORIGIN
+        if origin:
+            parsed_origin = urlparse(origin)
+            if parsed_origin.scheme not in {"https", "http"} or not parsed_origin.hostname:
+                raise ApiError(503, "BiteHub passkey origin settings are invalid.")
+            if parsed_origin.hostname.lower().rstrip(".") != hostname:
+                raise ApiError(400, "Open BiteHub at its configured address to use this passkey.")
+        else:
+            scheme = "https" if getattr(self.server, "is_https", False) else "http"
+            origin = f"{scheme}://{host_header}"
+
+        parsed_origin = urlparse(origin)
+        rp_id = WEBAUTHN_RP_ID or (parsed_origin.hostname or hostname).lower().rstrip(".")
+        origin_host = (parsed_origin.hostname or "").lower().rstrip(".")
+        if origin_host != rp_id and not origin_host.endswith("." + rp_id):
+            raise ApiError(503, "BiteHub passkey relying-party settings do not match this address.")
+        local_hosts = {"localhost", "127.0.0.1", "::1"}
+        if parsed_origin.scheme != "https" and origin_host not in local_hosts:
+            raise ApiError(503, "Passkeys require BiteHub over HTTPS.")
+        request_origin = str(self.headers.get("Origin") or "").rstrip("/")
+        if request_origin and request_origin != origin:
+            raise ApiError(403, "This passkey request came from a different BiteHub address.")
+        return rp_id, origin
+
+    def save_webauthn_challenge(self, purpose, challenge, user_id=None, session_hash=None):
+        token = secrets.token_urlsafe(32)
+        with connect() as db:
+            db.execute("DELETE FROM webauthn_challenges WHERE expires_at<=?", (int(time.time()),))
+            db.execute("""INSERT INTO webauthn_challenges
+                (challenge_token_hash,purpose,challenge,user_id,session_hash,expires_at)
+                VALUES(?,?,?,?,?,?)""", (
+                    hashlib.sha256(token.encode("ascii")).hexdigest(), purpose, challenge,
+                    user_id, session_hash, int(time.time()) + 300,
+                ))
+        return token
+
+    def consume_webauthn_challenge(self, token, purpose):
+        if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9_-]{40,100}", token):
+            raise ApiError(400, "That passkey request expired. Please start again.")
+        token_hash = hashlib.sha256(token.encode("ascii")).hexdigest()
+        with connect() as db:
+            row = db.execute("""SELECT challenge_token_hash,purpose,challenge,user_id,session_hash,expires_at
+                FROM webauthn_challenges WHERE challenge_token_hash=?""", (token_hash,)).fetchone()
+            db.execute("DELETE FROM webauthn_challenges WHERE challenge_token_hash=?", (token_hash,))
+        if not row or row["purpose"] != purpose or int(row["expires_at"]) <= int(time.time()):
+            raise ApiError(400, "That passkey request expired. Please start again.")
+        return row
 
     def reach_viewer(self):
         cookie = SimpleCookie()
@@ -1081,8 +1435,10 @@ class Handler(BaseHTTPRequestHandler):
                     FROM sessions x JOIN users u ON u.id=x.user_id LEFT JOIN schools sc ON sc.id=u.school_id
                     LEFT JOIN stalls s ON s.owner_id=u.id
                     WHERE x.token_hash=? AND x.expires_at>? AND u.deleted_at IS NULL""", (token_hash, int(time.time()))).fetchone()
+                if row:
+                    user = dict(row)
+                    user["stall_on_break"] = stall_on_break(db, user.get("stall_id"))
             if row:
-                user = dict(row)
                 user["stall_logo_url"] = f"/api/stalls/{user['stall_id']}/logo" if user.get("stall_logo_type") else None
                 user["profile_photo_url"] = f"/api/profile/photo?v={user['profile_photo_version']}" if user.get("profile_photo_type") else None
                 return user
@@ -1155,6 +1511,16 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(500, {"error": "The server could not complete that request."})
 
     def api_get(self, path):
+        if path == "/api/admin/passkeys/status":
+            admin = self.require_role("admin")
+            if not PASSKEYS_AVAILABLE:
+                raise ApiError(503, "Passkey sign-in needs the BiteHub passkey database migration and server package.")
+            with connect() as db:
+                count = db.execute("SELECT COUNT(*) FROM admin_passkeys WHERE user_id=?", (admin["id"],)).fetchone()[0]
+                setting = db.execute("SELECT value FROM settings WHERE key=?", (f"admin_passkey_required:{admin['id']}",)).fetchone()
+            passkey_only = bool(setting and setting["value"] == "true")
+            self.send_json(200, {"count": count, "passkey_only": passkey_only, "can_enable": count >= 2 and not passkey_only})
+            return
         if path == "/api/profile/photo":
             user = self.current_user()
             with connect() as db:
@@ -1175,23 +1541,72 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, {"google_maps_api_key": os.environ.get("BITEHUB_GOOGLE_MAPS_API_KEY", "").strip()})
             return
         if path == "/api/notifications/config":
-            self.send_json(200, {"public_key": vapid_public_key(), "available": push_available()})
+            self.send_json(200, {"public_key": vapid_public_key(), "available": push_available(),
+                "guest_available": GUEST_PUSH_AVAILABLE})
             return
         if path == "/api/notifications/status":
-            user = self.current_user()
+            user = self.current_user(required=False)
+            guest_session = self.current_guest_session() if not user else None
+            if not user and not guest_session:
+                raise ApiError(401, "Sign in or continue as a guest to manage device alerts.")
+            if user:
+                with connect() as db:
+                    count = db.execute("SELECT COUNT(*) FROM push_subscriptions WHERE user_id=?", (user["id"],)).fetchone()[0]
+                self.send_json(200, {"enabled": count > 0, "available": push_available(), "guest_available": GUEST_PUSH_AVAILABLE})
+            elif not GUEST_PUSH_AVAILABLE:
+                self.send_json(200, {"enabled": False, "available": push_available(), "guest_available": False})
+            else:
+                with connect() as db:
+                    count = db.execute("SELECT COUNT(*) FROM guest_push_subscriptions WHERE guest_session_id=?", (guest_session["id"],)).fetchone()[0]
+                self.send_json(200, {"enabled": count > 0, "available": push_available(), "guest_available": True})
+            return
+        if path == "/api/notifications/inbox":
+            user = self.current_user(required=False)
+            guest_session = self.current_guest_session() if not user else None
+            if not user and not guest_session:
+                raise ApiError(401, "Sign in or continue as a guest to view your notifications.")
+            if not NOTIFICATION_INBOX_AVAILABLE:
+                raise ApiError(503, "The in-app notification inbox needs the BiteHub database migration.")
             with connect() as db:
-                count = db.execute("SELECT COUNT(*) FROM push_subscriptions WHERE user_id=?", (user["id"],)).fetchone()[0]
-            self.send_json(200, {"enabled": count > 0, "available": push_available()})
+                if user:
+                    scope, identifier = "user_id", user["id"]
+                else:
+                    scope, identifier = "guest_session_id", guest_session["id"]
+                unread_count = db.execute(
+                    f"SELECT COUNT(*) FROM notifications WHERE {scope}=? AND read_at IS NULL", (identifier,)
+                ).fetchone()[0]
+                rows = db.execute(
+                    f"SELECT id,title,body,url,tag,created_at,read_at FROM notifications WHERE {scope}=? "
+                    "ORDER BY id DESC LIMIT 50", (identifier,)
+                ).fetchall()
+            items = [{"id": row["id"], "title": row["title"], "body": row["body"],
+                      "url": safe_notification_url(row["url"]), "tag": row["tag"],
+                      "created_at": str(row["created_at"]),
+                      "read_at": str(row["read_at"]) if row["read_at"] else None}
+                     for row in rows]
+            self.send_json(200, {"notifications": items, "unread_count": unread_count})
             return
         if path == "/api/stalls":
             with connect() as db:
+                if get_stall_registration_mode(db) == "stop_all":
+                    self.send_json(200, {"stalls": []})
+                    return
                 rows = db.execute("""SELECT s.id,s.name,s.description,s.status,s.opens_at,s.closes_at,s.logo_type,
-        COUNT(CASE WHEN p.available=1 THEN 1 END) menu_count FROM stalls s
+        s.pickup_lat pickup_latitude,s.pickup_lon pickup_longitude,
+        COUNT(CASE WHEN p.available=1 THEN 1 END) menu_count,
+        (SELECT value FROM settings WHERE key='stall_break:' || CAST(s.id AS TEXT)) stall_break_value FROM stalls s
                     JOIN users u ON u.id=s.owner_id LEFT JOIN products p ON p.stall_id=s.id
-                    WHERE s.status='approved' AND u.school_id='pns'
+                    WHERE s.status='approved' AND u.school_id='pns' AND u.deleted_at IS NULL
                     GROUP BY s.id ORDER BY s.name""").fetchall()
-            self.send_json(200, {"stalls": [dict(row, is_open=stall_is_open(row["opens_at"], row["closes_at"]),
-                logo_url=f"/api/stalls/{row['id']}/logo" if row["logo_type"] else None) for row in rows]})
+            stall_list = []
+            for row in rows:
+                item = dict(row)
+                item.pop("stall_break_value", None)
+                item["is_open"] = stall_is_open(row["opens_at"], row["closes_at"])
+                item["on_break"] = row["stall_break_value"] == "true"
+                item["logo_url"] = f"/api/stalls/{row['id']}/logo" if row["logo_type"] else None
+                stall_list.append(item)
+            self.send_json(200, {"stalls": stall_list})
             return
         if path == "/api/reach-viewer":
             viewer_id, set_cookie, is_new = self.reach_viewer()
@@ -1229,9 +1644,11 @@ class Handler(BaseHTTPRequestHandler):
             stall_id = int(logo_match.group(1))
             user = self.current_user(required=False)
             with connect() as db:
+                stall_mode = get_stall_registration_mode(db)
                 row = db.execute("""SELECT s.logo_data,s.logo_type,s.status,s.owner_id,u.school_id
-                    FROM stalls s JOIN users u ON u.id=s.owner_id WHERE s.id=?""", (stall_id,)).fetchone()
-            public = row and row["status"] == "approved" and row["school_id"] == "pns"
+                    FROM stalls s JOIN users u ON u.id=s.owner_id
+                    WHERE s.id=? AND u.deleted_at IS NULL""", (stall_id,)).fetchone()
+            public = stall_mode != "stop_all" and row and row["status"] == "approved" and row["school_id"] == "pns"
             owner = row and user and user["role"] == "owner" and user["id"] == row["owner_id"]
             admin = user and user["role"] == "admin"
             if not row or not row["logo_data"] or not row["logo_type"] or not (public or owner or admin):
@@ -1246,16 +1663,27 @@ class Handler(BaseHTTPRequestHandler):
             return
         stall_match = re.fullmatch(r"/api/stalls/(\d+)", path)
         if stall_match:
+            user = self.current_user(required=False)
             with connect() as db:
+                stall_mode = get_stall_registration_mode(db)
                 stall = db.execute("""SELECT s.id,s.name,s.description,s.status,s.opens_at,s.closes_at,s.logo_type,
-                    u.name owner_name FROM stalls s JOIN users u ON u.id=s.owner_id
-                    WHERE s.id=? AND s.status='approved' AND u.school_id='pns'""", (int(stall_match.group(1)),)).fetchone()
-                if not stall: raise ApiError(404, "Stall not found.")
+                    s.pickup_lat pickup_latitude,s.pickup_lon pickup_longitude,
+                    s.owner_id,u.school_id,u.name owner_name,
+                    (SELECT value FROM settings WHERE key='stall_break:' || CAST(s.id AS TEXT)) stall_break_value
+                    FROM stalls s JOIN users u ON u.id=s.owner_id WHERE s.id=? AND u.deleted_at IS NULL""",
+                    (int(stall_match.group(1)),)).fetchone()
+                public = stall_mode != "stop_all" and stall and stall["status"] == "approved" and stall["school_id"] == "pns"
+                owner = stall and user and user["role"] == "owner" and user["id"] == stall["owner_id"]
+                if not stall or not (public or owner): raise ApiError(404, "Stall not found.")
                 products = db.execute("""SELECT p.id,p.name,p.description,p.ingredients,p.category,p.price_cents,p.emoji,
                     p.available,p.stock_count,p.photo_type,p.dietary_tags,p.allergen_tags FROM products p WHERE p.stall_id=? AND p.available=1
                     ORDER BY p.category,p.name""", (stall["id"],)).fetchall()
                 payload = dict(stall)
+                payload.pop("stall_break_value", None)
+                payload.pop("owner_id", None)
+                payload.pop("school_id", None)
                 payload["is_open"] = stall_is_open(stall["opens_at"], stall["closes_at"])
+                payload["on_break"] = stall["stall_break_value"] == "true"
                 payload["menu_count"] = len(products)
                 rating = db.execute("""SELECT AVG(f.rating) average,COUNT(f.rating) count FROM feedback f
                     JOIN orders o ON o.id=f.order_id WHERE o.stall_id=?""", (stall["id"],)).fetchone()
@@ -1275,12 +1703,14 @@ class Handler(BaseHTTPRequestHandler):
             product_id = int(photo_match.group(1))
             user = self.current_user(required=False)
             with connect() as db:
+                stall_mode = get_stall_registration_mode(db)
                 row = db.execute("""SELECT p.photo_data,p.photo_type,p.available,s.status stall_status,s.owner_id,u.school_id
                     FROM products p JOIN stalls s ON s.id=p.stall_id JOIN users u ON u.id=s.owner_id
-                    WHERE p.id=?""", (product_id,)).fetchone()
+                    WHERE p.id=? AND u.deleted_at IS NULL""", (product_id,)).fetchone()
             if not row or not row["photo_data"] or not row["photo_type"]:
                 raise ApiError(404, "Food photo not found.")
-            public = row["available"] and row["stall_status"] == "approved" and row["school_id"] == "pns"
+            public = (stall_mode != "stop_all" and row["available"]
+                      and row["stall_status"] == "approved" and row["school_id"] == "pns")
             owner = user and user["role"] == "owner" and user["id"] == row["owner_id"]
             if not (public or owner or (user and user["role"] == "admin")):
                 raise ApiError(404, "Food photo not found.")
@@ -1295,7 +1725,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/session":
             user = self.current_user(required=False)
             guest_session = self.current_guest_session() if not user else None
-            self.send_json(200, {"user": user, "guest_session": guest_session})
+            self.send_json(200, {"user": user, "guest_session": guest_session,
+                "order_messages_available": ORDER_MESSAGES_AVAILABLE,
+                "order_cancellation_available": ORDER_CANCELLATION_AVAILABLE,
+                "guest_feedback_available": GUEST_FEEDBACK_AVAILABLE,
+                "notification_inbox_available": NOTIFICATION_INBOX_AVAILABLE,
+                "weekly_menu_available": WEEKLY_MENU_AVAILABLE})
             return
         if path == "/api/pickup-slots":
             self.require_role("buyer")
@@ -1327,31 +1762,62 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/products":
             user = self.current_user(required=False)
+            weekly_menu = []
             with connect() as db:
+                stall_mode = get_stall_registration_mode(db)
                 paused = db.execute("SELECT value FROM settings WHERE key='ordering_paused'").fetchone()[0] == "true"
-                where, args = "WHERE u.school_id='pns'", []
+                where, args = "WHERE u.school_id='pns' AND u.deleted_at IS NULL", []
                 if not user or user["role"] not in ("admin", "owner"):
                     where += " AND p.available=1 AND s.status='approved'"
+                    if stall_mode == "stop_all":
+                        where += " AND 1=0"
                 elif user["role"] == "owner":
                     where += " AND (s.owner_id=? OR (s.status='approved' AND p.available=1))"
                     args = [user["id"]]
                 rows = db.execute(f"""SELECT p.id,p.name,p.description,p.ingredients,p.category,p.price_cents,p.emoji,p.available,
                     p.stock_count,p.dietary_tags,p.allergen_tags,p.photo_type,p.featured_until,s.id stall_id,s.name stall_name,s.description stall_description,
-                    s.status stall_status,s.opens_at,s.closes_at,s.pickup_lat,s.pickup_lon,s.logo_type stall_logo_type
+                    s.status stall_status,s.opens_at,s.closes_at,s.pickup_lat,s.pickup_lon,s.logo_type stall_logo_type,
+                    (SELECT value FROM settings WHERE key='stall_break:' || CAST(s.id AS TEXT)) stall_break_value
                     FROM products p JOIN stalls s ON s.id=p.stall_id JOIN users u ON u.id=s.owner_id
                     {where} ORDER BY s.name,p.name""", args).fetchall()
-                featured_rows = [row for row in rows if row["featured_until"] and row["featured_until"] > now()
+                featured_rows = [row for row in rows if stall_mode != "stop_all" and row["featured_until"] and row["featured_until"] > now()
                     and row["available"] and (row["stock_count"] is None or row["stock_count"] > 0)
-                    and row["stall_status"] == "approved"]
+                    and row["stall_status"] == "approved" and row["stall_break_value"] != "true"]
                 featured_rows = rotate_stall_rows(featured_rows)
                 if not user or user["role"] == "buyer":
                     rows = rotate_stall_rows(rows)
+                # Public scheduled items are part of the customer catalog too.
+                # Keep them hidden when sales are stopped, while still letting
+                # owners and admins inspect their own/admin schedule views.
+                if WEEKLY_MENU_AVAILABLE and (stall_mode != "stop_all" or (user and user["role"] in ("owner", "admin"))):
+                    schedule_where = "u.school_id='pns' AND u.deleted_at IS NULL AND s.status='approved'"
+                    schedule_args = []
+                    if user and user["role"] == "owner":
+                        schedule_where = "s.owner_id=?"
+                        schedule_args = [user["id"]]
+                    weekly_rows = db.execute(f"""SELECT wm.id schedule_id,wm.weekday,wm.service_period,
+                        p.id,p.stall_id,p.name,p.description,p.category,p.price_cents,p.emoji,p.available,
+                        p.photo_type,s.name stall_name FROM weekly_menu_slots wm
+                        JOIN products p ON p.id=wm.product_id JOIN stalls s ON s.id=wm.stall_id
+                        JOIN users u ON u.id=s.owner_id WHERE {schedule_where}
+                        ORDER BY wm.weekday,CASE wm.service_period WHEN 'Morning break' THEN 0 WHEN 'Lunch' THEN 1 ELSE 2 END,s.name,p.name""",
+                        schedule_args).fetchall()
+                    weekly_menu = [{"schedule_id": row["schedule_id"], "weekday": row["weekday"],
+                        "service_period": row["service_period"], "id": row["id"], "stall_id": row["stall_id"],
+                        "stall_name": row["stall_name"], "name": row["name"], "description": row["description"],
+                        "category": row["category"], "price": row["price_cents"] / 100, "emoji": row["emoji"],
+                        "photo_url": f"/api/products/{row['id']}/photo" if row["photo_type"] and row["available"] else None}
+                        for row in weekly_rows]
             self.send_json(200, {"products": [self.product_json(row, bool(user and user["role"] in ("owner", "admin"))) for row in rows],
                                  "featured_products": [self.product_json(row) for row in featured_rows],
+                                 "weekly_menu": weekly_menu,
+                                 "weekly_menu_available": WEEKLY_MENU_AVAILABLE,
+                                 "stall_registration_mode": stall_mode,
                                  "ordering_paused": paused,
                                  "stall_status": user.get("stall_status") if user and user["role"] == "owner" else None,
                                  "owner_hours": {"opens_at": user["stall_opens_at"], "closes_at": user["stall_closes_at"]}
                                                 if user and user["role"] == "owner" else None,
+                                  "owner_stall_on_break": bool(user and user["role"] == "owner" and user.get("stall_on_break")),
                                  "owner_prep_minutes": user["stall_prep_minutes"] if user and user["role"] == "owner" else None,
                                  "owner_pickup_capacity": user["stall_pickup_slot_capacity"] if user and user["role"] == "owner" else None,
                                  "owner_pickup_location": {"lat": user["stall_pickup_lat"], "lon": user["stall_pickup_lon"]}
@@ -1376,7 +1842,7 @@ class Handler(BaseHTTPRequestHandler):
                     stall = db.execute("SELECT status FROM stalls WHERE owner_id=?",(user["id"],)).fetchone()
                     stall_status = stall["status"] if stall else None
                 paused = db.execute("SELECT value FROM settings WHERE key='ordering_paused'").fetchone()[0] == "true"
-                result = self.orders_json(db, orders)
+                result = self.orders_json(db, orders, include_pickup_codes=user["role"] == "buyer")
             self.send_json(200, {"orders":result,"ordering_paused":paused,"stall_status":stall_status})
             return
         if path == "/api/runners":
@@ -1452,19 +1918,32 @@ class Handler(BaseHTTPRequestHandler):
             self.require_role("admin")
             with connect() as db:
                 users = db.execute("SELECT role,COUNT(*) count FROM users WHERE school_id='pns' AND deleted_at IS NULL GROUP BY role").fetchall()
-                stalls = db.execute("SELECT COUNT(*) FROM stalls s JOIN users owner ON owner.id=s.owner_id WHERE owner.school_id='pns'").fetchone()[0]
-                stall_rows = db.execute("""SELECT s.id,s.name,s.status,s.created_at,u.name owner_name,u.email owner_email,
+                stalls = db.execute("SELECT COUNT(*) FROM stalls s JOIN users owner ON owner.id=s.owner_id WHERE owner.school_id='pns' AND owner.deleted_at IS NULL").fetchone()[0]
+                stall_rows = db.execute("""SELECT s.id,s.name,s.status,s.created_at,s.opens_at,s.closes_at,
+                    (SELECT value FROM settings WHERE key='stall_break:' || CAST(s.id AS TEXT)) stall_break_value,
+                    u.name owner_name,u.email owner_email,
                     COUNT(p.id) product_count FROM stalls s JOIN users u ON u.id=s.owner_id
-                    LEFT JOIN products p ON p.stall_id=s.id WHERE u.school_id='pns' GROUP BY s.id ORDER BY
+                    LEFT JOIN products p ON p.stall_id=s.id WHERE u.school_id='pns' AND u.deleted_at IS NULL
+                    GROUP BY s.id,u.name,u.email,s.opens_at,s.closes_at ORDER BY
                     CASE s.status WHEN 'paused' THEN 0 ELSE 1 END,s.name""").fetchall()
-                products = db.execute("SELECT COUNT(*) FROM products p JOIN stalls s ON s.id=p.stall_id JOIN users owner ON owner.id=s.owner_id WHERE owner.school_id='pns'").fetchone()[0]
+                stall_list = []
+                for row in stall_rows:
+                    item = dict(row)
+                    item["currently_open"] = (item["status"] == "approved"
+                        and stall_is_open(item["opens_at"], item["closes_at"])
+                        and item["stall_break_value"] != "true")
+                    item.pop("stall_break_value", None)
+                    stall_list.append(item)
+                products = db.execute("SELECT COUNT(*) FROM products p JOIN stalls s ON s.id=p.stall_id JOIN users owner ON owner.id=s.owner_id WHERE owner.school_id='pns' AND owner.deleted_at IS NULL").fetchone()[0]
                 rows = db.execute("""SELECT o.status,COUNT(*) count,COALESCE(SUM(o.total_cents),0) sales
                     FROM orders o JOIN stalls s ON s.id=o.stall_id JOIN users owner ON owner.id=s.owner_id
                     WHERE owner.school_id='pns' GROUP BY o.status""").fetchall()
                 paused = db.execute("SELECT value FROM settings WHERE key='ordering_paused'").fetchone()[0] == "true"
+                stall_mode = get_stall_registration_mode(db)
             self.send_json(200, {"users": {row["role"]: row["count"] for row in users}, "stalls": stalls,
-                                 "stall_list": [dict(row) for row in stall_rows],
-                                 "products": products, "orders": [dict(row) for row in rows], "ordering_paused": paused})
+                                 "stall_list": stall_list,
+                                 "products": products, "orders": [dict(row) for row in rows], "ordering_paused": paused,
+                                 "stall_registration_mode": stall_mode})
             return
         raise ApiError(404, "That API route does not exist.")
 
@@ -1484,7 +1963,8 @@ class Handler(BaseHTTPRequestHandler):
                 "pickup_lat": row["pickup_lat"], "pickup_lon": row["pickup_lon"],
                 "featured": featured, "featured_until": featured_until if featured else None,
                 "opens_at": row["opens_at"], "closes_at": row["closes_at"],
-            "stall_open": row["stall_status"] == "approved" and stall_is_open(row["opens_at"], row["closes_at"])}
+            "stall_open": row["stall_status"] == "approved" and stall_is_open(row["opens_at"], row["closes_at"]),
+                "stall_on_break": row["stall_break_value"] == "true" if "stall_break_value" in row.keys() else False}
         if "photo_type" in row.keys() and row["photo_type"]:
             item["photo_url"] = f"/api/products/{row['id']}/photo"
         if "stall_description" in row.keys(): item["stall_description"] = row["stall_description"]
@@ -1493,7 +1973,7 @@ class Handler(BaseHTTPRequestHandler):
         return item
 
     @staticmethod
-    def orders_json(db, rows):
+    def orders_json(db, rows, include_pickup_codes=False):
         if not rows:
             return []
         order_ids = [row["id"] for row in rows]
@@ -1511,12 +1991,14 @@ class Handler(BaseHTTPRequestHandler):
             feedback_by_order.update({row["order_id"]:{"rating":row["rating"],"comment":row["comment"],
                 "created_at":row["created_at"]} for row in feedback})
         return [{"id":row["id"],"buyer":row["buyer_name"],"buyer_email":row["buyer_email"],
-            "is_guest":row["buyer_id"] is None,"pickup_code":row["guest_pickup_code"],
+            "is_guest":row["buyer_id"] is None,
+            "pickup_code":row["guest_pickup_code"] if include_pickup_codes else "",
             "guest_school_role":row["guest_school_role"],"guest_grade":row["guest_grade"],
             "guest_section":row["guest_section"],
             "stall":row["stall_name"],"runner":row["runner_name"] or row["account_runner_name"],
             "runner_account":row["runner_id"] is not None,"fulfillment":row["fulfillment"],
             "pickup_offer_status":row["pickup_offer_status"],
+            "cancelled_by_buyer":bool(row["buyer_cancelled"]) if "buyer_cancelled" in row.keys() else False,
             "status":row["status"],"total":row["total_cents"]/100,"buyer_note":row["buyer_note"],
             "created_at":row["created_at"],"estimated_ready_at":row["estimated_ready_at"],
             "pickup_at":row["pickup_at"],"items":items_by_order.get(row["id"],[]),
@@ -1527,9 +2009,198 @@ class Handler(BaseHTTPRequestHandler):
             "driver_accuracy":row["driver_accuracy"] if row["status"] == "out" and row["fulfillment"] == "delivery" else None,
             "driver_heading":row["driver_heading"] if row["status"] == "out" and row["fulfillment"] == "delivery" else None,
             "driver_updated_at":row["driver_updated_at"] if row["status"] == "out" and row["fulfillment"] == "delivery" else None,
-            "feedback":feedback_by_order.get(row["id"])} for row in rows]
+            "feedback":({**feedback_by_order[row["id"]],"verified_guest":row["buyer_id"] is None}
+                if row["id"] in feedback_by_order else None)} for row in rows]
 
     def api_post(self, path, data):
+        if path == "/api/admin/passkeys/register/options":
+            admin = self.require_role("admin")
+            if not PASSKEYS_AVAILABLE:
+                raise ApiError(503, "Passkey sign-in needs the BiteHub passkey database migration and server package.")
+            self.enforce_rate_limit("admin-passkey-register", admin["id"], 10, 600)
+            rp_id, _origin = self.webauthn_context()
+            with connect() as db:
+                existing = db.execute("SELECT credential_id FROM admin_passkeys WHERE user_id=?", (admin["id"],)).fetchall()
+            if len(existing) >= 10:
+                raise ApiError(409, "This admin account already has the maximum of 10 passkeys.")
+            options = generate_registration_options(
+                rp_id=rp_id,
+                rp_name="BiteHub · Palawan National School",
+                user_id=str(admin["id"]).encode("utf-8"),
+                user_name=admin["email"],
+                user_display_name=admin["name"],
+                authenticator_selection=AuthenticatorSelectionCriteria(
+                    resident_key=ResidentKeyRequirement.REQUIRED,
+                    user_verification=UserVerificationRequirement.REQUIRED,
+                ),
+                exclude_credentials=[PublicKeyCredentialDescriptor(id=row["credential_id"]) for row in existing],
+            )
+            public_key = json.loads(options_to_json(options))
+            session_token = self.cookie_token() or ""
+            session_hash = hashlib.sha256(session_token.encode("utf-8")).hexdigest()
+            challenge_id = self.save_webauthn_challenge("register", base64url_to_bytes(public_key["challenge"]),
+                user_id=admin["id"], session_hash=session_hash)
+            self.send_json(200, {"challenge_id": challenge_id, "publicKey": public_key})
+            return
+
+        if path == "/api/admin/passkeys/register/verify":
+            admin = self.require_role("admin")
+            if not PASSKEYS_AVAILABLE:
+                raise ApiError(503, "Passkey sign-in needs the BiteHub passkey database migration and server package.")
+            challenge_row = self.consume_webauthn_challenge(data.get("challenge_id"), "register")
+            session_token = self.cookie_token() or ""
+            session_hash = hashlib.sha256(session_token.encode("utf-8")).hexdigest()
+            if str(challenge_row["user_id"]) != str(admin["id"]) or not secrets.compare_digest(
+                    str(challenge_row["session_hash"] or ""), session_hash):
+                raise ApiError(403, "Sign in again before registering this passkey.")
+            credential = data.get("credential")
+            if not isinstance(credential, dict) or credential.get("type") != "public-key":
+                raise ApiError(400, "The device did not return a valid passkey response.")
+            rp_id, origin = self.webauthn_context()
+            try:
+                verification = verify_registration_response(
+                    credential=credential,
+                    expected_challenge=challenge_row["challenge"],
+                    expected_rp_id=rp_id,
+                    expected_origin=origin,
+                    require_user_verification=True,
+                )
+            except Exception:
+                self.enforce_rate_limit("admin-passkey-register-invalid", admin["id"], 8, 600)
+                raise ApiError(400, "BiteHub could not verify that passkey. Please try registering it again.")
+            raw_transports = (credential.get("response") or {}).get("transports", [])
+            transports = [item for item in raw_transports if isinstance(item, str) and item in {
+                "usb", "nfc", "ble", "internal", "hybrid", "smart-card",
+            }] if isinstance(raw_transports, list) else []
+            with connect() as db:
+                duplicate = db.execute("SELECT user_id FROM admin_passkeys WHERE credential_id=?",
+                    (verification.credential_id,)).fetchone()
+                if duplicate:
+                    raise ApiError(409, "That passkey is already registered with BiteHub.")
+                active = db.execute("SELECT role FROM users WHERE id=? AND deleted_at IS NULL", (admin["id"],)).fetchone()
+                if not active or active["role"] != "admin":
+                    raise ApiError(403, "This account no longer has school-admin access.")
+                db.execute("""INSERT INTO admin_passkeys
+                    (credential_id,user_id,credential_public_key,sign_count,transports,created_at)
+                    VALUES(?,?,?,?,?,?)""", (
+                        verification.credential_id, admin["id"], verification.credential_public_key,
+                        int(verification.sign_count), json.dumps(transports), now(),
+                    ))
+                count = db.execute("SELECT COUNT(*) FROM admin_passkeys WHERE user_id=?", (admin["id"],)).fetchone()[0]
+            self.send_json(201, {"ok": True, "count": count})
+            return
+
+        if path == "/api/admin/passkeys/require":
+            admin = self.require_role("admin")
+            if not PASSKEYS_AVAILABLE:
+                raise ApiError(503, "Passkey sign-in needs the BiteHub passkey database migration and server package.")
+            with connect() as db:
+                count = db.execute("SELECT COUNT(*) FROM admin_passkeys WHERE user_id=?", (admin["id"],)).fetchone()[0]
+                if count < 2:
+                    raise ApiError(409, "Register a backup passkey on another device or security key before switching sign-in.")
+                key = f"admin_passkey_required:{admin['id']}"
+                db.execute("""INSERT INTO settings(key,value) VALUES(?,?)
+                    ON CONFLICT(key) DO UPDATE SET value=excluded.value""", (key, "true"))
+            self.send_json(200, {"ok": True, "passkey_only": True})
+            return
+
+        if path == "/api/admin/passkeys/login/options":
+            if not PASSKEYS_AVAILABLE:
+                raise ApiError(503, "Passkey sign-in needs the BiteHub passkey database migration and server package.")
+            ip = self.client_ip()
+            self.enforce_rate_limit("admin-passkey-login", ip, 20, 600)
+            rp_id, _origin = self.webauthn_context()
+            with connect() as db:
+                rows = db.execute("""SELECT p.credential_id FROM admin_passkeys p
+                    JOIN users u ON u.id=p.user_id WHERE u.role='admin' AND u.deleted_at IS NULL""").fetchall()
+            if not rows:
+                raise ApiError(409, "No admin passkey is registered yet. Sign in with the admin account once, then add passkeys in Settings.")
+            options = generate_authentication_options(
+                rp_id=rp_id,
+                allow_credentials=[PublicKeyCredentialDescriptor(id=row["credential_id"]) for row in rows],
+                user_verification=UserVerificationRequirement.REQUIRED,
+            )
+            public_key = json.loads(options_to_json(options))
+            challenge_id = self.save_webauthn_challenge("login", base64url_to_bytes(public_key["challenge"]))
+            self.send_json(200, {"challenge_id": challenge_id, "publicKey": public_key})
+            return
+
+        if path == "/api/admin/passkeys/login/verify":
+            if not PASSKEYS_AVAILABLE:
+                raise ApiError(503, "Passkey sign-in needs the BiteHub passkey database migration and server package.")
+            ip = self.client_ip()
+            self.enforce_rate_limit("admin-passkey-verify", ip, 12, 600)
+            challenge_row = self.consume_webauthn_challenge(data.get("challenge_id"), "login")
+            credential = data.get("credential")
+            if not isinstance(credential, dict) or credential.get("type") != "public-key":
+                raise ApiError(400, "The device did not return a valid passkey response.")
+            try:
+                credential_id = base64url_to_bytes(str(credential.get("rawId") or credential.get("id") or ""))
+            except Exception:
+                self.enforce_rate_limit("admin-passkey-invalid", ip, 8, 600)
+                raise ApiError(401, "That passkey could not sign in to a school-admin account.")
+            with connect() as db:
+                record = db.execute("""SELECT p.user_id,p.credential_public_key,p.sign_count,u.role
+                    FROM admin_passkeys p JOIN users u ON u.id=p.user_id
+                    WHERE p.credential_id=? AND u.role='admin' AND u.deleted_at IS NULL""", (credential_id,)).fetchone()
+            if not record:
+                self.enforce_rate_limit("admin-passkey-invalid", ip, 8, 600)
+                raise ApiError(401, "That passkey could not sign in to a school-admin account.")
+            rp_id, origin = self.webauthn_context()
+            try:
+                verification = verify_authentication_response(
+                    credential=credential,
+                    expected_challenge=challenge_row["challenge"],
+                    expected_rp_id=rp_id,
+                    expected_origin=origin,
+                    credential_public_key=record["credential_public_key"],
+                    credential_current_sign_count=int(record["sign_count"]),
+                    require_user_verification=True,
+                )
+            except Exception:
+                self.enforce_rate_limit("admin-passkey-invalid", ip, 8, 600)
+                raise ApiError(401, "That passkey could not sign in to a school-admin account.")
+            with connect() as db:
+                active = db.execute("SELECT role FROM users WHERE id=? AND deleted_at IS NULL", (record["user_id"],)).fetchone()
+                if not active or active["role"] != "admin":
+                    raise ApiError(403, "This account no longer has school-admin access.")
+                db.execute("UPDATE admin_passkeys SET sign_count=? WHERE credential_id=?",
+                    (int(verification.new_sign_count), credential_id))
+            self.clear_rate_limit("admin-passkey-invalid", ip)
+            self.send_json(200, {"user": self.current_user_from_id(record["user_id"])}, self.create_session(record["user_id"]))
+            return
+
+        if path == "/api/menu-schedule":
+            owner = self.require_role("owner")
+            if not WEEKLY_MENU_AVAILABLE:
+                raise ApiError(503, "The weekly menu planner needs the BiteHub database migration.")
+            try:
+                product_id = int(data.get("product_id"))
+                weekday = int(data.get("weekday"))
+            except (TypeError, ValueError):
+                raise ValueError("Choose a menu item and day for this weekly plan.")
+            service_period = str(data.get("service_period") or "").strip()
+            if product_id < 1 or weekday < 0 or weekday > 6:
+                raise ValueError("Choose a valid menu item and weekday.")
+            if service_period not in {"Morning break", "Lunch", "Afternoon break"}:
+                raise ValueError("Choose a valid school break period.")
+            stall_id = owner.get("stall_id")
+            if not stall_id:
+                raise ApiError(403, "This owner account does not have a stall to plan for.")
+            with connect() as db:
+                product = db.execute("SELECT id FROM products WHERE id=? AND stall_id=?",
+                    (product_id, stall_id)).fetchone()
+                if not product:
+                    raise ApiError(404, "Choose one of your own menu items.")
+                timestamp = now()
+                db.execute("""INSERT INTO weekly_menu_slots(stall_id,product_id,weekday,service_period,created_at,updated_at)
+                    VALUES(?,?,?,?,?,?) ON CONFLICT(stall_id,product_id,weekday,service_period)
+                    DO UPDATE SET updated_at=excluded.updated_at""",
+                    (stall_id, product_id, weekday, service_period, timestamp, timestamp))
+                row = db.execute("""SELECT id FROM weekly_menu_slots WHERE stall_id=? AND product_id=?
+                    AND weekday=? AND service_period=?""", (stall_id, product_id, weekday, service_period)).fetchone()
+            self.send_json(201, {"schedule_id": row["id"], "ok": True})
+            return
         if path == "/api/runner-location":
             try:
                 order_id = int(data.get("order_id"))
@@ -1629,16 +2300,30 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200,{"counted":counted})
             return
         if path == "/api/notifications/unsubscribe":
-            user = self.current_user()
+            user = self.current_user(required=False)
+            guest_session = self.current_guest_session() if not user else None
+            if not user and not guest_session:
+                raise ApiError(401, "Sign in or continue as a guest to manage device alerts.")
+            if guest_session and not GUEST_PUSH_AVAILABLE:
+                raise ApiError(503, "Guest device alerts are not enabled on this database yet.")
             endpoint = data.get("endpoint")
             if not isinstance(endpoint, str) or len(endpoint) > 2048:
                 raise ValueError("Invalid notification subscription.")
             with connect() as db:
-                db.execute("DELETE FROM push_subscriptions WHERE user_id=? AND endpoint=?", (user["id"], endpoint))
+                if user:
+                    db.execute("DELETE FROM push_subscriptions WHERE user_id=? AND endpoint=?", (user["id"], endpoint))
+                else:
+                    db.execute("DELETE FROM guest_push_subscriptions WHERE guest_session_id=? AND endpoint=?",
+                        (guest_session["id"], endpoint))
             self.send_json(200, {"ok": True})
             return
         if path == "/api/notifications/subscriptions":
-            user = self.current_user()
+            user = self.current_user(required=False)
+            guest_session = self.current_guest_session() if not user else None
+            if not user and not guest_session:
+                raise ApiError(401, "Sign in or continue as a guest to manage device alerts.")
+            if guest_session and not GUEST_PUSH_AVAILABLE:
+                raise ApiError(503, "Guest device alerts are not enabled on this database yet.")
             subscription = data.get("subscription")
             if not isinstance(subscription, dict): raise ValueError("Invalid notification subscription.")
             endpoint = subscription.get("endpoint")
@@ -1653,10 +2338,19 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(keys, dict) or not all(isinstance(keys.get(k), str) and 8 <= len(keys[k]) <= 256 for k in ("p256dh", "auth")):
                 raise ValueError("Invalid notification encryption keys.")
             with connect() as db:
-                db.execute("""INSERT INTO push_subscriptions(user_id,endpoint,subscription_json,created_at,updated_at)
-                    VALUES(?,?,?,?,?) ON CONFLICT(endpoint) DO UPDATE SET user_id=excluded.user_id,
-                    subscription_json=excluded.subscription_json,updated_at=excluded.updated_at""",
-                    (user["id"], endpoint, json.dumps(subscription), now(), now()))
+                if user:
+                    db.execute("""INSERT INTO push_subscriptions(user_id,endpoint,subscription_json,created_at,updated_at)
+                        VALUES(?,?,?,?,?) ON CONFLICT(endpoint) DO UPDATE SET user_id=excluded.user_id,
+                        subscription_json=excluded.subscription_json,updated_at=excluded.updated_at""",
+                        (user["id"], endpoint, json.dumps(subscription), now(), now()))
+                    if GUEST_PUSH_AVAILABLE:
+                        db.execute("DELETE FROM guest_push_subscriptions WHERE endpoint=?", (endpoint,))
+                else:
+                    db.execute("""INSERT INTO guest_push_subscriptions(guest_session_id,endpoint,subscription_json,created_at,updated_at)
+                        VALUES(?,?,?,?,?) ON CONFLICT(endpoint) DO UPDATE SET guest_session_id=excluded.guest_session_id,
+                        subscription_json=excluded.subscription_json,updated_at=excluded.updated_at""",
+                        (guest_session["id"], endpoint, json.dumps(subscription), now(), now()))
+                    db.execute("DELETE FROM push_subscriptions WHERE endpoint=?", (endpoint,))
             self.send_json(201, {"ok": True})
             return
         if path == "/api/guest/session":
@@ -1779,10 +2473,16 @@ class Handler(BaseHTTPRequestHandler):
             stall_name = clean_text(data.get("stall_name"), "Stall name", 80) if role == "owner" else None
             salt = secrets.token_bytes(16)
             with connect() as db:
+                stall_mode = get_stall_registration_mode(db)
+                if stall_mode == "stop_all":
+                    raise ApiError(409, "New stall accounts are currently paused by the school administrator.")
                 school_id = "pns"
                 user_id = insert_id(db, "INSERT INTO users(name,email,password_hash,password_salt,role,school_id,school_region,school_province,school_city,school_zip,grade_section,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                                     (name,email,password_digest(password,salt),salt.hex(),role,school_id,school_region,school_province,school_city,school_zip,grade_section,now()))
-                if role == "owner": db.execute("INSERT INTO stalls(owner_id,name,status,created_at) VALUES(?,?,'approved',?)", (user_id,stall_name,now()))
+                if role == "owner":
+                    stall_status = "pending" if stall_mode == "limited" else "approved"
+                    db.execute("INSERT INTO stalls(owner_id,name,status,created_at) VALUES(?,?,?,?)",
+                        (user_id,stall_name,stall_status,now()))
             self.send_json(201, {"user": self.current_user_from_id(user_id)}, self.create_session(user_id))
             return
         if path == "/api/login":
@@ -1798,6 +2498,12 @@ class Handler(BaseHTTPRequestHandler):
             self.enforce_rate_limit("login-ip", ip, 120, 60)
             self.enforce_rate_limit("login-account", account_key, 8, 600)
             with connect() as db: user = db.execute("SELECT id,password_hash,password_salt,role FROM users WHERE email=? AND deleted_at IS NULL", (email,)).fetchone()
+            if user and user["role"] == "admin":
+                with connect() as db:
+                    passkey_setting = db.execute("SELECT value FROM settings WHERE key=?",
+                        (f"admin_passkey_required:{user['id']}",)).fetchone()
+                if passkey_setting and passkey_setting["value"] == "true":
+                    raise ApiError(401, "This admin account uses passkey-only sign-in. Choose ‘Use a passkey’ instead.")
             if not user or not secrets.compare_digest(password_digest(password,bytes.fromhex(user["password_salt"])),user["password_hash"]):
                 raise ApiError(401, "Email or password did not match.")
             if requested_role and user["role"] != requested_role:
@@ -1884,6 +2590,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/products":
             owner = self.require_role("owner")
+            with connect() as db:
+                stall_mode = get_stall_registration_mode(db)
+            if stall_mode == "stop_all":
+                raise ApiError(409, "Stall product sales are stopped by the school administrator.")
+            if owner.get("stall_status") != "approved":
+                raise ApiError(409, "Your stall must be approved before you can publish menu items.")
             name = clean_text(data.get("name"), "Item name", 80)
             desc = clean_text(data.get("description"), "Description", 240, required=False)
             ingredients = clean_text(data.get("ingredients"), "Ingredients", 700, required=False)
@@ -1898,6 +2610,13 @@ class Handler(BaseHTTPRequestHandler):
             if "photo_data" in data or "photo_type" in data:
                 photo_data, photo_type = parse_product_photo(data.get("photo_data"), data.get("photo_type"))
             with connect() as db:
+                stall_mode = get_stall_registration_mode(db)
+                stall = db.execute("SELECT status FROM stalls WHERE id=? AND owner_id=?",
+                    (owner.get("stall_id"), owner["id"])).fetchone()
+                if stall_mode == "stop_all":
+                    raise ApiError(409, "Stall product sales are stopped by the school administrator.")
+                if not stall or stall["status"] != "approved":
+                    raise ApiError(409, "Your stall must be approved before you can publish menu items.")
                 product_id = insert_id(db, """INSERT INTO products(stall_id,name,description,ingredients,category,price_cents,emoji,stock_count,
                     dietary_tags,allergen_tags,photo_data,photo_type,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (owner["stall_id"],name,desc,ingredients,category,price,emoji,stock_count,json.dumps(dietary_tags),json.dumps(allergen_tags),photo_data,photo_type,now()))
@@ -1905,6 +2624,76 @@ class Handler(BaseHTTPRequestHandler):
                     s.pickup_lat,s.pickup_lon
                     FROM products p JOIN stalls s ON s.id=p.stall_id WHERE p.id=?""", (product_id,)).fetchone()
             self.send_json(201, {"product": self.product_json(row)})
+            return
+        order_messages_match = re.fullmatch(r"/api/orders/(\d+)/messages", path)
+        if order_messages_match:
+            if not ORDER_MESSAGES_AVAILABLE:
+                raise ApiError(503, "Order messages are not enabled on this database yet. Apply the BiteHub order messages migration and restart the server.")
+            order_id = int(order_messages_match.group(1))
+            user = self.current_user(required=False)
+            token = data.get("token")
+            with connect() as db:
+                order = db.execute("""SELECT o.id,o.buyer_id,o.guest_session_id,o.guest_name,o.guest_access_token_hash,s.owner_id
+                    FROM orders o JOIN stalls s ON s.id=o.stall_id WHERE o.id=?""", (order_id,)).fetchone()
+                if not order:
+                    raise ApiError(404, "Order not found.")
+                token_hash = ""
+                if user:
+                    if user["role"] == "buyer" and order["buyer_id"] == user["id"]:
+                        sender_role, sender_user_id, sender_name = "buyer", user["id"], user["name"]
+                    elif user["role"] == "owner" and order["owner_id"] == user["id"]:
+                        sender_role, sender_user_id, sender_name = "owner", user["id"], user["name"]
+                    else:
+                        raise ApiError(404, "Order not found.")
+                else:
+                    if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9_-]{40,100}", token):
+                        self.enforce_rate_limit("guest-order-message-invalid", self.client_ip(), 120, 900)
+                        raise ApiError(404, "Order not found.")
+                    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+                    stored_hash = order["guest_access_token_hash"] or ""
+                    if order["buyer_id"] is not None or not stored_hash or not hmac.compare_digest(stored_hash, token_hash):
+                        self.enforce_rate_limit("guest-order-message-invalid", self.client_ip(), 120, 900)
+                        raise ApiError(404, "Order not found.")
+                    sender_role, sender_user_id = "guest", None
+                    sender_name = order["guest_name"] or "Guest"
+
+                action = data.get("action", "list")
+                if action == "list":
+                    rows = db.execute("""SELECT id,sender_role,sender_name,message,created_at
+                        FROM order_messages WHERE order_id=? ORDER BY id DESC LIMIT 200""", (order_id,)).fetchall()
+                    messages = [{"id": row["id"], "sender_role": row["sender_role"],
+                        "sender_name": row["sender_name"], "message": row["message"],
+                        "created_at": row["created_at"]} for row in reversed(rows)]
+                    self.send_json(200, {"messages": messages})
+                    return
+                if action != "send":
+                    raise ApiError(400, "Choose whether to load or send order messages.")
+                raw_message = data.get("message")
+                if not isinstance(raw_message, str):
+                    raise ValueError("Write a message before sending it.")
+                message = re.sub(r"[\r\n\t\x00-\x1f\x7f]+", " ", raw_message).strip()
+                if not message:
+                    raise ValueError("Write a message before sending it.")
+                if len(message) > 1000:
+                    raise ValueError("Messages can be up to 1,000 characters.")
+                identity = f"{order_id}:{sender_user_id if sender_user_id is not None else token_hash}"
+                self.enforce_rate_limit("order-message-send", identity, 30, 60)
+                row = db.execute("""INSERT INTO order_messages
+                    (order_id,sender_role,sender_user_id,sender_name,message,created_at)
+                    VALUES(?,?,?,?,?,?) RETURNING id,sender_role,sender_name,message,created_at""",
+                    (order_id, sender_role, sender_user_id, sender_name, message, now())).fetchone()
+            notification = {
+                    "title": "New order message",
+                    "body": f"You have a new message about order #{order_id}.",
+                    "url": "/#buyer-orders" if sender_role == "owner" else "/#owner-orders",
+                    "tag": f"bitehub-message-{order_id}",
+                }
+            if sender_role == "owner":
+                dispatch_order_buyer_push(order["buyer_id"], order["guest_session_id"], notification)
+            else:
+                dispatch_push([order["owner_id"]], notification)
+            self.send_json(201, {"message": {"id": row["id"], "sender_role": row["sender_role"],
+                "sender_name": row["sender_name"], "message": row["message"], "created_at": row["created_at"]}})
             return
         guest_order_match = re.fullmatch(r"/api/guest/orders/(\d+)", path)
         if guest_order_match:
@@ -1927,10 +2716,14 @@ class Handler(BaseHTTPRequestHandler):
                 if not row:
                     self.enforce_rate_limit("guest-order-invalid", self.client_ip(), 120, 900)
                     raise ApiError(404, "Guest order not found.")
-                result = self.orders_json(db,[row])[0]
+                result = self.orders_json(db,[row],include_pickup_codes=True)[0]
             self.send_json(200,{"order":result})
             return
         if path in ("/api/orders", "/api/guest/orders"):
+            with connect() as db:
+                stall_mode = get_stall_registration_mode(db)
+            if stall_mode == "stop_all":
+                raise ApiError(409, "Campus stall sales are temporarily stopped by the school administrator.")
             guest_order = path == "/api/guest/orders"
             if guest_order and self.current_user(required=False):
                 raise ApiError(403,"Sign out before placing a guest order.")
@@ -1985,6 +2778,8 @@ class Handler(BaseHTTPRequestHandler):
             note = clean_text(data.get("note"), "Order note", 240, required=False)
             with connect() as db:
                 db.execute("BEGIN IMMEDIATE")
+                if get_stall_registration_mode(db) == "stop_all":
+                    raise ApiError(409, "Campus stall sales are temporarily stopped by the school administrator.")
                 if guest_order:
                     db.execute("UPDATE guest_sessions SET guest_name=?,expires_at=? WHERE id=?",
                         (guest_name,int(time.time())+GUEST_SESSION_SECONDS,guest_session["id"]))
@@ -1997,6 +2792,8 @@ class Handler(BaseHTTPRequestHandler):
                 if len(products) != len(ids): raise ApiError(409, "One or more items are no longer available. Refresh the menu and try again.")
                 if len({row["stall_id"] for row in products}) != 1: raise ValueError("Place separate orders for each stall.")
                 stall = products[0]
+                if stall_on_break(db, stall["stall_id"]):
+                    raise ApiError(409, "This stall is taking a short break and is not accepting new orders right now.")
                 if pickup_at:
                     slots=pickup_slots(db,stall["stall_id"])
                     if pickup_at not in {slot["pickup_at"] for slot in slots}:
@@ -2013,15 +2810,7 @@ class Handler(BaseHTTPRequestHandler):
                         if not changed.rowcount:
                             raise ApiError(409,f"Stock for {product['name']} just changed. Refresh the menu and try again.")
                 total = sum(row["price_cents"]*quantities[row["id"]] for row in products)
-                pickup_code = ""
-                if guest_order:
-                    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-                    for _ in range(10):
-                        pickup_code = "".join(secrets.choice(alphabet) for _ in range(8))
-                        if not db.execute("SELECT 1 FROM orders WHERE guest_pickup_code=?",(pickup_code,)).fetchone():
-                            break
-                    else:
-                        raise ApiError(503,"Could not create a unique pickup code. Please try again.")
+                pickup_code = new_pickup_code(db) if guest_order or data["fulfillment"] == "pickup" else ""
                 order_id = insert_id(db, """INSERT INTO orders(buyer_id,guest_name,guest_school_role,guest_grade,guest_section,
                     guest_session_id,guest_access_token_hash,guest_pickup_code,stall_id,fulfillment,status,total_cents,buyer_note,
                     created_at,updated_at,pickup_at,delivery_lat,delivery_lon)
@@ -2044,20 +2833,35 @@ class Handler(BaseHTTPRequestHandler):
             return
         feedback_match = re.fullmatch(r"/api/orders/(\d+)/feedback", path)
         if feedback_match:
-            buyer = self.require_role("buyer")
             order_id = int(feedback_match.group(1))
+            reviewer = self.current_user(required=False)
             try: rating = int(data.get("rating"))
             except (TypeError, ValueError): raise ValueError("Choose a rating from 1 to 5.")
             if rating < 1 or rating > 5: raise ValueError("Choose a rating from 1 to 5.")
             comment = clean_text(data.get("comment"), "Feedback", 500, required=False)
             with connect() as db:
-                order = db.execute("SELECT status FROM orders WHERE id=? AND buyer_id=?", (order_id,buyer["id"])).fetchone()
+                order = db.execute("SELECT status,buyer_id,guest_access_token_hash FROM orders WHERE id=?", (order_id,)).fetchone()
                 if not order: raise ApiError(404, "Order not found.")
+                if reviewer:
+                    if reviewer["role"] != "buyer" or order["buyer_id"] != reviewer["id"]:
+                        raise ApiError(404, "Order not found.")
+                else:
+                    if not GUEST_FEEDBACK_AVAILABLE:
+                        raise ApiError(503, "Guest reviews are not enabled on this database yet. Apply the guest-order-feedback Supabase migration and restart the server.")
+                    guest_token = data.get("guest_token")
+                    if not isinstance(guest_token, str) or not re.fullmatch(r"[A-Za-z0-9_-]{40,100}", guest_token):
+                        self.enforce_rate_limit("guest-feedback-invalid", self.client_ip(), 120, 900)
+                        raise ApiError(404, "Order not found.")
+                    supplied_hash = hashlib.sha256(guest_token.encode("utf-8")).hexdigest()
+                    stored_hash = order["guest_access_token_hash"] or ""
+                    if order["buyer_id"] is not None or not stored_hash or not hmac.compare_digest(stored_hash, supplied_hash):
+                        self.enforce_rate_limit("guest-feedback-invalid", self.client_ip(), 120, 900)
+                        raise ApiError(404, "Order not found.")
                 if order["status"] != "completed": raise ApiError(409, "Feedback is available after your order is completed.")
-                if db.execute("SELECT 1 FROM feedback WHERE order_id=?", (order_id,)).fetchone():
+                inserted = db.execute("INSERT INTO feedback(order_id,buyer_id,rating,comment,created_at) VALUES(?,?,?,?,?) ON CONFLICT(order_id) DO NOTHING",
+                    (order_id, reviewer["id"] if reviewer else None, rating, comment, now()))
+                if not inserted.rowcount:
                     raise ApiError(409, "Feedback has already been submitted for this order.")
-                db.execute("INSERT INTO feedback(order_id,buyer_id,rating,comment,created_at) VALUES(?,?,?,?,?)",
-                           (order_id,buyer["id"],rating,comment,now()))
             self.send_json(201, {"ok":True}); return
         if path == "/api/admin/pause":
             self.require_role("admin")
@@ -2068,6 +2872,63 @@ class Handler(BaseHTTPRequestHandler):
         raise ApiError(404, "That API route does not exist.")
 
     def api_patch(self, path, data):
+        if path == "/api/admin/stall-policy":
+            self.require_role("admin")
+            mode = data.get("mode")
+            if mode not in STALL_REGISTRATION_MODES:
+                raise ValueError("Choose Allow all, Limited approval, or Stop all.")
+            with connect() as db:
+                db.execute("INSERT INTO settings(key,value) VALUES('stall_registration_mode',?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (mode,))
+            labels = {"allow_all":"All stalls may register and sell.",
+                      "limited":"New stall accounts need admin approval before selling.",
+                      "stop_all":"New stall accounts and stall sales are stopped."}
+            self.send_json(200, {"stall_registration_mode":mode,"message":labels[mode]})
+            return
+        if path == "/api/notifications/inbox/read-all":
+            user = self.current_user(required=False)
+            guest_session = self.current_guest_session() if not user else None
+            if not user and not guest_session:
+                raise ApiError(401, "Sign in or continue as a guest to update your notifications.")
+            if not NOTIFICATION_INBOX_AVAILABLE:
+                raise ApiError(503, "The in-app notification inbox needs the BiteHub database migration.")
+            scope, identifier = ("user_id", user["id"]) if user else ("guest_session_id", guest_session["id"])
+            with connect() as db:
+                db.execute(f"UPDATE notifications SET read_at=? WHERE {scope}=? AND read_at IS NULL", (now(), identifier))
+            self.send_json(200, {"ok": True})
+            return
+        inbox_match = re.fullmatch(r"/api/notifications/inbox/(\d+)", path)
+        if inbox_match:
+            user = self.current_user(required=False)
+            guest_session = self.current_guest_session() if not user else None
+            if not user and not guest_session:
+                raise ApiError(401, "Sign in or continue as a guest to update your notifications.")
+            if not NOTIFICATION_INBOX_AVAILABLE:
+                raise ApiError(503, "The in-app notification inbox needs the BiteHub database migration.")
+            scope, identifier = ("user_id", user["id"]) if user else ("guest_session_id", guest_session["id"])
+            with connect() as db:
+                result = db.execute(f"UPDATE notifications SET read_at=? WHERE id=? AND {scope}=?",
+                    (now(), int(inbox_match.group(1)), identifier))
+                if result.rowcount != 1:
+                    raise ApiError(404, "Notification not found.")
+            self.send_json(200, {"ok": True})
+            return
+        if path == "/api/stall/break":
+            owner = self.require_role("owner")
+            on_break = data.get("on_break")
+            if not isinstance(on_break, bool):
+                raise ValueError("Choose whether your stall is taking a short break.")
+            if not owner.get("stall_id"):
+                raise ApiError(404, "Your stall account is not available.")
+            key = f"stall_break:{int(owner['stall_id'])}"
+            with connect() as db:
+                if on_break:
+                    db.execute("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                        (key, "true"))
+                else:
+                    db.execute("DELETE FROM settings WHERE key=?", (key,))
+            self.send_json(200, {"on_break": on_break})
+            return
         if path == "/api/profile":
             user = self.current_user()
             name = clean_text(data.get("name", user["name"]), "Your name", 80)
@@ -2137,6 +2998,15 @@ class Handler(BaseHTTPRequestHandler):
                 if not cur.rowcount: raise ApiError(404, "Stall not found.")
             self.send_json(200, {"name": name, "description": description})
             return
+        if path == "/api/stall/location":
+            owner = self.require_role("owner")
+            latitude, longitude = campus_point(data.get("latitude"), data.get("longitude"), "Stall pickup point", owner)
+            with connect() as db:
+                cur = db.execute("UPDATE stalls SET pickup_lat=?,pickup_lon=? WHERE owner_id=?",
+                    (latitude, longitude, owner["id"]))
+                if not cur.rowcount: raise ApiError(404, "Stall not found.")
+            self.send_json(200, {"pickup_latitude": latitude, "pickup_longitude": longitude})
+            return
         if path == "/api/stall/hours":
             owner = self.require_role("owner")
             opens_at, closes_at = parse_hours(data.get("opens_at"),data.get("closes_at"))
@@ -2157,7 +3027,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("Choose approved or paused stall status.")
             with connect() as db:
                 cur = db.execute("""UPDATE stalls SET status=? WHERE id=? AND owner_id IN
-                    (SELECT id FROM users WHERE school_id='pns')""", (status,int(stall_match.group(1))))
+                    (SELECT id FROM users WHERE school_id='pns' AND deleted_at IS NULL)""", (status,int(stall_match.group(1))))
                 if not cur.rowcount: raise ApiError(404,"Stall not found.")
             self.send_json(200,{"status":status}); return
         product_match = re.fullmatch(r"/api/products/(\d+)", path)
@@ -2201,6 +3071,8 @@ class Handler(BaseHTTPRequestHandler):
         order_match = re.fullmatch(r"/api/orders/(\d+)", path)
         if order_match:
             order_id, action = int(order_match.group(1)), data.get("action")
+            if action == "cancel-pending" and not ORDER_CANCELLATION_AVAILABLE:
+                raise ApiError(503, "Order editing is not enabled on this database yet. Apply the buyer-order-cancellation Supabase migration, then restart BiteHub.")
             user = self.current_user(required=False)
             with connect() as db:
                 db.execute("BEGIN IMMEDIATE")
@@ -2220,7 +3092,18 @@ class Handler(BaseHTTPRequestHandler):
                 special_action = None
                 if user and user["role"] == "owner" and order["owner_id"] == user["id"]:
                     transitions = {"confirm":("placed","confirmed"),"decline":("placed","declined"),"prepare":("confirmed","preparing"),"ready":("preparing","ready")}
-                    if action == "assign":
+                    if action == "verify-pickup":
+                        if order["status"] != "ready" or order["fulfillment"] != "pickup":
+                            raise ApiError(409,"Only a ready pickup order can be verified.")
+                        supplied_code = data.get("pickup_code")
+                        if not isinstance(supplied_code, str) or not re.fullmatch(r"[A-HJ-NP-Z2-9]{8}", supplied_code.strip().upper()):
+                            raise ValueError("Enter the 8-character pickup code shown by the customer.")
+                        self.enforce_rate_limit("pickup-code-verify", str(user["id"]), 10, 300)
+                        stored_code = order["guest_pickup_code"] or ""
+                        if not stored_code or not hmac.compare_digest(stored_code, supplied_code.strip().upper()):
+                            raise ApiError(403,"That pickup code does not match this order. Check the code with the customer.")
+                        expected_status,next_status = "ready","completed"
+                    elif action == "assign":
                         if order["status"] != "ready" or order["fulfillment"] != "delivery": raise ApiError(409,"Only ready delivery orders can be assigned.")
                         if order["pickup_offer_status"] == "pending": raise ApiError(409,"Wait for the customer to respond to the pickup offer.")
                         runner_name = clean_text(data.get("runner_name"),"Runner name",80)
@@ -2254,9 +3137,11 @@ class Handler(BaseHTTPRequestHandler):
                         if order["status"] != "ready" or order["fulfillment"] != "delivery" or order["pickup_offer_status"] != "pending": raise ApiError(409,"There is no pickup offer to cancel.")
                         expected_status,next_status = "ready","declined"
                         special_action = "cancel-no-runner"
-                    elif action == "collect" and order["fulfillment"] == "pickup" and order["status"] == "ready":
-                        expected_status = "ready"
-                        next_status = "completed"
+                    elif action == "cancel-pending":
+                        if order["status"] != "placed" or order["buyer_cancelled"]:
+                            raise ApiError(409,"The stall has already started handling this order. Only a new order can be cancelled here.")
+                        expected_status,next_status = "placed","declined"
+                        special_action = "buyer-cancel"
                     else: raise ApiError(403,"That order cannot be updated by this account.")
                 else: raise ApiError(403,"This account cannot update that order.")
                 if special_action == "assign":
@@ -2266,14 +3151,18 @@ class Handler(BaseHTTPRequestHandler):
                     changed = db.execute("UPDATE orders SET pickup_offer_status='pending',runner_name='',runner_id=NULL,runner_tracking_token_hash=NULL,runner_tracking_expires_at=NULL,updated_at=? WHERE id=? AND status='ready' AND fulfillment='delivery' AND pickup_offer_status!='pending'",
                         (now(),order_id))
                 elif special_action == "accept-pickup":
-                    changed = db.execute("UPDATE orders SET fulfillment='pickup',pickup_offer_status='accepted',runner_name='',runner_id=NULL,delivery_lat=NULL,delivery_lon=NULL,runner_tracking_token_hash=NULL,runner_tracking_expires_at=NULL,updated_at=? WHERE id=? AND status='ready' AND fulfillment='delivery' AND pickup_offer_status='pending'",
-                        (now(),order_id))
+                    pickup_code = order["guest_pickup_code"] or new_pickup_code(db)
+                    changed = db.execute("UPDATE orders SET fulfillment='pickup',pickup_offer_status='accepted',guest_pickup_code=?,runner_name='',runner_id=NULL,delivery_lat=NULL,delivery_lon=NULL,runner_tracking_token_hash=NULL,runner_tracking_expires_at=NULL,updated_at=? WHERE id=? AND status='ready' AND fulfillment='delivery' AND pickup_offer_status='pending'",
+                        (pickup_code,now(),order_id))
                     db.execute("DELETE FROM delivery_positions WHERE order_id=?",(order_id,))
                 elif special_action == "cancel-no-runner":
                     changed = db.execute("UPDATE orders SET status='declined',pickup_offer_status='declined',updated_at=? WHERE id=? AND status='ready' AND fulfillment='delivery' AND pickup_offer_status='pending'",
                         (now(),order_id))
                     db.execute("DELETE FROM delivery_positions WHERE order_id=?",(order_id,))
                     db.execute("UPDATE orders SET delivery_lat=NULL,delivery_lon=NULL WHERE id=?",(order_id,))
+                elif special_action == "buyer-cancel":
+                    changed = db.execute("UPDATE orders SET status='declined',buyer_cancelled=TRUE,updated_at=? WHERE id=? AND status='placed' AND buyer_cancelled=FALSE",
+                        (now(),order_id))
                 elif next_status == "confirmed":
                     estimate = (datetime.now(timezone.utc)+timedelta(minutes=order["prep_minutes"])).isoformat(timespec="seconds")
                     changed = db.execute("UPDATE orders SET status=?,updated_at=?,estimated_ready_at=? WHERE id=? AND status=?",
@@ -2292,15 +3181,18 @@ class Handler(BaseHTTPRequestHandler):
                     db.execute("DELETE FROM delivery_positions WHERE order_id=?", (order_id,))
                     db.execute("UPDATE orders SET delivery_lat=NULL,delivery_lon=NULL,runner_tracking_token_hash=NULL,runner_tracking_expires_at=NULL WHERE id=?", (order_id,))
                 buyer_id = order["buyer_id"]
+                guest_session_id = order["guest_session_id"]
                 owner_id = order["owner_id"]
                 stall_name = db.execute("SELECT name FROM stalls WHERE id=?", (order["stall_id"],)).fetchone()[0]
             if special_action == "offer-pickup":
-                if buyer_id: dispatch_push([buyer_id], {"title":"Delivery unavailable · choose pickup or cancel","body":f"{stall_name} has no runner for order #{order_id}. Open BiteHub to choose pickup at the stall or cancel.","url":"/#buyer-orders","tag":f"bitehub-order-{order_id}"})
+                dispatch_order_buyer_push(buyer_id, guest_session_id, {"title":"Delivery unavailable · choose pickup or cancel","body":f"{stall_name} has no runner for order #{order_id}. Open BiteHub to choose pickup at the stall or cancel.","url":"/#buyer-orders","tag":f"bitehub-order-{order_id}"})
             elif special_action == "accept-pickup":
                 dispatch_push([owner_id], {"title":"Customer chose pickup","body":f"The customer will pick up order #{order_id} at your stall.","url":"/#owner-orders","tag":f"bitehub-order-{order_id}"})
             elif special_action == "cancel-no-runner":
                 dispatch_push([owner_id], {"title":"Customer cancelled order","body":f"The customer cancelled order #{order_id} because pickup was not suitable.","url":"/#owner-orders","tag":f"bitehub-order-{order_id}"})
-            if next_status:
+            elif special_action == "buyer-cancel":
+                dispatch_push([owner_id], {"title":"Customer cancelled new order","body":f"The customer cancelled order #{order_id} before you accepted it.","url":"/#owner-orders","tag":f"bitehub-order-{order_id}"})
+            if next_status and special_action != "buyer-cancel":
                 declined_body = (f"Order #{order_id} was cancelled because pickup was not suitable."
                     if special_action == "cancel-no-runner" else f"{stall_name} could not accept order #{order_id}.")
                 push_status = {"confirmed": ("Order accepted", f"{stall_name} accepted order #{order_id}."),
@@ -2311,13 +3203,53 @@ class Handler(BaseHTTPRequestHandler):
                     "declined": ("Order update", declined_body)}
                 if next_status in push_status:
                     title, body = push_status[next_status]
-                    if buyer_id: dispatch_push([buyer_id], {"title": title, "body": body, "url": "/#buyer-orders", "tag": f"bitehub-order-{order_id}"})
+                    dispatch_order_buyer_push(buyer_id, guest_session_id, {"title": title, "body": body, "url": "/#buyer-orders", "tag": f"bitehub-order-{order_id}"})
             elif special_action == "assign":
-                if buyer_id: dispatch_push([buyer_id], {"title":"Runner assigned","body":f"{runner_name} will deliver order #{order_id}.","url":"/#buyer-orders","tag":f"bitehub-order-{order_id}"})
+                dispatch_order_buyer_push(buyer_id, guest_session_id, {"title":"Runner assigned","body":f"{runner_name} will deliver order #{order_id}.","url":"/#buyer-orders","tag":f"bitehub-order-{order_id}"})
             self.send_json(200,{"ok":True}); return
         raise ApiError(404,"That API route does not exist.")
 
     def api_delete(self, path):
+        admin_stall_match = re.fullmatch(r"/api/admin/stalls/(\d+)", path)
+        if admin_stall_match:
+            self.require_role("admin")
+            stall_id = int(admin_stall_match.group(1))
+            with connect() as db:
+                stall = db.execute("""SELECT s.id,s.owner_id FROM stalls s JOIN users u ON u.id=s.owner_id
+                    WHERE s.id=? AND u.school_id='pns' AND u.deleted_at IS NULL""", (stall_id,)).fetchone()
+                if not stall:
+                    raise ApiError(404, "Stall account not found.")
+                removed_at = now()
+                db.execute("UPDATE users SET deleted_at=? WHERE id=?", (removed_at, stall["owner_id"]))
+                db.execute("UPDATE stalls SET status='paused' WHERE id=?", (stall_id,))
+                db.execute("UPDATE products SET available=FALSE,featured_until=NULL WHERE stall_id=?", (stall_id,))
+                db.execute("DELETE FROM sessions WHERE user_id=?", (stall["owner_id"],))
+            self.send_json(200, {"ok":True,"deleted":True,"history_preserved":True})
+            return
+        admin_product_match = re.fullmatch(r"/api/admin/products/(\d+)", path)
+        if admin_product_match:
+            self.require_role("admin")
+            product_id = int(admin_product_match.group(1))
+            with connect() as db:
+                result = db.execute("""DELETE FROM products WHERE id=? AND stall_id IN (
+                    SELECT s.id FROM stalls s JOIN users u ON u.id=s.owner_id
+                    WHERE u.school_id='pns' AND u.deleted_at IS NULL)""", (product_id,))
+                if result.rowcount != 1:
+                    raise ApiError(404, "Food item not found.")
+            self.send_json(200, {"ok":True,"removed_from_catalog_and_menu":True,"order_history_preserved":True})
+            return
+        schedule_match = re.fullmatch(r"/api/menu-schedule/(\d+)", path)
+        if schedule_match:
+            owner = self.require_role("owner")
+            if not WEEKLY_MENU_AVAILABLE:
+                raise ApiError(503, "The weekly menu planner needs the BiteHub database migration.")
+            with connect() as db:
+                result = db.execute("DELETE FROM weekly_menu_slots WHERE id=? AND stall_id=?",
+                    (int(schedule_match.group(1)), owner.get("stall_id")))
+                if result.rowcount != 1:
+                    raise ApiError(404, "Weekly menu plan not found.")
+            self.send_json(200, {"ok": True})
+            return
         match = re.fullmatch(r"/api/products/(\d+)", path)
         if not match: raise ApiError(404,"That API route does not exist.")
         owner = self.require_role("owner")
@@ -2330,7 +3262,8 @@ class Handler(BaseHTTPRequestHandler):
     def current_user_from_id(user_id):
         with connect() as db:
             row = db.execute("SELECT u.id,u.name,u.email,u.role,u.school_id,u.grade_section,sc.region school_region,sc.province school_province,sc.city school_city,u.school_zip,sc.name school_name,sc.school_type,sc.latitude school_latitude,sc.longitude school_longitude,sc.delivery_radius_m,s.id stall_id,s.name stall_name,s.description stall_description,s.status stall_status,s.opens_at stall_opens_at,s.closes_at stall_closes_at,s.prep_minutes stall_prep_minutes,s.pickup_slot_capacity stall_pickup_slot_capacity,s.logo_type stall_logo_type,u.profile_photo_type,u.profile_photo_version FROM users u LEFT JOIN schools sc ON sc.id=u.school_id LEFT JOIN stalls s ON s.owner_id=u.id WHERE u.id=?",(user_id,)).fetchone()
-        user = dict(row)
+            user = dict(row)
+            user["stall_on_break"] = stall_on_break(db, user.get("stall_id"))
         user["stall_logo_url"] = f"/api/stalls/{user['stall_id']}/logo" if user.get("stall_logo_type") else None
         user["profile_photo_url"] = f"/api/profile/photo?v={user['profile_photo_version']}" if user.get("profile_photo_type") else None
         return user
@@ -2340,7 +3273,7 @@ class Handler(BaseHTTPRequestHandler):
         # Only publish files the frontend actually uses. The project directory also
         # contains the SQLite database, certificates, and other private files.
         public_files = {
-            "index.html", "styles.css", "app-ui.css", "experience.css",
+            "index.html", "font-loader.js", "styles.css", "app-ui.css", "experience.css",
             "school-theme.css", "feature-ui.css", "stall-profile.css",
             "opening-screen.css", "market-ui.css", "app.js", "sw.js", "manifest.webmanifest",
             "bitehub-mark.svg", "brand-refresh.css", "sidebar-preferences.css", "device-responsive.css",
@@ -2352,7 +3285,11 @@ class Handler(BaseHTTPRequestHandler):
             "assets/bitehub-icon.png", "assets/bitehub-wordmark.png",
             "assets/palawan-national-school-logo.webp",
             "assets/bitehub-food-market-4k.webp",
+            "assets/bitehub-food-market-medium.webp",
+            "assets/bitehub-food-market-mobile.webp",
             "assets/bitehub-campus-food-bg.webp",
+            "assets/bitehub-campus-food-medium.webp",
+            "assets/bitehub-campus-food-mobile.webp",
             "assets/palawan-campus-map.png",
             "assets/pns-campus-safe-routes.jpg",
             "assets/pns-campus-hero.jpg",
@@ -2372,9 +3309,23 @@ class Handler(BaseHTTPRequestHandler):
         data = target.read_bytes()
         mime = "text/plain" if target.suffix == ".md" else (mimetypes.guess_type(target.name)[0] or "application/octet-stream")
         if mime.startswith("text/") or mime in ("application/javascript",): mime += "; charset=utf-8"
+        compressible = target.suffix.lower() in {".css", ".html", ".js", ".md", ".svg", ".webmanifest"}
+        accepts_gzip = any(
+            encoding.strip().split(";", 1)[0].lower() == "gzip"
+            and not re.search(r"(?:^|;)\s*q\s*=\s*0(?:\.0*)?\s*(?:;|$)", encoding, re.I)
+            for encoding in self.headers.get("Accept-Encoding", "").split(",")
+        )
+        compressed_response = False
+        if compressible and accepts_gzip and len(data) >= 512:
+            compressed = gzip.compress(data, compresslevel=6, mtime=0)
+            if len(compressed) < len(data):
+                data = compressed
+                compressed_response = True
         self.send_response(200)
+        if compressed_response: self.send_header("Content-Encoding", "gzip")
         self.send_header("Content-Type",mime)
         self.send_header("Content-Length",str(len(data)))
+        if compressible: self.send_header("Vary", "Accept-Encoding")
         self.send_header("Cache-Control", "no-cache" if target.name == "index.html" or target.suffix in {".js", ".css", ".webmanifest"} else "public, max-age=3600")
         self.send_header("X-Content-Type-Options","nosniff")
         self.send_header("Content-Security-Policy","default-src 'self'; img-src 'self' https: data: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://maps.googleapis.com https://maps.gstatic.com; font-src 'self' https://fonts.gstatic.com data:; script-src 'self' https://maps.googleapis.com https://maps.gstatic.com; connect-src 'self' https://maps.googleapis.com https://maps.gstatic.com https://*.googleapis.com https://*.gstatic.com; worker-src 'self' blob:; base-uri 'self'; frame-ancestors 'none'")

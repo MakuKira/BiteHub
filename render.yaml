@@ -7,5 +7,9 @@ services:
     envVars:
       - key: BITEHUB_REQUIRE_POSTGRES
         value: "true"
+      - key: BITEHUB_REQUIRE_VAPID_SECRET
+        value: "true"
       - key: BITEHUB_DATABASE_URL
+        sync: false
+      - key: BITEHUB_VAPID_PRIVATE_KEY_B64
         sync: false

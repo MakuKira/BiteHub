@@ -45,7 +45,7 @@ def main() -> int:
     child_environment = None
     try:
         database_password = getpass.getpass(
-            f"Enter the reset password for Supabase role {POOLER_USERNAME} (input hidden): "
+            f"Enter the current password set for Supabase Dev role {POOLER_USERNAME} (input hidden): "
         )
         if not database_password:
             raise SystemExit("No database-role password was entered.")

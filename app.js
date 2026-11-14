@@ -1,5 +1,14 @@
 const GUEST_ORDER_STORAGE_KEY='bitehub-guest-order-access-v1';
 const GUEST_LEFT_STORAGE_KEY='bitehub-guest-left-v1';
+const SAVED_MENU_STORAGE_KEY='bitehub-saved-menu-v1';
+function readSavedMenu(){
+  try{
+    const saved=JSON.parse(localStorage.getItem(SAVED_MENU_STORAGE_KEY)||'{}');
+    const validIds=value=>Array.isArray(value)?[...new Set(value.map(Number).filter(id=>Number.isSafeInteger(id)&&id>0))].slice(0,300):[];
+    return {products:validIds(saved.products),stalls:validIds(saved.stalls)};
+  }catch{return {products:[],stalls:[]}}
+}
+const initialSavedMenu=readSavedMenu();
 function savedGuestOrderAccess(){
   try{
     const records=JSON.parse(localStorage.getItem(GUEST_ORDER_STORAGE_KEY)||'[]');
@@ -9,7 +18,8 @@ function savedGuestOrderAccess(){
 const hasSavedGuestOrders=savedGuestOrderAccess().length>0;
 const hasLeftGuestMode=(()=>{try{return sessionStorage.getItem(GUEST_LEFT_STORAGE_KEY)==='1'}catch{return false}})();
 let guestOrderAccess=savedGuestOrderAccess();
-const state={user:null,publicBrowse:new URLSearchParams(location.search).has('stall')||(hasSavedGuestOrders&&!hasLeftGuestMode),products:[],featuredProducts:[],heroFeaturedIndex:0,featuredScroll:0,featuredPaused:false,featuredTimer:null,orders:[],overview:null,adminReports:null,reportRange:'30',reachAnalytics:null,paused:false,cart:new Map(),cartNote:'',guestName:'',guestSessionId:null,guestSchoolRole:'',guestGrade:'',guestSection:'',fulfillment:'pickup',deliveryLocation:null,mapZoom:1,trackingWatch:null,lastLocationSent:0,runnerLinks:{},filter:'All',query:'',sort:'featured',stallFilter:'All',dietaryFilter:'All',allergenFilter:'All',filterPanelOpen:false,buyerView:'menu',ownerView:'dashboard',adminView:'overview',authRole:'buyer',frontGuestStarted:false,pushEnabled:false,pushAvailable:false,sidebarOpen:false,sidebarSettingsOpen:false,sidebarProfileOpen:false};
+const state={user:null,publicBrowse:new URLSearchParams(location.search).has('stall')||(hasSavedGuestOrders&&!hasLeftGuestMode),products:[],featuredProducts:[],weeklyMenu:[],weeklyMenuAvailable:true,notificationInboxAvailable:true,notifications:[],notificationUnreadCount:0,notificationInboxLoading:false,heroFeaturedIndex:0,featuredScroll:0,featuredPaused:false,featuredTimer:null,orders:[],ownerChatNewOrderIds:new Set(),overview:null,adminReports:null,adminReportsError:'',reportRange:'30',reachAnalytics:null,paused:false,cart:new Map(),cartNote:'',guestName:'',guestSessionId:null,guestSchoolRole:'',guestGrade:'',guestSection:'',fulfillment:'pickup',deliveryLocation:null,stallLocationDraft:null,stallLocationDraftOwnerId:null,stallFinderStalls:[],stallFinderQuery:'',stallFinderOpenOnly:false,selectedStallFinderId:null,mapZoom:1,trackingWatch:null,lastLocationSent:0,runnerLinks:{},filter:'All',budgetMax:'All',query:'',sort:'featured',stallFilter:'All',dietaryFilter:'All',allergenFilter:'All',filterPanelOpen:false,showSavedOnly:false,savedProducts:initialSavedMenu.products,savedStalls:initialSavedMenu.stalls,buyerView:'menu',ownerView:'dashboard',adminView:'overview',adminStallSearch:'',adminStallStatusFilter:'all',adminStallOpenFilter:'all',adminStallProductFilter:'all',adminDeleteConfirm:'',runnerView:'summary',authRole:'buyer',frontGuestStarted:false,pushEnabled:false,pushAvailable:false,pushServerReady:false,pushPublicKey:'',pushRegistration:null,pushPermission:'default',notificationPromptDismissed:false,orderMessagesAvailable:true,orderCancellationAvailable:true,guestFeedbackAvailable:true,sidebarOpen:false,sidebarSettingsOpen:false,sidebarProfileOpen:false};
+let activeOrderMessageOrderId=null,orderMessageRefreshTimer=null,orderMessageRequestSequence=0,ownerMessageKnownOrderIds=new Set(),ownerOrderCheckInFlight=false,guestNotificationStateRequested=false,notificationInboxTimer=null,pendingOrderAction=null;
 const $=s=>document.querySelector(s), root=$('#view-content'), toastNode=$('#toast'), openingSplash=$('#opening-splash'), openingSplashStartedAt=performance.now(), openingSplashMinimumDuration=matchMedia('(prefers-reduced-motion: reduce)').matches?500:2600;
 let openingSplashDismissTimer=null;
 function dismissOpeningSplash(){
@@ -25,23 +35,39 @@ function dismissOpeningSplash(){
 let refreshTimer;
 let publicRunnerTracking=null,runnerShareTimer=null,runnerShareBusy=false;
 let orderBaselineUserId=null;
-let refreshInFlight=false;
+let refreshInFlight=false,refreshQueued=false,refreshQueuedMenu=false;
 let googleMapsPromise=null;
 const googleCampusMaps=new WeakMap();
 let lastMenuRefresh=0,lastOverviewRefresh=0,lastReachRefresh=0,lastReportsRefresh=0;
 const money=n=>new Intl.NumberFormat('en-PH',{style:'currency',currency:'PHP',maximumFractionDigits:2}).format(n||0);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function persistSavedMenu(){try{localStorage.setItem(SAVED_MENU_STORAGE_KEY,JSON.stringify({products:state.savedProducts,stalls:state.savedStalls}))}catch{toast('Saved items could not be stored on this device. Check your browser storage settings.')}}
+function toggleSavedMenuItem(kind,id,button){
+  const key=kind==='product'?'savedProducts':'savedStalls',items=state[key],number=Number(id),index=items.indexOf(number),saved=index<0;
+  if(saved)items.push(number);else items.splice(index,1);
+  persistSavedMenu();
+  const savedCount=document.querySelector('.menu-saved-toggle span');if(savedCount)savedCount.textContent=state.savedProducts.length+state.savedStalls.length;
+  if(button){button.setAttribute('aria-pressed',String(saved));button.classList.toggle('is-saved',saved);button.textContent=saved?'♥ Saved':'♡ Save';}
+  if(kind==='product'&&root){const y=window.scrollY;renderBuyerView();requestAnimationFrame(()=>window.scrollTo({top:y,behavior:'auto'}))}
+  toast(saved?(kind==='product'?'Food saved on this device.':'Stall saved on this device.'):'Removed from saved items.');
+}
 const roleLabel={buyer:'School customer',owner:'Stall owner',runner:'School runner',admin:'Administrator'};
 let themeMode='light';
 try{themeMode=localStorage.getItem('bitehub-theme')==='dark'?'dark':'light'}catch{}
 function applyTheme(){
   document.documentElement.dataset.theme=themeMode;
+  document.body.dataset.theme=themeMode;
+  document.documentElement.style.colorScheme=themeMode;
   const toggle=$('#theme-toggle'),status=$('#theme-status');
   if(toggle)toggle.setAttribute('aria-checked',String(themeMode==='dark'));
   if(status)status.textContent=themeMode==='dark'?'On':'Off';
 }
 applyTheme();
 const statusLabel={placed:'New order',confirmed:'Accepted',preparing:'Preparing',ready:'Ready',out:'On the way',completed:'Completed',declined:'Declined'};
+function orderStatusText(order,role=state.user?.role||'guest'){
+  if(order.cancelled_by_buyer)return role==='buyer'||role==='guest'?'Cancelled by you':'Cancelled by customer';
+  return statusLabel[order.status]||order.status;
+}
 const dietaryLabels={vegetarian:'Vegetarian',vegan:'Vegan',halal:'Halal','gluten-free':'Gluten-free','dairy-free':'Dairy-free','nut-free':'Nut-free'};
 const allergenLabels={peanuts:'Peanuts','tree-nuts':'Tree nuts',milk:'Milk',eggs:'Eggs',soy:'Soy',wheat:'Wheat',fish:'Fish',shellfish:'Shellfish',sesame:'Sesame'};
 const dietaryOptions=Object.entries(dietaryLabels), allergenOptions=Object.entries(allergenLabels);
@@ -141,25 +167,31 @@ function deliveryEta(order,gpsAge){
   return fast===slow?`Estimated arrival · about ${fast} min`:`Estimated arrival · about ${fast}–${slow} min`;
 }
 function setMapZoom(action){state.mapZoom=action==='reset'?1:Math.max(1,Math.min(4,state.mapZoom*(action==='in'?1.5:1/1.5)));document.querySelectorAll('.campus-map-scene').forEach(scene=>scene.style.transform=`scale(${state.mapZoom})`)}
-function campusMap(order,interactive=false){
-  const destination=interactive?state.deliveryLocation:(order?.delivery_latitude!=null?{latitude:order.delivery_latitude,longitude:order.delivery_longitude}:null);
+function campusMap(order,interactive=false,mapPurpose='delivery'){
+  const savedStallLocation=state.user?.stall_pickup_lat!=null&&state.user?.stall_pickup_lon!=null?{latitude:state.user.stall_pickup_lat,longitude:state.user.stall_pickup_lon}:null;
+  const destination=interactive&&mapPurpose==='delivery'?state.deliveryLocation:(order?.delivery_latitude!=null?{latitude:order.delivery_latitude,longitude:order.delivery_longitude}:null);
   const driver=order?.driver_latitude!=null?{latitude:order.driver_latitude,longitude:order.driver_longitude,heading:order.driver_heading}:null;
-  const stall=order?.stall_latitude!=null?{latitude:order.stall_latitude,longitude:order.stall_longitude}:null;
+  const ownerDraft=state.stallLocationDraftOwnerId===state.user?.id?state.stallLocationDraft:null;
+  const stall=mapPurpose==='stall-location'?(ownerDraft||savedStallLocation):(order?.stall_latitude!=null?{latitude:order.stall_latitude,longitude:order.stall_longitude}:null);
   const pin=(point,label,kind)=>{if(!point)return'';const p=mapXY(point.latitude,point.longitude),heading=kind==='driver'&&Number.isFinite(Number(point.heading))?Number(point.heading):0;return `<g class="map-marker map-marker-${kind}" transform="translate(${p.x.toFixed(1)} ${p.y.toFixed(1)})"><circle class="map-marker-halo" r="25"/><circle class="map-marker-core" r="17"><title>${label}</title></circle><text y="5" text-anchor="middle" aria-hidden="true" ${kind==='driver'?`transform="rotate(${heading})"`:''}>${kind==='stall'?'S':kind==='driver'?'▲':'H'}</text></g>`};
   const route=driver&&destination?campusRoute(driver,destination):null;
   const routePath=route?`<path class="map-route-shadow" d="M${route.points.map(p=>`${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' L')}"/><path class="map-route" d="M${route.points.map(p=>`${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' L')}"/>`:'';
   // The updated campus guide already prints the blue walkways; only overlay the live route.
   const network='';
   const pointData=(point,name)=>point?`data-${name}-latitude="${point.latitude}" data-${name}-longitude="${point.longitude}"`:'';
-  return `<div class="campus-map-shell" data-campus-map="true" data-map-mode="${interactive?'picker':'tracking'}" ${pointData(stall,'stall')} ${pointData(destination,'destination')} ${pointData(driver,'driver')}><div class="campus-map-scene" style="transform:scale(${state.mapZoom})"><img class="campus-map-image" src="assets/pns-campus-safe-routes.jpg" alt="PNS campus map with blue marked walking paths"><svg class="campus-map ${interactive?'is-picker':''}" viewBox="0 0 ${PNS_MAP.width} ${PNS_MAP.height}" preserveAspectRatio="none" role="${interactive?'button':'img'}" ${interactive?'data-map-picker tabindex="0" aria-label="Choose a handoff point on the PNS campus map"':'aria-label="PNS campus delivery map showing the stall, runner location, handoff point, and campus walking route"'}><path class="map-walkway" d="${network}"/>${routePath}${pin(stall,'Stall pickup','stall')}${pin(destination,'Handoff point','destination')}${pin(driver,'Runner location','driver')}</svg></div><div class="map-zoom-controls" aria-label="Map zoom controls"><button type="button" data-map-zoom="in" aria-label="Zoom in">+</button><button type="button" data-map-zoom="out" aria-label="Zoom out">−</button><button type="button" data-map-zoom="reset" aria-label="Reset zoom">Reset</button></div></div>`;
+  const pickerLabel=mapPurpose==='stall-location'?'Tap the map to place your stall pickup point':'Choose a handoff point on the PNS campus map';
+  return `<div class="campus-map-shell" data-campus-map="true" data-map-mode="${interactive?(mapPurpose==='stall-location'?'stall-picker':'picker'):'tracking'}" ${pointData(stall,'stall')} ${pointData(destination,'destination')} ${pointData(driver,'driver')}><div class="campus-map-scene" style="transform:scale(${state.mapZoom})"><img class="campus-map-image" src="assets/pns-campus-safe-routes.jpg" alt="PNS campus map with marked walking paths"><svg class="campus-map ${interactive?'is-picker':''}" viewBox="0 0 ${PNS_MAP.width} ${PNS_MAP.height}" preserveAspectRatio="none" role="${interactive?'button':'img'}" ${interactive?`data-map-picker data-map-kind="${mapPurpose}" tabindex="0" aria-label="${pickerLabel}"`:'aria-label="PNS campus delivery map showing the stall, runner location, handoff point, and campus walking route"'}><path class="map-walkway" d="${network}"/>${routePath}${pin(stall,'Stall pickup','stall')}${pin(destination,'Handoff point','destination')}${pin(driver,'Runner location','driver')}</svg></div><div class="map-zoom-controls" aria-label="Map zoom controls"><button type="button" data-map-zoom="in" aria-label="Zoom in">+</button><button type="button" data-map-zoom="out" aria-label="Zoom out">−</button><button type="button" data-map-zoom="reset" aria-label="Reset zoom">Reset</button></div></div>`;
 }
 function toast(message){toastNode.textContent=message;toastNode.classList.add('is-visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>toastNode.classList.remove('is-visible'),2800)}
 async function api(path,options={}){
-  const response=await fetch(path,{credentials:'same-origin',...options,headers:{...(options.body?{'Content-Type':'application/json'}:{}),...(options.headers||{})}});
+  let response;
+  try{response=await fetch(path,{credentials:'same-origin',...options,headers:{...(options.body?{'Content-Type':'application/json'}:{}),...(options.headers||{})}})}
+  catch(error){error.requestPath=path;throw error}
   const body=await response.json().catch(()=>({}));
-  if(!response.ok)throw new Error(body.error||`Request failed (${response.status}).`);
+  if(!response.ok){const error=new Error(body.error||`Request failed (${response.status}).`);error.requestPath=path;error.status=response.status;throw error}
   return body;
 }
+function apiErrorMessage(error){return`${error?.message||'The request failed.'}${error?.requestPath?` [${error.requestPath}]`:''}`}
 const json=data=>JSON.stringify(data);
 function saveGuestOrderAccess(record){
   const records=guestOrderAccess.filter(item=>item.id!==Number(record.id));
@@ -230,6 +262,17 @@ async function enhanceGoogleCampusMaps(){
   // Preserve the calibrated PNS raster and traced paths for both selecting and tracking.
 }
 function fileAsBase64(file){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onerror=()=>reject(new Error('Could not read the image.'));reader.onload=()=>resolve(String(reader.result).split(',')[1]||'');reader.readAsDataURL(file)})}
+function guestPhotoStorageKey(){return `bitehub-guest-profile-photo-v1:${state.guestSessionId||'device'}`}
+function guestPhotoDataUrl(){try{return localStorage.getItem(guestPhotoStorageKey())||''}catch{return''}}
+async function compressGuestPhoto(file){
+  const source=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onerror=()=>reject(new Error('The photo could not be read.'));reader.onload=()=>resolve(String(reader.result||''));reader.readAsDataURL(file)});
+  const image=await new Promise((resolve,reject)=>{const item=new Image();item.onload=()=>resolve(item);item.onerror=()=>reject(new Error('Choose a photo that your device can open.'));item.src=source});
+  const scale=Math.min(1,512/Math.max(image.naturalWidth,image.naturalHeight)),canvas=document.createElement('canvas');
+  canvas.width=Math.max(1,Math.round(image.naturalWidth*scale));canvas.height=Math.max(1,Math.round(image.naturalHeight*scale));
+  const context=canvas.getContext('2d');if(!context)throw new Error('Photo editing is unavailable in this browser.');
+  context.drawImage(image,0,0,canvas.width,canvas.height);
+  return canvas.toDataURL('image/jpeg',.82);
+}
 function productMetadataFields(product={}){
   const stock=product.stock_count??'';
   const dietary=new Set(product.dietary_tags||[]),allergens=new Set(product.allergen_tags||[]);
@@ -249,7 +292,7 @@ function addCatalogControls(){
   const container=$('.catalog-filter-options');if(!container)return;
   const stalls=[...new Map(state.products.map(product=>[product.stall_id,product.stall_name])).entries()];
   const stallOptions=stalls.map(([id,name])=>`<option value="${id}" ${state.stallFilter===String(id)?'selected':''}>${esc(name)}</option>`).join('');
-  container.innerHTML=`<label class="catalog-select">Stall<select id="stall-filter"><option value="All">All stalls</option>${stallOptions}</select></label><label class="catalog-select">Dietary<select id="dietary-filter"><option value="All">Any</option>${dietaryOptions.map(([value,label])=>`<option value="${value}" ${state.dietaryFilter===value?'selected':''}>${label}</option>`).join('')}</select></label><label class="catalog-select">Avoid<select id="allergen-filter"><option value="All">No filter</option>${allergenOptions.map(([value,label])=>`<option value="${value}" ${state.allergenFilter===value?'selected':''}>${label}</option>`).join('')}</select></label>`;
+  container.innerHTML=`<label class="catalog-select">Stall<select id="stall-filter"><option value="All">All stalls</option>${stallOptions}</select></label><label class="catalog-select">Budget<select id="budget-filter"><option value="All" ${state.budgetMax==='All'?'selected':''}>Any price</option><option value="25" ${state.budgetMax==='25'?'selected':''}>Up to ₱25</option><option value="50" ${state.budgetMax==='50'?'selected':''}>Up to ₱50</option><option value="75" ${state.budgetMax==='75'?'selected':''}>Up to ₱75</option><option value="100" ${state.budgetMax==='100'?'selected':''}>Up to ₱100</option></select></label><label class="catalog-select">Dietary<select id="dietary-filter"><option value="All">Any</option>${dietaryOptions.map(([value,label])=>`<option value="${value}" ${state.dietaryFilter===value?'selected':''}>${label}</option>`).join('')}</select></label><label class="catalog-select">Avoid<select id="allergen-filter"><option value="All">No filter</option>${allergenOptions.map(([value,label])=>`<option value="${value}" ${state.allergenFilter===value?'selected':''}>${label}</option>`).join('')}</select></label>`;
 }
 function decorateProductCards(){
   root.querySelectorAll('.product-card').forEach(card=>{
@@ -258,18 +301,18 @@ function decorateProductCards(){
     if(!product)return;
     if(product.photo_url){const art=card.querySelector('.product-art-trigger');art?.classList.add('has-photo');art?.querySelector('span')?.remove();art?.insertAdjacentHTML('afterbegin',`<img class="product-photo" src="${esc(product.photo_url)}" alt="Photo of ${esc(product.name)}" loading="lazy" decoding="async">`)}
     const stall=card.querySelector('.product-stall');
-    if(stall){stall.setAttribute('role','button');stall.setAttribute('tabindex','0');stall.setAttribute('data-stall-profile',product.stall_id);stall.setAttribute('aria-label',`Open ${product.stall_name} stall profile`);stall.innerHTML=`<span class="stall-mini-logo">${product.stall_logo_url?`<img src="${esc(product.stall_logo_url)}" alt="">`:`${esc(product.stall_name.trim().charAt(0).toUpperCase())}`}</span><span>${esc(product.stall_name)}</span>`;stall.insertAdjacentHTML('afterend',`<small class="product-service-note">${product.stall_open?`Open now · ${esc(product.opens_at)}–${esc(product.closes_at)} PHT`:`Closed · opens ${esc(product.opens_at)} PHT`}</small>`)}
+    if(stall){stall.setAttribute('role','button');stall.setAttribute('tabindex','0');stall.setAttribute('data-stall-profile',product.stall_id);stall.setAttribute('aria-label',`Open ${product.stall_name} stall profile`);stall.innerHTML=`<span class="stall-mini-logo">${product.stall_logo_url?`<img src="${esc(product.stall_logo_url)}" alt="">`:`${esc(product.stall_name.trim().charAt(0).toUpperCase())}`}</span><span>${esc(product.stall_name)}</span>`;stall.insertAdjacentHTML('afterend',`<small class="product-service-note ${product.stall_on_break?'is-on-break':''}">${product.stall_on_break?`On a short break - be right back`:product.stall_open?`Open now · ${esc(product.opens_at)}–${esc(product.closes_at)} PHT`:`Closed · opens ${esc(product.opens_at)} PHT`}</small>`)}
     const footer=card.querySelector('.product-bottom');
     if(productTags(product))footer?.insertAdjacentHTML('beforebegin',`<div class="product-tag-summary">${productTags(product)}</div>`);
     const stock=Number(product.stock_count),artwork=card.querySelector('.product-art-trigger');
     if(product.available&&Number.isFinite(stock)&&stock>0&&stock<=3&&artwork&&!artwork.querySelector('.product-stock-urgency'))artwork.insertAdjacentHTML('afterbegin','<small class="product-stock-urgency" aria-label="Almost sold out. Only '+stock+' left. Buy now"><b>ONLY '+stock+' LEFT</b><span>Buy now</span></small>');
     const add=card.querySelector('[data-add]');
     if(add){
-      const closed=!product.stall_open;
+      const onBreak=product.stall_on_break,closed=!product.stall_open;
       const soldOut=!product.available;
-      add.disabled=state.paused||closed||soldOut;
-      add.textContent=state.paused?'Paused':closed?'Closed':soldOut?'Sold out':'Add +';
-      if(closed)add.title=`Opens ${product.opens_at}`;
+      add.disabled=state.paused||onBreak||closed||soldOut;
+      add.textContent=state.paused?'Paused':onBreak?'Back soon':closed?'Closed':soldOut?'Sold out':'Add +';
+      if(onBreak)add.title='This stall is taking a short break.';else if(closed)add.title=`Opens ${product.opens_at}`;
       if(product.stock_count!==null&&product.stock_count>3)card.querySelector('.product-bottom')?.insertAdjacentHTML('afterbegin',`<small class="stock-note">${product.stock_count} left</small>`);
     }
   });
@@ -308,6 +351,7 @@ function startFeaturedMotion(){
 }
 function accountTools(){
   const tools=$('#account-tools');
+  const guestStatus=$('#guest-ordering-status');if(guestStatus)guestStatus.hidden=Boolean(state.user)||!state.publicBrowse;
   if(!state.user){const bagCount=cartCount();tools.hidden=!state.publicBrowse;tools.innerHTML=state.publicBrowse?`<button class="sidebar-menu-button guest-menu-trigger" type="button" data-action="open-sidebar" aria-label="Open guest menu" aria-expanded="${state.sidebarOpen}"><span></span><span></span><span></span><b>Menu</b></button><span class="guest-mode-pill">Guest ordering</span><button class="button button-outline button-compact guest-orders-button" type="button" data-workspace-role="buyer" data-workspace-view="orders" aria-label="Open my orders">My orders${state.orders.length?` (${state.orders.length})`:''}</button><button class="button button-primary button-compact header-bag" type="button" data-action="open-cart" aria-label="Open your bag${bagCount?`, ${bagCount} item${bagCount===1?'':'s'}`:''}"><span class="header-bag-label">Your bag</span>${bagCount?`<span class="header-bag-count" aria-hidden="true">${bagCount}</span>`:''}</button>`:'';renderSidebar();updateCartShortcut();return}
   tools.hidden=false;
   const school=state.user.school_name||'Palawan National School';
@@ -317,17 +361,69 @@ function accountTools(){
   renderSidebar();
   updateCartShortcut();
 }
+function passkeyBase64UrlToBytes(value){
+  const normalized=String(value||'').replace(/-/g,'+').replace(/_/g,'/');
+  const binary=atob(normalized+'='.repeat((4-normalized.length%4)%4));
+  return Uint8Array.from(binary,char=>char.charCodeAt(0));
+}
+function passkeyBytesToBase64Url(value){
+  const bytes=new Uint8Array(value||new ArrayBuffer(0));let binary='';
+  bytes.forEach(byte=>{binary+=String.fromCharCode(byte)});
+  return btoa(binary).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
+function passkeyOptionsForBrowser(options){
+  const publicKey={...options,challenge:passkeyBase64UrlToBytes(options.challenge)};
+  if(publicKey.user?.id)publicKey.user={...publicKey.user,id:passkeyBase64UrlToBytes(publicKey.user.id)};
+  for(const key of ['allowCredentials','excludeCredentials']){
+    if(Array.isArray(publicKey[key]))publicKey[key]=publicKey[key].map(item=>({...item,id:passkeyBase64UrlToBytes(item.id)}));
+  }
+  return publicKey;
+}
+function passkeyCredentialForServer(credential,registration){
+  const response=credential.response;
+  const result={id:credential.id,rawId:passkeyBytesToBase64Url(credential.rawId),type:credential.type,
+    authenticatorAttachment:credential.authenticatorAttachment||null,
+    clientExtensionResults:credential.getClientExtensionResults?.()||{},response:{clientDataJSON:passkeyBytesToBase64Url(response.clientDataJSON)}};
+  if(registration){
+    result.response.attestationObject=passkeyBytesToBase64Url(response.attestationObject);
+    if(typeof response.getTransports==='function')result.response.transports=response.getTransports();
+  }else{
+    result.response.authenticatorData=passkeyBytesToBase64Url(response.authenticatorData);
+    result.response.signature=passkeyBytesToBase64Url(response.signature);
+    result.response.userHandle=response.userHandle?passkeyBytesToBase64Url(response.userHandle):null;
+  }
+  return result;
+}
+async function refreshAdminPasskeyStatus(){
+  if(state.user?.role!=='admin')return;
+  const summary=$('#admin-passkey-summary'),requireButton=$('#admin-passkey-require'),registerButton=$('#admin-passkey-register');
+  if(!summary)return;
+  try{
+    const status=await api('/api/admin/passkeys/status');
+    const count=Number(status.count)||0;
+    summary.textContent=status.passkey_only?'Passkey-only sign-in is on.':count===0?'Not set up. Add a passkey, then a backup on another device or security key.':count===1?'1 passkey saved. Add a backup on another device or security key before switching.':`${count} passkeys saved. Password sign-in is still on.`;
+    if(registerButton)registerButton.textContent=count?'Add another passkey':'Add this device';
+    if(requireButton){requireButton.hidden=Boolean(status.passkey_only);requireButton.disabled=count<2;requireButton.textContent=count<2?'Add a backup passkey first':'Require passkeys for admin sign-in';}
+  }catch(error){summary.textContent=error.message||'Passkey setup status is unavailable.'}
+}
+function passkeyStatusMessage(message,element=null){
+  const target=element||$('#auth-form-slot .auth-front-status');
+  if(!target)return;
+  target.textContent=message||'';
+  target.classList.toggle('is-visible',Boolean(message));
+}
 function renderSidebar(){
   const user=state.user,account=$('#sidebar-account'),navigation=$('#sidebar-navigation');
   if(!account||!navigation)return;
+  account.classList.toggle('is-guest-account',!user&&state.publicBrowse);
   const dangerZone=$('.sidebar-danger-zone'),logoutButton=$('.sidebar-logout'),settingsWrap=$('.sidebar-settings-wrap');
   if(dangerZone)dangerZone.hidden=!user;
   if(logoutButton)logoutButton.hidden=!user;
   if(!user){
     if(!state.publicBrowse)return;
-    const ordersCount=state.orders.filter(order=>!['completed','declined'].includes(order.status)).length;
-    account.innerHTML=`<div class="guest-sidebar-card"><span class="guest-sidebar-icon" aria-hidden="true">⌂</span><span><strong>Browsing as a guest</strong><small>No customer account needed to explore PNS stalls.</small></span></div>`;
-    navigation.innerHTML=`<button type="button" class="sidebar-nav-link ${state.buyerView==='menu'?'is-active':''}" data-workspace-role="buyer" data-workspace-view="menu" ${state.buyerView==='menu'?'aria-current="page"':''}><span class="sidebar-link-icon" aria-hidden="true">⌕</span><span>Browse food</span></button><button type="button" class="sidebar-nav-link ${state.buyerView==='orders'?'is-active':''}" data-workspace-role="buyer" data-workspace-view="orders" ${state.buyerView==='orders'?'aria-current="page"':''}><span class="sidebar-link-icon" aria-hidden="true">↗</span><span>My orders</span>${ordersCount?`<small>${ordersCount}</small>`:''}</button><button type="button" class="sidebar-nav-link guest-owner-link" data-action="guest-owner-login"><span class="sidebar-link-icon" aria-hidden="true">⌂</span><span>Stall owner sign in</span><span aria-hidden="true">→</span></button><button type="button" class="sidebar-nav-link guest-leave-link" data-action="leave-guest-mode"><span class="sidebar-link-icon" aria-hidden="true">↩</span><span>Leave guest mode</span></button>`;
+    const guestPhoto=guestPhotoDataUrl(),guestInitial=esc((state.guestName||'Guest').trim().charAt(0).toUpperCase()||'G');
+    account.innerHTML=`<div class="guest-sidebar-card"><div class="guest-sidebar-card-heading"><span class="guest-sidebar-icon" aria-hidden="true">⌂</span><span><strong>Browsing as a guest</strong><small>No customer account needed to explore PNS stalls.</small></span></div><div class="guest-sidebar-profile"><span class="guest-sidebar-avatar">${guestPhoto?`<img src="${esc(guestPhoto)}" alt="Your guest profile photo">`:guestInitial}</span><div class="guest-sidebar-profile-copy"><strong>Guest profile</strong><small>Optional · saved on this device</small></div></div><div class="guest-sidebar-photo-actions"><label class="sidebar-photo-picker"><input name="guest_photo_file" type="file" accept="image/jpeg,image/png,image/webp"><span>${guestPhoto?'Change photo':'Add a photo'}</span><small>JPG, PNG, or WebP · max 2 MB</small></label>${guestPhoto?'<button class="guest-photo-remove" type="button" data-action="remove-guest-photo">Remove</button>':''}</div></div>`;
+    navigation.innerHTML=`<section class="sidebar-nav-section" aria-label="Guest options"><span class="sidebar-nav-heading">GUEST OPTIONS</span><button type="button" class="sidebar-nav-link guest-owner-link" data-action="guest-owner-login"><span class="sidebar-link-icon" aria-hidden="true">⌂</span><span>Stall owner sign in</span><span class="sidebar-nav-arrow" aria-hidden="true">→</span></button><button type="button" class="sidebar-nav-link guest-leave-link" data-action="leave-guest-mode"><span class="sidebar-link-icon" aria-hidden="true">↩</span><span>Leave guest mode</span><span class="sidebar-nav-arrow" aria-hidden="true">→</span></button></section>`;
     if(settingsWrap)settingsWrap.hidden=false;
     const settings=$('#sidebar-settings-panel'),settingsButton=$('#sidebar-settings-toggle');
     if(settings)settings.hidden=!state.sidebarSettingsOpen;
@@ -335,18 +431,20 @@ function renderSidebar(){
     renderNotificationSettings();applyTheme();syncSidebarState();return;
   }
   if(settingsWrap)settingsWrap.hidden=false;
+  const adminPasskeySetting=$('#admin-passkey-setting');
+  if(adminPasskeySetting)adminPasskeySetting.hidden=user.role!=='admin';
+  if(user.role==='admin')refreshAdminPasskeyStatus();
+  account.classList.remove('is-guest-account');
   const school=user.school_name||'Palawan National School';
   const initial=esc(user.name.trim().charAt(0).toUpperCase()),profilePhoto=user.profile_photo_url?`<img src="${esc(user.profile_photo_url)}" alt="">`:initial;
-  account.innerHTML=`<div class="sidebar-account-main"><span class="sidebar-avatar">${profilePhoto}</span><span class="sidebar-account-copy"><strong>${esc(user.name)}</strong><small>${esc(roleLabel[user.role])} · ${esc(school)}</small></span><button type="button" class="sidebar-profile-trigger" data-action="toggle-profile" aria-expanded="${state.sidebarProfileOpen}">${state.sidebarProfileOpen?'Close':'Edit profile'}</button></div><section class="sidebar-profile-editor" ${state.sidebarProfileOpen?'':'hidden'} aria-label="Edit your profile"><form class="sidebar-profile-form" data-form="user-profile"><div class="sidebar-profile-photo-row"><span class="sidebar-profile-avatar">${profilePhoto}</span><label class="sidebar-photo-picker"><input name="photo_file" type="file" accept="image/jpeg,image/png,image/webp"><span>Choose photo</span><small>JPG, PNG, WebP · max 2 MB</small></label></div><label class="sidebar-profile-name">Display name<input name="name" autocomplete="name" maxlength="80" required value="${esc(user.name)}"></label>${user.profile_photo_url?'<label class="sidebar-profile-remove"><input name="remove_photo" type="checkbox" value="true"><span>Remove current photo</span></label>':''}<button class="button button-primary button-small" type="submit">Save profile</button></form></section>`;
-  const dashboard={buyer:['buyer','menu','Browse food'],owner:['owner','dashboard','Today'],admin:['admin','overview','Overview']}[user.role];
-  const orders={buyer:['buyer','orders','My orders','↗'],owner:['owner','orders','Orders','↗'],admin:['admin','orders','Orders','↗']}[user.role];
+  account.innerHTML=`<div class="sidebar-account-main"><span class="sidebar-avatar">${profilePhoto}</span><span class="sidebar-account-copy"><strong>${esc(user.name)}</strong><small>${esc(roleLabel[user.role])} · ${esc(school)}</small></span><button type="button" class="sidebar-profile-trigger" data-action="toggle-profile" aria-expanded="${state.sidebarProfileOpen}">${state.sidebarProfileOpen?'Close':'Edit profile'}</button></div><section class="sidebar-profile-editor" ${state.sidebarProfileOpen?'':'hidden'} aria-label="Edit your profile"><p class="sidebar-profile-optional">Adding a profile photo is optional. You can change your display name here.</p><form class="sidebar-profile-form" data-form="user-profile"><div class="sidebar-profile-photo-row"><span class="sidebar-profile-avatar">${profilePhoto}</span><label class="sidebar-photo-picker"><input name="photo_file" type="file" accept="image/jpeg,image/png,image/webp"><span>Choose photo</span><small>JPG, PNG, WebP · max 2 MB</small></label></div><label class="sidebar-profile-name">Display name<input name="name" autocomplete="name" maxlength="80" required value="${esc(user.name)}"></label>${user.profile_photo_url?'<label class="sidebar-profile-remove"><input name="remove_photo" type="checkbox" value="true"><span>Remove current photo</span></label>':''}<button class="button button-primary button-small" type="submit">Save profile</button></form></section>`;
   const navButton=([role,view,label,icon],active)=>`<button type="button" class="sidebar-nav-link ${active?'is-active':''}" data-workspace-role="${role}" data-workspace-view="${view}" ${active?'aria-current="page"':''}><span class="sidebar-link-icon" aria-hidden="true">${icon}</span><span>${label}</span></button>`;
   const activeView={buyer:state.buyerView,owner:state.ownerView,admin:state.adminView}[user.role];
   let links='';
-  if(dashboard)links+=navButton([dashboard[0],dashboard[1],'Dashboard','⌂'],activeView===dashboard[1]);
-  if(orders)links+=navButton([orders[0],orders[1],orders[2],orders[3]],activeView===orders[1]);
-  if(user.role==='runner')links=`<button type="button" class="sidebar-nav-link is-active" data-sidebar-scroll="runner-summary" aria-current="page"><span class="sidebar-link-icon" aria-hidden="true">⌂</span><span>Dashboard</span></button><button type="button" class="sidebar-nav-link" data-sidebar-scroll="runner-queue"><span class="sidebar-link-icon" aria-hidden="true">↗</span><span>Delivery queue</span></button>`;
-  navigation.innerHTML=links;
+  if(user.role==='owner')links=navButton(['owner','stall','Stall setup','⌂'],activeView==='stall')+navButton(['owner','insights','Insights','◉'],activeView==='insights');
+  if(user.role==='admin')links=navButton(['admin','reports','Reports','▤'],activeView==='reports')+navButton(['admin','accounts','Accounts','◎'],activeView==='accounts');
+  const navHeading=user.role==='owner'?'STALL MANAGEMENT':'ADMIN TOOLS';
+  navigation.innerHTML=links?`<section class="sidebar-nav-section" aria-label="${navHeading}"><span class="sidebar-nav-heading">${navHeading}</span>${links}</section>`:'';
   const settings=$('#sidebar-settings-panel'),settingsButton=$('#sidebar-settings-toggle');
   if(settings)settings.hidden=!state.sidebarSettingsOpen;
   if(settingsButton)settingsButton.setAttribute('aria-expanded',String(state.sidebarSettingsOpen));
@@ -355,7 +453,7 @@ function renderSidebar(){
   syncSidebarState();
 }
 function syncSidebarState(){
-  const sidebar=$('#app-sidebar'),backdrop=$('#sidebar-backdrop'),button=$('.sidebar-menu-button');
+  const sidebar=$('#app-sidebar'),backdrop=$('#sidebar-backdrop');
   if(!sidebar||!backdrop)return;
   const open=Boolean(state.sidebarOpen&&(state.user||state.publicBrowse));
   sidebar.classList.toggle('is-open',open);
@@ -364,36 +462,113 @@ function syncSidebarState(){
   backdrop.hidden=!open;
   document.body.classList.toggle('sidebar-open',open);
   const appShell=$('#app');if(appShell)appShell.inert=open;
-  if(button)button.setAttribute('aria-expanded',String(open));
+  document.querySelectorAll('[data-action="open-sidebar"]').forEach(button=>button.setAttribute('aria-expanded',String(open)));
+  syncNotificationInboxShortcut();
+  renderRoleBottomNav();
 }
 function closeSidebar(){state.sidebarOpen=false;syncSidebarState()}
+function focusSidebarTrigger(){(document.querySelector('#role-bottom-nav:not([hidden]) [data-action="open-sidebar"]')||$('.sidebar-menu-button'))?.focus({preventScroll:true})}
+function syncNotificationAppBadge(){
+  if(typeof navigator==='undefined')return;
+  const count=Math.max(0,Number(state.notificationUnreadCount)||0);
+  try{
+    const update=count&&typeof navigator.setAppBadge==='function'
+      ?navigator.setAppBadge(Math.min(count,99))
+      :!count&&typeof navigator.clearAppBadge==='function'?navigator.clearAppBadge():null;
+    update?.catch?.(()=>{});
+  }catch(_){/* App badges are optional and unsupported browsers should stay quiet. */}
+}
+function syncNotificationInboxShortcut(){
+  syncNotificationAppBadge();
+  const button=$('#sidebar-notification-inbox'),badge=$('#sidebar-inbox-count');if(!button||!badge)return;
+  const available=Boolean(state.user||state.guestSessionId);
+  button.hidden=!available;
+  button.setAttribute('aria-label',state.notificationUnreadCount?`Notifications, ${state.notificationUnreadCount} unread`:'Notifications');
+  badge.hidden=!state.notificationUnreadCount;
+  badge.textContent=state.notificationUnreadCount>99?'99+':String(state.notificationUnreadCount);
+}
+function renderNotificationInbox(){
+  const content=$('#notification-inbox-content');if(!content)return;
+  if(!state.notificationInboxAvailable){content.innerHTML='<p class="notification-inbox-state">The in-app inbox needs the BiteHub database migration. Device alerts can still appear when they are configured for this server.</p>';return}
+  if(state.notificationInboxLoading&&!state.notifications.length){content.innerHTML='<p class="notification-inbox-state" role="status">Loading your updates…</p>';return}
+  const markAll=state.notificationUnreadCount?'<button type="button" class="notification-inbox-mark-all" data-action="mark-notifications-read">Mark all as read</button>':'';
+  if(!state.notifications.length){content.innerHTML=`${markAll}<div class="notification-inbox-empty"><span aria-hidden="true">✦</span><strong>You’re all caught up</strong><p>Order changes and stall messages will appear here.</p></div>`;return}
+  content.innerHTML=`<div class="notification-inbox-tools"><span>${state.notificationUnreadCount?`${state.notificationUnreadCount} unread`:'All caught up'}</span>${markAll}</div><div class="notification-inbox-list">${state.notifications.map(item=>{const unread=!item.read_at,when=new Date(item.created_at),label=Number.isNaN(when.getTime())?'':new Intl.DateTimeFormat(undefined,{dateStyle:'medium',timeStyle:'short'}).format(when);return `<button type="button" class="notification-inbox-item ${unread?'is-unread':''}" data-action="open-inbox-notification" data-notification-id="${Number(item.id)}"><span class="notification-inbox-dot" aria-hidden="true"></span><span class="notification-inbox-copy"><strong>${esc(item.title)}</strong><small>${esc(item.body)}</small><time>${esc(label)}</time></span><span class="notification-inbox-arrow" aria-hidden="true">→</span></button>`}).join('')}</div>`;
+}
+async function loadNotificationInbox(){
+  if(!state.user&&!state.guestSessionId){state.notifications=[];state.notificationUnreadCount=0;syncNotificationInboxShortcut();return}
+  if(!state.notificationInboxAvailable||state.notificationInboxLoading)return;
+  state.notificationInboxLoading=true;
+  if($('#notification-inbox-dialog')?.open)renderNotificationInbox();
+  try{const result=await api('/api/notifications/inbox');state.notifications=result.notifications||[];state.notificationUnreadCount=Number(result.unread_count)||0}
+  catch(error){if(/migration/i.test(error.message))state.notificationInboxAvailable=false}
+  finally{state.notificationInboxLoading=false;syncNotificationInboxShortcut();if($('#notification-inbox-dialog')?.open)renderNotificationInbox()}
+}
+async function openNotificationInbox(){
+  const dialog=$('#notification-inbox-dialog');if(!dialog)return;
+  if(!dialog.open)dialog.showModal();
+  renderNotificationInbox();
+  await loadNotificationInbox();
+}
 function renderNotificationSettings(){
   const setting=$('#sidebar-notification-setting');if(!setting)return;
-  const message=state.pushEnabled?'Order updates will appear as device alerts.':state.pushAvailable?'Get an alert when an order arrives or its status changes.':'Device alerts need the server notification package. In-page updates will still work.';
-  const status=state.pushEnabled?'On for this device':state.pushAvailable?'Ready to enable':'Unavailable';
-  setting.innerHTML=`<div class="sidebar-notification-heading"><span class="sidebar-preference-icon" aria-hidden="true">♧</span><span class="sidebar-preference-copy"><strong>Order notifications</strong><small>${status}</small></span></div><p class="sidebar-notification-description">${message}</p>${state.pushEnabled?'<button class="button button-outline button-small" data-action="disable-notifications">Turn off alerts</button>':`<button class="button button-primary button-small" data-action="enable-notifications" ${state.pushAvailable?'':'disabled'}>Enable alerts</button>`}`;
+  const blocked=state.pushPermission==='denied';
+  const message=state.pushEnabled?'Order updates can appear in your phone’s notification center. Alert sound follows your device’s notification settings.':blocked?'Notifications are blocked by this browser. Allow them for BiteHub in site settings, then turn them on here.':state.pushAvailable?'Get a helpful alert when an order arrives, changes, or gets a new message.':notificationAvailabilityMessage();
+  const status=state.pushEnabled?'On for this device':blocked?'Blocked in browser':state.pushAvailable?'Ready when you are':'Not available here';
+  setting.innerHTML=`<div class="sidebar-notification-heading"><span class="sidebar-preference-icon" aria-hidden="true">♧</span><span class="sidebar-preference-copy"><strong>Order alerts</strong><small>${status}</small></span></div><p class="sidebar-notification-description">${message}</p>${state.pushEnabled?'<button class="button button-outline button-small" data-action="disable-notifications">Turn off alerts</button>':`<button class="button button-primary button-small" data-action="enable-notifications" ${state.pushAvailable&&!blocked?'':'disabled'}>Turn on alerts</button>`}`;
+}
+function notificationAvailabilityMessage(){
+  if(!state.pushServerReady)return 'Device alerts are not configured on the BiteHub server yet. Order updates will still appear in BiteHub.';
+  if(!window.isSecureContext)return 'Device alerts require BiteHub to be open over HTTPS.';
+  if(isIOSDevice()&&!isIOSHomeScreenApp())return 'On iPhone or iPad (iOS/iPadOS 16.4+), add BiteHub to your Home Screen, open it there, then turn on alerts.';
+  return 'This browser cannot receive device alerts. You can still check order updates in BiteHub.';
+}
+function isIOSDevice(){return /iPhone|iPad|iPod/i.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1)}
+function isIOSHomeScreenApp(){return navigator.standalone===true||Boolean(window.matchMedia?.('(display-mode: standalone)').matches)}
+function renderNotificationNudge(role){
+  const guest=role==='guest'&&!state.user&&state.publicBrowse&&Boolean(state.guestSessionId);
+  if((!guest&&(!state.user||state.user.role!==role))||!state.pushAvailable||state.pushEnabled||state.pushPermission==='denied'||state.notificationPromptDismissed)return '';
+  if((role==='buyer'||guest)&&!state.orders.length)return '';
+  const owner=role==='owner';
+  return `<aside class="notification-nudge" aria-label="Optional order alerts"><span class="notification-nudge-icon" aria-hidden="true">♧</span><div class="notification-nudge-copy"><strong>${owner?'Catch new orders and customer messages':'Keep up with your order'}</strong><p>${owner?'Get an alert when a new order arrives or a customer messages you.':'Get a device alert when your order changes or the stall replies.'}</p></div><div class="notification-nudge-actions"><button type="button" class="button button-primary button-small" data-action="enable-notifications">Turn on alerts</button><button type="button" class="notification-nudge-later" data-action="dismiss-notifications-nudge">Not now</button></div></aside>`;
+}
+function mountNotificationNudge(role){
+  const markup=renderNotificationNudge(role);if(!markup)return;
+  const page=role==='buyer'||role==='guest'?root.querySelector('#buyer-orders'):root.querySelector('.owner-order-queue');
+  page?.querySelector('.section-title')?.insertAdjacentHTML('afterend',markup);
 }
 async function loadNotificationState(){
-  if(!state.user)return;
+  if(!state.user&&!state.guestSessionId)return;
+  if(!state.user){if(guestNotificationStateRequested)return;guestNotificationStateRequested=true}
   try{
     const [config,status]=await Promise.all([api('/api/notifications/config'),api('/api/notifications/status')]);
-    state.pushAvailable=Boolean(window.isSecureContext&&config.available&&config.public_key&&'serviceWorker'in navigator&&'PushManager'in window&&'Notification'in window);
-    const registration=await navigator.serviceWorker.getRegistration();
+    state.pushServerReady=Boolean(config.available&&config.public_key&&(state.user||config.guest_available));
+    state.pushPublicKey=state.pushServerReady?config.public_key:'';
+    state.pushAvailable=Boolean(window.isSecureContext&&state.pushServerReady&&'serviceWorker'in navigator&&'PushManager'in window&&'Notification'in window&&(!isIOSDevice()||isIOSHomeScreenApp()));
+    let registration=state.pushAvailable?await navigator.serviceWorker.getRegistration():null;
+    if(state.pushAvailable&&!registration)registration=await navigator.serviceWorker.register('/sw.js');
+    if(state.pushAvailable)registration=await navigator.serviceWorker.ready;
+    state.pushRegistration=registration;
+    state.pushPermission='Notification'in window?Notification.permission:'default';
     const subscription=await registration?.pushManager.getSubscription();
-    state.pushEnabled=Boolean(status.enabled&&subscription);
-  }catch(_){state.pushAvailable=false;state.pushEnabled=false}
-  if(state.user)render();
+    state.pushEnabled=Boolean(status.enabled&&subscription&&state.pushPermission==='granted');
+  }catch(_){state.pushAvailable=false;state.pushEnabled=false;state.pushRegistration=null;if(!state.user)guestNotificationStateRequested=false}
+  if(state.user||state.publicBrowse)render();
 }
 function applicationServerKey(value){const padding='='.repeat((4-value.length%4)%4),raw=atob(value.replace(/-/g,'+').replace(/_/g,'/')+padding);return Uint8Array.from(raw,char=>char.charCodeAt(0))}
 async function enablePushNotifications(){
   if(!window.isSecureContext||!('serviceWorker'in navigator)||!('PushManager'in window)||!('Notification'in window))throw new Error('Device alerts need HTTPS (or localhost) and a browser that supports push notifications.');
-  const config=await api('/api/notifications/config');if(!config.available||!config.public_key)throw new Error('Device alerts are not set up on the server yet.');
-  const permission=await Notification.requestPermission();if(permission!=='granted')throw new Error('Allow notifications in your browser settings to receive order alerts.');
-  const registration=await navigator.serviceWorker.register('/sw.js');await navigator.serviceWorker.ready;
+  if(!state.pushAvailable||!state.pushPublicKey)throw new Error(notificationAvailabilityMessage());
+  if(Notification.permission==='denied'){state.pushPermission='denied';render();throw new Error('Notifications are blocked for BiteHub. Allow them in your browser’s site settings, then try again.');}
+  const permission=await Notification.requestPermission();state.pushPermission=permission;
+  if(permission!=='granted'){render();throw new Error(permission==='denied'?'Notifications are blocked for BiteHub. Allow them in your browser’s site settings, then try again.':'No problem. You can turn alerts on later from Settings.');}
+  const registration=state.pushRegistration||await navigator.serviceWorker.ready;
   let subscription=await registration.pushManager.getSubscription();
-  if(!subscription)subscription=await registration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:applicationServerKey(config.public_key)});
+  const appKey=applicationServerKey(state.pushPublicKey),currentKey=subscription?.options?.applicationServerKey;
+  if(subscription&&currentKey){const existingKey=new Uint8Array(currentKey);if(existingKey.length!==appKey.length||appKey.some((value,index)=>value!==existingKey[index])){await subscription.unsubscribe();subscription=null}}
+  if(!subscription)subscription=await registration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:appKey});
   await api('/api/notifications/subscriptions',{method:'POST',body:json({subscription:subscription.toJSON()})});
-  state.pushAvailable=true;state.pushEnabled=true;render();toast('Order notifications are on for this device.');
+  state.pushAvailable=true;state.pushEnabled=true;state.pushRegistration=registration;state.notificationPromptDismissed=true;render();toast('Order alerts are on for this device.');
 }
 async function disablePushNotifications(){
   const registration=await navigator.serviceWorker.getRegistration();
@@ -405,14 +580,14 @@ async function disablePushNotifications(){
 async function refresh(includeMenu=true){
   if(!state.user){
     if(!state.publicBrowse){renderAuthWall();return}
-    if(refreshInFlight)return;
+    if(refreshInFlight){refreshQueued=true;refreshQueuedMenu=refreshQueuedMenu||includeMenu;return}
     refreshInFlight=true;
-    try{const menu=await api('/api/products');state.products=menu.products;state.featuredProducts=menu.featured_products||[];state.paused=menu.ordering_paused;await refreshGuestOrders();render()}
-    catch(error){renderError(error.message)}
-    finally{refreshInFlight=false}
+    try{const menu=await api('/api/products');state.products=menu.products;state.featuredProducts=menu.featured_products||[];state.weeklyMenu=menu.weekly_menu||[];state.weeklyMenuAvailable=menu.weekly_menu_available!==false;state.paused=menu.ordering_paused;for(const item of state.cart.values()){const latest=state.products.find(product=>product.id===item.id);if(latest)Object.assign(item,latest)}await refreshGuestOrders();render();if($('#cart-dialog')?.open)renderCart()}
+    catch(error){renderError(apiErrorMessage(error))}
+    finally{refreshInFlight=false;if(refreshQueued){const queuedMenu=refreshQueuedMenu;refreshQueued=false;refreshQueuedMenu=false;queueMicrotask(()=>refresh(queuedMenu))}}
     return;
   }
-  if(refreshInFlight)return;
+  if(refreshInFlight){refreshQueued=true;refreshQueuedMenu=refreshQueuedMenu||includeMenu;return}
   refreshInFlight=true;
   const userId=state.user.id;
   const role=state.user.role,now=Date.now();
@@ -425,32 +600,36 @@ async function refresh(includeMenu=true){
       loadMenu?api('/api/products'):Promise.resolve(null),api('/api/orders'),
       loadReach?api('/api/stall/analytics'):Promise.resolve(null),
       loadOverview?api('/api/admin/overview'):Promise.resolve(null),
-      loadReports?api('/api/admin/reports'):Promise.resolve(null)]);
+      loadReports?api('/api/admin/reports').then(data=>({data})).catch(error=>({error})):Promise.resolve(null)]);
     if(state.user?.id!==userId)return;
     const previousStatuses=orderBaselineUserId===userId?new Map(state.orders.map(order=>[order.id,order.status])):new Map();
     const changedOrders=orders.orders.filter(order=>previousStatuses.has(order.id)&&previousStatuses.get(order.id)!==order.status);
-    if(menu){state.products=menu.products;state.featuredProducts=menu.featured_products||[];lastMenuRefresh=Date.now()}
+    if(menu){state.products=menu.products;state.featuredProducts=menu.featured_products||[];state.weeklyMenu=menu.weekly_menu||[];state.weeklyMenuAvailable=menu.weekly_menu_available!==false;lastMenuRefresh=Date.now();for(const item of state.cart.values()){const latest=state.products.find(product=>product.id===item.id);if(latest)Object.assign(item,latest)}}
     if(reach){state.reachAnalytics=reach;lastReachRefresh=Date.now()}
     if(overview){state.overview=overview;lastOverviewRefresh=Date.now()}
-    if(reports){state.adminReports=reports;lastReportsRefresh=Date.now()}
+    if(reports?.error){state.adminReportsError=apiErrorMessage(reports.error);lastReportsRefresh=Date.now()}
+    else if(reports?.data){state.adminReports=reports.data;state.adminReportsError='';lastReportsRefresh=Date.now()}
     state.paused=orders.ordering_paused;state.orders=orders.orders;
     if(state.user.role==='owner'){
       state.user.stall_status=orders.stall_status;
-      if(menu){state.user.stall_opens_at=menu.owner_hours.opens_at;state.user.stall_closes_at=menu.owner_hours.closes_at;state.user.stall_prep_minutes=menu.owner_prep_minutes;state.user.stall_pickup_slot_capacity=menu.owner_pickup_capacity}
+      if(menu){state.user.stall_opens_at=menu.owner_hours.opens_at;state.user.stall_closes_at=menu.owner_hours.closes_at;state.user.stall_prep_minutes=menu.owner_prep_minutes;state.user.stall_pickup_slot_capacity=menu.owner_pickup_capacity;state.user.stall_on_break=menu.owner_stall_on_break===true}
     }
     if(state.user?.id!==userId)return;
-    render();
+    render();if($('#cart-dialog')?.open)renderCart();
     orderBaselineUserId=userId;
     if(state.user.role==='buyer'&&changedOrders.length){
-      const order=changedOrders[0],status=statusLabel[order.status]||order.status;
+      const order=changedOrders[0],status=orderStatusText(order,'buyer');
       toast(changedOrders.length===1?`Order #${order.id} is now ${status.toLowerCase()}.`:`You have ${changedOrders.length} order status updates.`);
     }
-  }catch(error){if(state.user?.id===userId){if(orderBaselineUserId===userId)toast(`Connection interrupted. Showing the last loaded information; retrying automatically. ${error.message}`);else renderError(error.message)}}
-  finally{refreshInFlight=false}
+  }catch(error){if(state.user?.id===userId){if(orderBaselineUserId===userId)toast(`Connection interrupted. Showing the last loaded information; retrying automatically. ${apiErrorMessage(error)}`);else renderError(apiErrorMessage(error))}}
+  finally{refreshInFlight=false;if(refreshQueued){const queuedMenu=refreshQueuedMenu;refreshQueued=false;refreshQueuedMenu=false;queueMicrotask(()=>refresh(queuedMenu))}}
 }
 function startAutoRefresh(){
   clearTimeout(refreshTimer);
   if(!state.user&&!state.publicBrowse)return;
+  if(!state.user&&state.guestSessionId)loadNotificationState();
+  loadNotificationInbox();
+  if(notificationInboxTimer===null)notificationInboxTimer=setInterval(()=>{if(document.visibilityState==='visible')loadNotificationInbox()},30000);
   const canRefresh=()=>Boolean(state.user||state.publicBrowse);
   const schedule=delay=>{
     refreshTimer=setTimeout(async()=>{
@@ -460,30 +639,53 @@ function startAutoRefresh(){
   };
   schedule(document.visibilityState==='visible'?(state.user?3500+Math.random()*1000:8000+Math.random()*2000):30000);
 }
+function renderGuestTransition(){
+  state.publicBrowse=true;
+  state.buyerView='menu';
+  const app=$('#app');
+  app?.classList.remove('auth-open');
+  app?.classList.add('guest-entering');
+  root.setAttribute('aria-busy','true');
+  accountTools();
+  root.innerHTML=`<section class="guest-market-loading" role="status" aria-live="polite" aria-busy="true"><div class="guest-market-loading-banner"><div class="guest-market-loading-copy"><span class="eyebrow">THE PNS CAMPUS MARKET</span><h1>Fresh finds,<br><span>happy breaks.</span></h1><p>Opening the campus market…</p><div class="guest-market-loading-track" aria-hidden="true"><span></span></div></div><div class="guest-market-loading-art" aria-hidden="true"><span class="guest-loading-plate"></span><span class="guest-loading-food guest-loading-food--meal">🍱</span><span class="guest-loading-food guest-loading-food--burger">🍔</span><span class="guest-loading-food guest-loading-food--drink">🥤</span><i>✦</i></div></div><div class="guest-market-loading-catalog" aria-hidden="true"><span class="guest-market-loading-title"></span><div class="guest-market-loading-cards"><span></span><span></span><span></span></div></div></section>`;
+}
 async function continueAsGuest(){
-  const result=await api('/api/guest/session',{method:'POST',body:json({name:state.guestName})});
+  renderGuestTransition();
+  let result;
+  try{result=await api('/api/guest/session',{method:'POST',body:json({name:state.guestName})})}
+  catch(error){
+    state.publicBrowse=false;
+    state.guestSessionId=null;
+    state.frontGuestStarted=true;
+    $('#app')?.classList.remove('guest-entering');
+    root.removeAttribute('aria-busy');
+    renderAuthWall('front','buyer');
+    throw error;
+  }
   try{sessionStorage.removeItem(GUEST_LEFT_STORAGE_KEY)}catch{}
   state.guestSessionId=result.guest_session?.id||null;
+  guestNotificationStateRequested=false;
   clearTimeout(refreshTimer);
   state.publicBrowse=true;state.authRole='buyer';state.buyerView='menu';
   document.querySelector('#app')?.classList.remove('auth-open');
   history.pushState({workspace:'buyer',view:'menu'},'','#menu');
-  await refresh();startAutoRefresh();
+  await refresh();loadNotificationState();startAutoRefresh();
   toast(`Welcome, ${state.guestName}. Add items to your bag when you’re ready to order.`);
 }
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&(state.user||state.publicBrowse)){clearTimeout(refreshTimer);refresh(false).finally(startAutoRefresh)}});
-const workspaceHashMap={'#menu':['buyer','menu'],'#buyer-orders':['buyer','orders'],'#owner-dashboard':['owner','dashboard'],'#owner-orders':['owner','orders'],'#owner-menu':['owner','menu'],'#owner-stall':['owner','stall'],'#owner-insights':['owner','insights'],'#admin-overview':['admin','overview'],'#admin-stalls':['admin','stalls'],'#admin-orders':['admin','orders'],'#admin-reports':['admin','reports'],'#admin-accounts':['admin','accounts']};
+const workspaceHashMap={'#menu':['buyer','menu'],'#buyer-orders':['buyer','orders'],'#runner-summary':['runner','summary'],'#runner-queue':['runner','queue'],'#owner-dashboard':['owner','dashboard'],'#owner-orders':['owner','orders'],'#owner-menu':['owner','menu'],'#owner-stall':['owner','stall'],'#owner-insights':['owner','insights'],'#admin-overview':['admin','overview'],'#admin-stalls':['admin','stalls'],'#admin-orders':['admin','orders'],'#admin-reports':['admin','reports'],'#admin-accounts':['admin','accounts']};
 function applyWorkspaceHash(){
-  const before=`${state.buyerView}|${state.ownerView}|${state.adminView}`;
+  const before=`${state.buyerView}|${state.ownerView}|${state.adminView}|${state.runnerView}`;
   const target=workspaceHashMap[location.hash],role=target?.[0],view=target?.[1];
-  if(!target){if(state.user?.role==='buyer'||(!state.user&&state.publicBrowse))state.buyerView='menu';if(state.user?.role==='owner')state.ownerView='dashboard';if(state.user?.role==='admin')state.adminView='overview'}
+  if(!target){if(state.user?.role==='buyer'||(!state.user&&state.publicBrowse))state.buyerView='menu';if(state.user?.role==='owner')state.ownerView='dashboard';if(state.user?.role==='admin')state.adminView='overview';if(state.user?.role==='runner')state.runnerView='summary'}
   else{
   if(role==='buyer'&&state.user?.role==='buyer')state.buyerView=view;
   else if(role==='buyer'&&!state.user&&state.publicBrowse)state.buyerView=view;
   if(role==='owner'&&state.user?.role==='owner')state.ownerView=view;
   if(role==='admin'&&state.user?.role==='admin')state.adminView=view;
+  if(role==='runner'&&state.user?.role==='runner')state.runnerView=view;
   }
-  return before!==`${state.buyerView}|${state.ownerView}|${state.adminView}`;
+  return before!==`${state.buyerView}|${state.ownerView}|${state.adminView}|${state.runnerView}`;
 }
 window.addEventListener('popstate',()=>{if((state.user||state.publicBrowse)&&applyWorkspaceHash())render()});
 window.addEventListener('hashchange',()=>{if((state.user||state.publicBrowse)&&applyWorkspaceHash())render()});
@@ -492,6 +694,7 @@ function renderAuthWall(mode='front',role=state.authRole){
   if(mode==='choose'||mode==='login-choose'){mode='front';role='owner'}
   if(mode==='signup')role='owner';
   state.authRole=role;
+  renderRoleBottomNav();
   accountTools();
   document.querySelector('#app')?.classList.add('auth-open');
   updateCartShortcut();
@@ -533,6 +736,18 @@ function renderAuthWall(mode='front',role=state.authRole){
   if(authBack){authBack.dataset.authMode='front';authBack.dataset.authRole='owner';authBack.textContent='← Back to sign in'}
   if(frontLanding&&role==='buyer')guestEntryStarted?renderGuestWelcome():renderGuestStart();
   else if(!choosingRole)renderAuthForm(frontLanding?'login':mode,role,frontLanding);
+  if(frontLanding&&role==='admin'){
+    const adminLoginForm=$('#auth-form-slot form[data-form="login"]');
+    if(adminLoginForm&&!adminLoginForm.querySelector('[data-action="admin-passkey-login"]')){
+      const passkeyButton=document.createElement('button');
+      passkeyButton.type='button';passkeyButton.className='button button-outline button-wide admin-passkey-login';
+      passkeyButton.dataset.action='admin-passkey-login';passkeyButton.textContent='⌑  Continue with a passkey';
+      const hint=document.createElement('p');hint.className='admin-passkey-hint';
+      hint.textContent='Use your device’s Face ID, fingerprint, device PIN, or a security key.';
+      const submit=adminLoginForm.querySelector('button[type="submit"]');
+      submit?.after(passkeyButton,hint);
+    }
+  }
   if(frontLanding){
     const heading=$('.auth-front-heading h2'),intro=$('.auth-front-heading p');
     if(heading)heading.textContent=role==='admin'?'School admin sign in':role==='owner'?'Stall owner sign in':guestEntryStarted?'Explore as a guest':'Discover the campus market';
@@ -600,6 +815,115 @@ function workspaceNav(role,items,active=null){
   if(active)return `<nav class="workspace-nav workspace-tabs workspace-nav-${role}" aria-label="${esc(roleLabel[role]||'Workspace')} navigation">${items.map(([id,label,icon,count])=>`<button type="button" class="workspace-tab ${active===id?'is-active':''}" data-workspace-role="${role}" data-workspace-view="${id}" ${active===id?'aria-current="page"':''}><span aria-hidden="true">${icon}</span>${esc(label)}${count!==undefined?`<small>${count}</small>`:''}</button>`).join('')}</nav>`;
   return `<nav class="workspace-nav workspace-nav-${role}" aria-label="${esc(roleLabel[role]||'Workspace')} navigation">${items.map(([id,label,icon])=>`<a href="#${id}"><span aria-hidden="true">${icon}</span>${esc(label)}</a>`).join('')}</nav>`;
 }
+function renderRoleBottomNav(){
+  const nav=$('#role-bottom-nav'),app=$('#app');if(!nav||!app)return;
+  const role=state.user?.role||(!state.user&&state.publicBrowse?'buyer':null);
+  if(!role){nav.hidden=true;nav.innerHTML='';app.classList.remove('has-role-bottom-nav');document.body.classList.remove('has-role-bottom-nav');return}
+  const current={buyer:state.buyerView,owner:state.ownerView,admin:state.adminView,runner:state.runnerView}[role];
+  const item=([view,label,icon,count],action='')=>{
+    const active=current===view||(action==='open-sidebar'&&state.sidebarOpen),attrs=action?`data-action="${action}"`:`data-workspace-role="${role}" data-workspace-view="${view}"`;
+    const badgeCount=action==='open-cart'?cartCount():count;
+    const badge=badgeCount?`<small class="role-bottom-count" aria-label="${badgeCount} ${action==='open-cart'?'items':'updates'}">${badgeCount>99?'99+':badgeCount}</small>`:'';
+    const bagLabel=action==='open-cart'?` aria-label="Your bag${badgeCount?`, ${badgeCount} items`:''}"`:'';
+    return `<button type="button" class="role-bottom-tab${active?' is-active':''}" ${attrs}${active&&!action?' aria-current="page"':''}${bagLabel}><span class="role-bottom-icon" aria-hidden="true">${icon}</span><span class="role-bottom-label">${label}</span>${badge}</button>`;
+  };
+  const icons={
+    browse:'<svg viewBox="0 0 24 24" focusable="false"><path d="M3.5 10.5 12 4l8.5 6.5v8a1.5 1.5 0 0 1-1.5 1.5h-14a1.5 1.5 0 0 1-1.5-1.5z"/><path d="M9 20v-6h6v6M3.5 10.5h17"/></svg>',
+    orders:'<svg viewBox="0 0 24 24" focusable="false"><path d="M6 3.75h12a1.5 1.5 0 0 1 1.5 1.5v15L16 17.5l-4 2.75-4-2.75-3.5 2.75v-15A1.5 1.5 0 0 1 6 3.75Z"/><path d="M8.5 8h7M8.5 11.5h7M8.5 15h4"/></svg>',
+    bag:'<svg viewBox="0 0 24 24" focusable="false"><path d="M5 8.5h14l1 12H4l1-12Z"/><path d="M8.5 9V6a3.5 3.5 0 0 1 7 0v3M9 13h6"/></svg>',
+    more:'<svg viewBox="0 0 24 24" focusable="false"><circle cx="5" cy="12" r="1.35"/><circle cx="12" cy="12" r="1.35"/><circle cx="19" cy="12" r="1.35"/></svg>',
+    today:'<svg viewBox="0 0 24 24" focusable="false"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/></svg>',
+    menu:'<svg viewBox="0 0 24 24" focusable="false"><path d="M4 10h16M6 10l1 10h10l1-10M9 10V7a3 3 0 0 1 6 0v3"/><path d="M9 14h6"/></svg>',
+    stalls:'<svg viewBox="0 0 24 24" focusable="false"><path d="M4 10h16l-1.25-5H5.25L4 10Z"/><path d="M5 10v10h14V10M9 20v-6h6v6M4 10a2.5 2.5 0 0 0 5 0 2.5 2.5 0 0 0 5 0 2.5 2.5 0 0 0 5 0"/></svg>',
+    home:'<svg viewBox="0 0 24 24" focusable="false"><path d="m3.5 10 8.5-6.5 8.5 6.5v9a1 1 0 0 1-1 1h-15a1 1 0 0 1-1-1z"/><path d="M9 20v-6h6v6"/></svg>',
+    runs:'<svg viewBox="0 0 24 24" focusable="false"><path d="M12 21s7-6.2 7-12a7 7 0 0 0-14 0c0 5.8 7 12 7 12Z"/><circle cx="12" cy="9" r="2.25"/><path d="M4 21h16"/></svg>'
+  };
+  let tabs=[];
+  if(role==='buyer'){
+    const ordersCount=state.orders.filter(order=>!['completed','declined'].includes(order.status)).length;
+    tabs=[item(['menu','Browse',icons.browse]),item(['orders','Orders',icons.orders,ordersCount]),item(['bag','Bag',icons.bag],'open-cart'),item(['more','More',icons.more],'open-sidebar')];
+  }else if(role==='owner'){
+    const activeOrders=state.orders.filter(order=>!['completed','declined'].includes(order.status)).length;
+    tabs=[item(['dashboard','Today',icons.today]),item(['orders','Orders',icons.orders,activeOrders]),item(['menu','Menu',icons.menu]),item(['more','More',icons.more],'open-sidebar')];
+  }else if(role==='admin'){
+    const newOrders=state.orders.filter(order=>order.status==='placed').length;
+    tabs=[item(['overview','Home',icons.home]),item(['stalls','Stalls',icons.stalls]),item(['orders','Orders',icons.orders,newOrders]),item(['more','More',icons.more],'open-sidebar')];
+  }else if(role==='runner'){
+    const activeOrders=state.orders.filter(order=>!['completed','declined'].includes(order.status)).length;
+    tabs=[item(['summary','Today',icons.today]),item(['queue','Runs',icons.runs,activeOrders]),item(['more','More',icons.more],'open-sidebar')];
+  }
+  nav.className=`role-bottom-nav role-bottom-nav-${role}`;
+  nav.dataset.tabCount=String(tabs.length);
+  nav.style.setProperty('--role-tab-count',String(tabs.length));
+  nav.innerHTML=tabs.join('');nav.hidden=false;app.classList.add('has-role-bottom-nav');document.body.classList.add('has-role-bottom-nav');
+}
+function renderOrderMessages(messages){
+  const list=$('#order-messages-list');if(!list)return;
+  const nearBottom=list.scrollHeight-list.scrollTop-list.clientHeight<100;
+  const myRole=state.user?.role||'guest';
+  list.innerHTML=messages.length?messages.map(message=>{
+    const mine=message.sender_role===myRole;
+    const date=new Date(message.created_at),time=Number.isNaN(date.getTime())?'':date.toLocaleString('en-PH',{timeZone:'Asia/Manila',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+    return `<article class="order-message${mine?' is-mine':''}"><div class="order-message-meta"><strong>${mine?'You':esc(message.sender_name)}</strong><time>${esc(time)}</time></div><p>${esc(message.message)}</p></article>`;
+  }).join(''):'<p class="order-message-empty">No messages yet. Ask about this order here.</p>';
+  if(nearBottom)list.scrollTop=list.scrollHeight;
+}
+async function loadOrderMessages(orderId,quiet=false){
+  const list=$('#order-messages-list'),request=++orderMessageRequestSequence;
+  if(!state.user&&!guestOrderToken(orderId)){
+    if(!quiet&&list)list.innerHTML='<p class="order-message-empty" role="alert">This guest order link is unavailable on this device.</p>';
+    return;
+  }
+  const token=state.user?'':guestOrderToken(orderId);
+  try{
+    const result=await api(`/api/orders/${orderId}/messages`,{method:'POST',body:json({action:'list',token})});
+    if(activeOrderMessageOrderId===orderId&&request===orderMessageRequestSequence)renderOrderMessages(result.messages||[]);
+  }catch(error){
+    if(!quiet&&activeOrderMessageOrderId===orderId&&request===orderMessageRequestSequence&&list)list.innerHTML=`<p class="order-message-empty" role="alert">${esc(error.message)}</p>`;
+  }
+}
+function syncOwnerChatNewOrderAlert(){
+  const alert=$('#owner-new-order-chat-alert');if(!alert)return;
+  const count=state.ownerChatNewOrderIds.size,chatOpen=state.user?.role==='owner'&&activeOrderMessageOrderId!==null&&$('#order-messages-dialog')?.open;
+  alert.hidden=!(chatOpen&&count);
+  const message=alert.querySelector('[data-owner-new-order-message]');
+  if(message)message.textContent=count===1?'A new order came in while you were chatting.':`${count} new orders came in while you were chatting.`;
+  const button=alert.querySelector('[data-action="view-owner-new-orders"]');
+  if(button)button.setAttribute('aria-label',count===1?'View new order':'View new orders');
+}
+async function checkOwnerOrdersDuringChat(orderId){
+  const dialog=$('#order-messages-dialog');
+  if(ownerOrderCheckInFlight||state.user?.role!=='owner'||activeOrderMessageOrderId!==orderId||!dialog?.open)return;
+  ownerOrderCheckInFlight=true;
+  try{
+    const result=await api('/api/orders');
+    if(state.user?.role!=='owner'||activeOrderMessageOrderId!==orderId||!dialog.open)return;
+    for(const order of result.orders||[]){
+      const id=Number(order.id);
+      if(Number.isSafeInteger(id)&&id>0&&!ownerMessageKnownOrderIds.has(id)&&!['completed','declined'].includes(order.status))state.ownerChatNewOrderIds.add(id);
+    }
+    syncOwnerChatNewOrderAlert();
+  }catch{}
+  finally{ownerOrderCheckInFlight=false}
+}
+async function openOrderMessages(orderId){
+  const order=state.orders.find(item=>item.id===orderId),dialog=$('#order-messages-dialog');
+  if(!order||!dialog){toast('This order is no longer available. Refresh your orders and try again.');return}
+  activeOrderMessageOrderId=orderId;orderMessageRequestSequence++;
+  state.ownerChatNewOrderIds.clear();ownerMessageKnownOrderIds=new Set(state.orders.map(item=>Number(item.id)));syncOwnerChatNewOrderAlert();
+  const counterpart=state.user?.role==='owner'?order.buyer:order.stall;
+  $('#order-messages-title').textContent=`Order #${order.id} messages`;
+  $('#order-messages-subtitle').textContent=`${counterpart||'Your stall'} · ${order.items.map(item=>`${item.quantity} × ${item.name}`).join(', ')}`;
+  const list=$('#order-messages-list');if(list)list.innerHTML='<p class="order-message-empty">Loading conversation…</p>';
+  const form=$('#order-message-form');if(form){form.dataset.orderId=String(order.id);form.reset()}
+  const status=form?.querySelector('.order-message-status');if(status){status.textContent='';status.classList.remove('is-visible')}
+  if(!dialog.open)dialog.showModal();
+  clearInterval(orderMessageRefreshTimer);
+  await loadOrderMessages(orderId);
+  orderMessageRefreshTimer=setInterval(()=>{
+    if(dialog.open&&document.visibilityState==='visible'&&activeOrderMessageOrderId===orderId){loadOrderMessages(orderId,true);if(state.user?.role==='owner')checkOwnerOrdersDuringChat(orderId)}
+  },5000);
+}
 function stat(label,value,note,icon){return `<article class="stat-card"><span class="stat-icon">${icon}</span><small>${esc(label)}</small><strong>${esc(value)}</strong><span class="stat-note">${esc(note)}</span></article>`}
 function orderCard(order){
   const userRole=state.user?.role||'guest',customerView=userRole==='buyer'||userRole==='guest';
@@ -609,14 +933,17 @@ function orderCard(order){
   const progressSteps=order.fulfillment==='delivery'?['placed','confirmed','preparing','ready','out','completed']:['placed','confirmed','preparing','ready','completed'];
   const progressNames=order.fulfillment==='delivery'?['Received','Accepted','Preparing','Ready','On the way','Delivered']:['Received','Accepted','Preparing','Ready','Picked up'];
   const progressIndex=progressSteps.indexOf(order.status);
-  const progress=customerView&&order.status!=='declined'?`<ol class="order-progress" aria-label="Order progress: ${esc(statusLabel[order.status]||order.status)}">${progressSteps.map((step,index)=>`<li class="${index<progressIndex?'is-done':index===progressIndex?'is-current':''}" ${index===progressIndex?'aria-current="step"':''}><span>${index<progressIndex?'✓':index+1}</span><small>${progressNames[index]}</small></li>`).join('')}</ol>`:order.status==='declined'&&customerView?`<p class="order-declined" role="status">${order.pickup_offer_status==='declined'?'This order was cancelled because pickup at the stall did not work for you.':'This order was declined. Contact the stall if you need help.'}</p>`:'';
-  const feedback=order.feedback?`<p class="order-feedback"><strong>Buyer feedback · ${'★'.repeat(order.feedback.rating)}${'☆'.repeat(5-order.feedback.rating)}</strong>${order.feedback.comment?`<span>${esc(order.feedback.comment)}</span>`:''}</p>`:'';
-  const feedbackForm=userRole==='buyer'&&order.status==='completed'&&!order.feedback?`<form class="feedback-form" data-form="feedback" data-order-id="${order.id}"><label>Rate this order<select name="rating" required><option value="">Choose 1-5</option><option value="5">5 · Great</option><option value="4">4 · Good</option><option value="3">3 · Okay</option><option value="2">2 · Poor</option><option value="1">1 · Bad</option></select></label><label>Comment <span class="field-hint">Optional</span><input name="comment" maxlength="500" placeholder="Tell the stall what went well"></label><button class="button button-outline button-small">Send feedback</button></form>`:'';
+  const progress=customerView&&order.status!=='declined'?`<ol class="order-progress" data-step-count="${progressSteps.length}" aria-label="Order progress: ${esc(orderStatusText(order,userRole))}">${progressSteps.map((step,index)=>`<li class="${index<progressIndex?'is-done':index===progressIndex?'is-current':''}" ${index===progressIndex?'aria-current="step"':''}><span>${index<progressIndex?'✓':index+1}</span><small>${progressNames[index]}</small></li>`).join('')}</ol>`:order.status==='declined'&&customerView?`<p class="order-declined" role="status">${order.cancelled_by_buyer?'You cancelled this order before the stall accepted it. Available items can be put back in your bag below.':order.pickup_offer_status==='declined'?'This order was cancelled because pickup at the stall did not work for you.':'This order was declined. Contact the stall if you need help.'}</p>`:'';
+  const feedback=order.feedback?`<p class="order-feedback"><strong>${order.feedback.verified_guest?'Verified guest review':'Verified customer review'} · ${'★'.repeat(order.feedback.rating)}${'☆'.repeat(5-order.feedback.rating)}</strong>${order.feedback.comment?`<span>${esc(order.feedback.comment)}</span>`:''}</p>`:'';
+  const canReview=(userRole==='buyer'||(userRole==='guest'&&state.guestFeedbackAvailable));
+  const feedbackForm=customerView&&canReview&&order.status==='completed'&&!order.feedback?`<form class="feedback-form" data-form="feedback" data-order-id="${order.id}"><label>Rate this order<select name="rating" required><option value="">Choose 1-5</option><option value="5">5 · Great</option><option value="4">4 · Good</option><option value="3">3 · Okay</option><option value="2">2 · Poor</option><option value="1">1 · Bad</option></select></label><label>Comment <span class="field-hint">Optional</span><input name="comment" maxlength="500" placeholder="Tell the stall what went well"></label><button class="button button-outline button-small">Send verified review</button></form>`:'';
+  const feedbackUnavailable=customerView&&userRole==='guest'&&order.status==='completed'&&!order.feedback&&!state.guestFeedbackAvailable?`<p class="order-subline">Guest reviews will be available after the database update.</p>`:'';
   let actions='';
   if(userRole==='owner'){
     if(order.status==='placed')actions=`<button class="button button-primary button-small" data-order-action="confirm" data-id="${order.id}">Accept order</button><button class="button button-quiet button-small" data-order-action="decline" data-id="${order.id}">Decline</button>`;
     if(order.status==='confirmed')actions=`<button class="button button-primary button-small" data-order-action="prepare" data-id="${order.id}">Start preparing</button>`;
     if(order.status==='preparing')actions=`<button class="button button-primary button-small" data-order-action="ready" data-id="${order.id}">Mark ready</button>`;
+    if(order.status==='ready'&&order.fulfillment==='pickup')actions=`<div class="pickup-verify-tools"><label for="pickup-code-${order.id}">Customer pickup code<input id="pickup-code-${order.id}" type="text" inputmode="text" maxlength="8" autocomplete="off" autocapitalize="characters" spellcheck="false" data-pickup-code="${order.id}" placeholder="8-character code"></label><button class="button button-primary button-small" data-order-action="verify-pickup" data-id="${order.id}">Verify code & complete pickup</button><small>Match the code shown in the customer’s order.</small></div>`;
     if(order.status==='ready'&&order.fulfillment==='delivery'&&order.pickup_offer_status!=='pending')actions=`<label class="assign-runner">Runner name<input type="text" maxlength="80" data-assign-runner="${order.id}" value="${esc(order.runner||'')}" placeholder="Type the runner’s name" autocomplete="name"><small class="field-hint">No runner account is needed.</small></label><button class="button button-primary button-small" data-order-action="assign" data-id="${order.id}">Assign runner</button>${order.runner?`<button class="button button-primary button-small" data-order-action="out" data-id="${order.id}">Mark on the way</button>`:''}<button class="button button-quiet button-small" data-order-action="offer-pickup" data-id="${order.id}">No runner? Offer pickup</button>`;
     if(order.status==='out'&&order.fulfillment==='delivery'){
       const runnerLink=state.runnerLinks[order.id];
@@ -627,7 +954,8 @@ function orderCard(order){
     if(order.status==='ready')actions=`<button class="button button-primary button-small" data-order-action="out" data-id="${order.id}">Picked up</button>`;
     if(order.status==='out')actions=`<button class="button button-primary button-small" data-order-action="delivered" data-id="${order.id}">Mark delivered</button>`;
   }
-  if(customerView&&order.pickup_offer_status!=='pending'&&order.status==='ready'&&order.fulfillment==='pickup')actions=`<button class="button button-primary button-small" data-order-action="collect" data-id="${order.id}">Confirm pickup</button>`;
+  if(customerView&&order.status==='placed')actions=state.orderCancellationAvailable?`<button class="button button-outline button-small" data-order-action="edit-pending" data-id="${order.id}">Edit order</button><button class="button button-quiet button-small" data-order-action="cancel-pending" data-id="${order.id}">Cancel order</button>`:`<small class="order-cancel-unavailable">Order editing will appear here after the database is updated.</small>`;
+  if(customerView&&(order.status==='completed'||order.cancelled_by_buyer))actions=`<button class="button button-outline button-small" data-order-action="reorder" data-id="${order.id}">${order.cancelled_by_buyer?'Order these items again':'Order these again'}</button>`;
   const estimate=order.estimated_ready_at&&['buyer','owner','guest'].includes(userRole)&&['confirmed','preparing'].includes(order.status)?`<p class="order-estimate">${Date.parse(order.estimated_ready_at)<Date.now()?'Estimated time passed · check with stall':`Estimated ready ${new Date(order.estimated_ready_at).toLocaleTimeString('en-PH',{timeZone:'Asia/Manila',hour:'numeric',minute:'2-digit'})}`}</p>`:'';
   const pickupTime=order.pickup_at?new Date(order.pickup_at).toLocaleTimeString('en-PH',{timeZone:'Asia/Manila',hour:'numeric',minute:'2-digit'}):null;
   const lastGpsTime=order.driver_updated_at?Date.parse(order.driver_updated_at):NaN;
@@ -642,7 +970,12 @@ function orderCard(order){
   const tracking=(order.runner||order.runner_account)&&order.fulfillment==='delivery'&&order.status==='out'&&['buyer','runner','owner','guest'].includes(userRole)?`<section class="tracking-panel"><div><strong>${userRole==='runner'?(gpsAge<45000?'Sharing your live location':gpsAge===Infinity?'Waiting for GPS fix':gpsText):gpsAge===Infinity?'Waiting for runner location':gpsText}</strong><small>Runner: ${esc(order.runner||'Assigned runner')} · GPS refreshes about every five seconds while sharing is active.</small>${eta?`<p class="tracking-eta">${eta}</p>`:''}${locationAccuracy||gpsUpdated?`<small class="tracking-meta">${[locationAccuracy,gpsUpdated].filter(Boolean).join(' · ')}</small>`:''}</div>${campusMap(order)}<small class="map-attribution">PNS campus map data © Overture Maps Foundation, Meta/WRI, and OpenGeoHub · GPS accuracy varies.</small><small class="map-key"><i class="map-key-runner"></i>Runner <i class="map-key-destination"></i>Handoff <i class="map-key-stall"></i>Stall</small>${trackingGoogleLink}<small class="tracking-note">Blue line follows the PNS campus walking paths. GPS may pause indoors or when the runner closes the sharing page.</small></section>`:'';
   const pickupOffer=customerView&&order.pickup_offer_status==='pending'&&order.status==='ready'?`<section class="pickup-offer" aria-label="Pickup option"><span class="eyebrow">DELIVERY UPDATE</span><h4>No runner is available</h4><p>Would you like to keep your order and pick it up at <strong>${esc(order.stall)}</strong>, or cancel it?</p><div class="pickup-offer-actions"><button class="button button-primary button-small" data-order-action="accept-pickup" data-id="${order.id}">Continue with pickup</button><button class="button button-quiet button-small" data-order-action="cancel-no-runner" data-id="${order.id}">Cancel order</button></div></section>`:'';
   const ownerPickupOffer=userRole==='owner'&&order.pickup_offer_status==='pending'?`<p class="pickup-offer-wait" role="status">Waiting for the customer to choose pickup or cancellation.</p>`:'';
-  return `<article class="order-card"><div class="order-card-top"><div><span class="order-number">ORDER #${order.id} · ${new Date(order.created_at).toLocaleString([], {dateStyle:'medium',timeStyle:'short'})}</span><h3>${esc(order.stall)}</h3></div><span class="status-badge status-${esc(order.status)}">${esc(statusLabel[order.status]||order.status)}</span></div>${progress}<div class="order-card-body"><div><p class="order-items-summary">${itemText}</p><p class="order-subline">${order.fulfillment==='delivery'?'School delivery only':pickupTime?`Pickup · ${pickupTime}`:'Pickup'}${order.runner?` · Runner: ${esc(order.runner)}`:''}${order.buyer_note?` · “${esc(order.buyer_note)}”`:''}</p>${!customerView?`<p class="order-subline">Placed by ${esc(order.buyer)}${order.buyer_email?` · ${esc(order.buyer_email)}`:''}</p>`:''}${guestDeliveryDetails}</div><strong class="order-total">${money(order.total)}</strong></div>${order.is_guest&&customerView?`<p class="guest-pickup-code"><span>${order.fulfillment==='pickup'?'Pickup code':'Order code'}</span><strong>${esc(order.pickup_code)}</strong></p>`:''}${pickupOffer}${ownerPickupOffer}${tracking}${estimate}${actions?`<div class="order-actions">${actions}</div>`:''}${feedback}${feedbackForm}</article>`;
+  const pickupCodeCard=customerView&&order.pickup_code&&(order.fulfillment==='pickup'||order.is_guest)?`<p class="guest-pickup-code"><span>${order.fulfillment==='pickup'?'Pickup code':'Order code'}</span><strong>${esc(order.pickup_code)}</strong><small>${order.fulfillment==='pickup'?'Show this code to the stall owner when you collect your order.':'Keep this private code with your order details.'}</small></p>`:'';
+  if(state.orderMessagesAvailable&&['buyer','guest','owner'].includes(userRole)){
+    const messageButton=`<button type="button" class="button button-outline button-small order-message-trigger" data-action="open-order-messages" data-order-id="${order.id}"><span aria-hidden="true">✉</span> ${customerView?'Message stall':'Message customer'}</button>`;
+    actions=actions?`${actions}${messageButton}`:messageButton;
+  }
+  return `<article class="order-card"><div class="order-card-top"><div><span class="order-number">ORDER #${order.id} · ${new Date(order.created_at).toLocaleString([], {dateStyle:'medium',timeStyle:'short'})}</span><h3>${esc(order.stall)}</h3></div><span class="status-badge status-${esc(order.status)}">${esc(orderStatusText(order,userRole))}</span></div>${progress}<div class="order-card-body"><div><p class="order-items-summary">${itemText}</p><p class="order-subline">${order.fulfillment==='delivery'?'School delivery only':pickupTime?`Pickup · ${pickupTime}`:'Pickup'}${order.runner?` · Runner: ${esc(order.runner)}`:''}${order.buyer_note?` · “${esc(order.buyer_note)}”`:''}</p>${!customerView?`<p class="order-subline">Placed by ${esc(order.buyer)}${order.buyer_email?` · ${esc(order.buyer_email)}`:''}</p>`:''}${guestDeliveryDetails}</div><strong class="order-total">${money(order.total)}</strong></div>${pickupCodeCard}${pickupOffer}${ownerPickupOffer}${tracking}${estimate}${actions?`<div class="order-actions">${actions}</div>`:''}${feedback}${feedbackUnavailable}${feedbackForm}</article>`;
 }
 function emptyState(icon,title,copy){return `<div class="empty-state"><span>${icon}</span><h3>${esc(title)}</h3><p>${esc(copy)}</p></div>`}
 function buyerHeroArt(item){
@@ -668,7 +1001,7 @@ function setBuyerHeroFeature(index){
 }
 function renderBuyer(){
   const q=state.query.trim().toLowerCase();
-  const products=state.products.filter(p=>(state.filter==='All'||p.category===state.filter)&&(state.stallFilter==='All'||p.stall_id===Number(state.stallFilter))&&(state.dietaryFilter==='All'||p.dietary_tags.includes(state.dietaryFilter))&&(state.allergenFilter==='All'||!p.allergen_tags.includes(state.allergenFilter))&&(!q||`${p.name} ${p.stall_name} ${p.category} ${p.description} ${p.dietary_tags.join(' ')} ${p.allergen_tags.join(' ')}`.toLowerCase().includes(q)));
+  const products=state.products.filter(p=>(!state.showSavedOnly||state.savedProducts.includes(p.id)||state.savedStalls.includes(p.stall_id))&&(state.filter==='All'||p.category===state.filter)&&(state.budgetMax==='All'||p.price<=Number(state.budgetMax))&&(state.stallFilter==='All'||p.stall_id===Number(state.stallFilter))&&(state.dietaryFilter==='All'||p.dietary_tags.includes(state.dietaryFilter))&&(state.allergenFilter==='All'||!p.allergen_tags.includes(state.allergenFilter))&&(!q||`${p.name} ${p.stall_name} ${p.category} ${p.description} ${p.dietary_tags.join(' ')} ${p.allergen_tags.join(' ')}`.toLowerCase().includes(q)));
   if(state.sort==='price-low')products.sort((a,b)=>a.price-b.price);
   if(state.sort==='price-high')products.sort((a,b)=>b.price-a.price);
   if(state.sort==='name')products.sort((a,b)=>a.name.localeCompare(b.name));
@@ -678,11 +1011,44 @@ function renderBuyer(){
   const buyerNavigation=workspaceNav('buyer',state.user?.role==='buyer'||(!state.user&&state.publicBrowse)?[['menu','Browse food','⌕'],['orders','My orders','↗',orderCount]]:[['menu','Browse food','⌕']],ordersView?'orders':'menu');
   if(ordersView){root.innerHTML=`${buyerNavigation}<section class="workspace-page customer-orders-page" id="buyer-orders"><div class="section-title"><div><span class="eyebrow">YOUR RECENT ACTIVITY</span><h2>Order updates</h2><p class="helper-text">Check progress, pickup details, and feedback for your PNS orders.</p></div><span class="result-count">${state.orders.length} ${state.orders.length===1?'order':'orders'}</span></div>${state.orders.length?`<div class="order-list">${state.orders.slice(0,12).map(orderCard).join('')}</div>`:emptyState('↗','Your first order starts here','Browse the menu and place an order. Its progress will appear here.')}</section>`;return}
   const heroRotates=buyerHeroItems().length>1;
-  const activeFilterCount=[state.filter!=='All',state.stallFilter!=='All',state.dietaryFilter!=='All',state.allergenFilter!=='All',state.sort!=='featured'].filter(Boolean).length;
+  const activeFilterCount=[state.filter!=='All',state.budgetMax!=='All',state.stallFilter!=='All',state.dietaryFilter!=='All',state.allergenFilter!=='All',state.sort!=='featured'].filter(Boolean).length;
+  const savedCount=state.savedProducts.length+state.savedStalls.length;
   root.innerHTML=`<section class="buyer-banner" aria-labelledby="buyer-banner-title"><div class="buyer-banner-copy"><span class="eyebrow">THE PNS CAMPUS MARKET</span><h2 id="buyer-banner-title">Fresh finds,<br><span>happy breaks.</span></h2><p>Wander through campus stalls and discover something delicious.</p><div class="buyer-banner-cycle-cue ${heroRotates?'is-rotating':'is-waiting'}"><i aria-hidden="true"></i><span>${heroRotates?'Fresh food spotlight every 10 seconds':'Food picks rotate as stalls add menu items'}</span></div></div><div class="banner-art" role="group" aria-roledescription="automatic food showcase" aria-label="Featured food from PNS school stalls">${buyerHeroArt()}</div></section>${buyerNavigation}${renderFeaturedPicks()}
-  <section class="section-block customer-menu-page" id="menu"><div class="section-title"><div><span class="eyebrow">MARKET MENU</span><h2>Find your next favorite</h2></div><div class="menu-search-tools"><label class="search-field"><span aria-hidden="true">⌕</span><input type="search" id="menu-search" value="${esc(state.query)}" placeholder="Dish, stall, or craving" aria-label="Search menu"></label><button type="button" class="menu-filter-toggle" data-action="toggle-menu-filters" aria-controls="menu-filter-panel" aria-expanded="${state.filterPanelOpen}"><span aria-hidden="true">☷</span><span>Filters &amp; sort</span>${activeFilterCount?`<small>${activeFilterCount}</small>`:''}</button></div></div><div class="menu-controls"><div class="menu-filter-panel" id="menu-filter-panel" ${state.filterPanelOpen?'':'hidden'}><div class="menu-filter-controls" role="group" aria-label="Menu filters; swipe sideways to see all controls"><div class="filter-row" role="group" aria-label="Filter menu by category">${categories.map(c=>`<button class="filter-chip ${state.filter===c?'is-active':''}" data-filter="${esc(c)}" aria-pressed="${state.filter===c}">${esc(c)}</button>`).join('')}</div><label class="sort-field">Sort<select id="menu-sort"><option value="featured" ${state.sort==='featured'?'selected':''}>Featured</option><option value="price-low" ${state.sort==='price-low'?'selected':''}>Price: low to high</option><option value="price-high" ${state.sort==='price-high'?'selected':''}>Price: high to low</option><option value="name" ${state.sort==='name'?'selected':''}>Name</option></select></label><div class="catalog-filter-options"></div></div><div class="menu-filter-meta"><small class="allergen-disclaimer">Allergen details are stall-provided; confirm directly when needed.</small><div class="menu-filter-summary"><span class="result-count" role="status" aria-live="polite">${products.length} ${products.length===1?'item':'items'}</span><button type="button" class="menu-filter-clear" data-action="clear-menu-filters" ${activeFilterCount?'':'hidden'}>Clear filters</button></div></div></div></div><div class="product-grid">${products.length?products.map(p=>`<article class="product-card"><button class="product-art product-art-trigger" data-product-details="${p.id}" aria-label="View details for ${esc(p.name)}"><span>${esc(p.emoji)}</span><small>${esc(p.category)}</small></button><div class="product-details"><div class="product-stall">${esc(p.stall_name)}</div><button class="product-name-trigger" data-product-details="${p.id}"><h3>${esc(p.name)}</h3></button><p>${esc(p.description||'Fresh from the stall, ready for your break.')}</p><div class="product-bottom"><strong>${money(p.price)}</strong><button class="button button-primary button-small" data-add="${p.id}" ${state.paused?'disabled':''}>${state.paused?'Paused':'Add +'}</button></div></div></article>`).join(''):state.products.length===0?emptyState('⌂','No PNS menus yet','Stall owners can create an account and publish a menu. New items will appear here automatically.'):emptyState('⌕','No menu items found','Try another search or category.')}</div></section>`;
+  <section class="section-block customer-menu-page" id="menu"><div class="section-title"><div class="menu-title-copy"><span class="eyebrow">MARKET MENU</span><h2>${state.showSavedOnly?'Your saved picks':'Find your next favorite'}</h2><button type="button" class="menu-saved-toggle ${state.showSavedOnly?'is-active':''}" data-action="toggle-saved-menu" aria-pressed="${state.showSavedOnly}">${state.showSavedOnly?'← Browse all food':'♡ Saved'} <span>${savedCount}</span></button><small>Saved on this device</small></div><div class="menu-search-tools"><label class="search-field"><span aria-hidden="true">⌕</span><input type="search" id="menu-search" value="${esc(state.query)}" placeholder="Dish, stall, or craving" aria-label="Search menu"></label><button type="button" class="menu-filter-toggle" data-action="toggle-menu-filters" aria-controls="menu-filter-panel" aria-expanded="${state.filterPanelOpen}"><span aria-hidden="true">☷</span><span>Filters &amp; sort</span>${activeFilterCount?`<small>${activeFilterCount}</small>`:''}</button></div></div><div class="menu-controls"><div class="menu-filter-panel" id="menu-filter-panel" ${state.filterPanelOpen?'':'hidden'}><div class="menu-filter-controls" role="group" aria-label="Menu filters; swipe sideways to see all controls"><div class="filter-row" role="group" aria-label="Filter menu by category">${categories.map(c=>`<button class="filter-chip ${state.filter===c?'is-active':''}" data-filter="${esc(c)}" aria-pressed="${state.filter===c}">${esc(c)}</button>`).join('')}</div><label class="sort-field">Sort<select id="menu-sort"><option value="featured" ${state.sort==='featured'?'selected':''}>Featured</option><option value="price-low" ${state.sort==='price-low'?'selected':''}>Price: low to high</option><option value="price-high" ${state.sort==='price-high'?'selected':''}>Price: high to low</option><option value="name" ${state.sort==='name'?'selected':''}>Name</option></select></label><div class="catalog-filter-options"></div></div><div class="menu-filter-meta"><small class="allergen-disclaimer">Allergen details are stall-provided; confirm directly when needed.</small><div class="menu-filter-summary"><span class="result-count" role="status" aria-live="polite">${products.length} ${products.length===1?'item':'items'}</span><button type="button" class="menu-filter-clear" data-action="clear-menu-filters" ${activeFilterCount?'':'hidden'}>Clear filters</button></div></div></div></div><div class="product-grid">${products.length?products.map(p=>`<article class="product-card"><button class="product-favorite ${state.savedProducts.includes(p.id)?'is-saved':''}" type="button" data-action="toggle-favorite-product" data-id="${p.id}" aria-label="${state.savedProducts.includes(p.id)?'Remove':'Save'} ${esc(p.name)} ${state.savedProducts.includes(p.id)?'from':'to'} saved items" aria-pressed="${state.savedProducts.includes(p.id)}">${state.savedProducts.includes(p.id)?'♥':'♡'}</button><button class="product-art product-art-trigger" data-product-details="${p.id}" aria-label="View details for ${esc(p.name)}"><span>${esc(p.emoji)}</span><small>${esc(p.category)}</small></button><div class="product-details"><div class="product-stall">${esc(p.stall_name)}</div><button class="product-name-trigger" data-product-details="${p.id}"><h3>${esc(p.name)}</h3></button><p>${esc(p.description||'Fresh from the stall, ready for your break.')}</p><div class="product-bottom"><strong>${money(p.price)}</strong>${p.available&&p.stall_open&&!p.stall_on_break?`<button class="button button-primary button-small" data-add="${p.id}" ${state.paused?'disabled':''}>${state.paused?'Paused':'Add +'}</button>`:p.stall_on_break?`<button type="button" class="button button-outline button-small" disabled title="This stall is taking a short break">Back soon</button>`:`<button type="button" class="button button-outline button-small" data-product-details="${p.id}">Find a similar pick</button>`}</div></div></article>`).join(''):state.products.length===0?emptyState('⌂','No PNS menus yet','Stall owners can create an account and publish a menu. New items will appear here automatically.'):state.showSavedOnly?emptyState('♡','No saved food yet','Tap the heart on food you like, or save a stall from its profile. Your picks stay on this device.'):emptyState('⌕','No menu items found','Try another search or category.')}</div></section>`;
 }
-function renderBuyerView(){renderBuyer();const menu=$('#menu'),buyerNav=$('.workspace-nav-buyer'),categories=$('.market-category-section');if(categories&&buyerNav)buyerNav.after(categories);if(menu&&categories)categories.after(menu);else if(menu&&buyerNav)buyerNav.after(menu);addCatalogControls();decorateProductCards();const rail=$('.featured-rail');if(rail)rail.scrollLeft=state.featuredScroll;startFeaturedMotion()}
+function renderWeeklyMenuPreview(){
+  const entries=state.weeklyMenu||[];if(!state.weeklyMenuAvailable||!entries.length)return '';
+  const weekdays=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+  return `<details class="weekly-menu-public"><summary><span><strong>Coming up this week</strong><small>${entries.length} planned ${entries.length===1?'pick':'picks'} from PNS stalls</small></span><span class="weekly-menu-public-arrow" aria-hidden="true">⌄</span></summary><div class="weekly-menu-public-grid">${entries.map(entry=>`<article class="weekly-menu-public-card"><span class="weekly-menu-public-art">${entry.photo_url?`<img src="${esc(entry.photo_url)}" alt="${esc(entry.name)}" loading="lazy">`:`<span aria-hidden="true">${esc(entry.emoji)}</span>`}<small>${esc(weekdays[entry.weekday]||'This week')} · ${esc(entry.service_period)}</small></span><div><strong>${esc(entry.name)}</strong><small>${esc(entry.stall_name)}</small><b>${money(entry.price)}</b></div></article>`).join('')}</div></details>`;
+}
+function renderBuyerView(){renderBuyer();const menu=$('#menu'),buyerNav=$('.workspace-nav-buyer'),categories=$('.market-category-section');if(categories&&buyerNav)buyerNav.after(categories);if(menu&&categories)categories.after(menu);else if(menu&&buyerNav)buyerNav.after(menu);if(menu)menu.insertAdjacentHTML('afterend',renderWeeklyMenuPreview());const tools=$('.menu-search-tools'),filterButton=tools?.querySelector('.menu-filter-toggle');if(tools&&filterButton&&!tools.querySelector('[data-action="open-stall-finder"]'))filterButton.insertAdjacentHTML('beforebegin','<button type="button" class="button button-outline button-small stall-finder-open-button" data-action="open-stall-finder"><span aria-hidden="true">⌖</span> Stalls map</button>');addCatalogControls();decorateProductCards();const rail=$('.featured-rail');if(rail)rail.scrollLeft=state.featuredScroll;startFeaturedMotion()}
+function stallFinderMatches(){
+  const query=state.stallFinderQuery.trim().toLocaleLowerCase();
+  return state.stallFinderStalls.filter(stall=>(!state.stallFinderOpenOnly||(stall.is_open&&!stall.on_break))&&(!query||stall.name.toLocaleLowerCase().includes(query)));
+}
+function renderStallFinder(){
+  const content=$('#stall-finder-content');if(!content)return;
+  const stalls=stallFinderMatches();
+  const selected=stalls.find(stall=>stall.id===state.selectedStallFinderId)||stalls[0]||null;
+  state.selectedStallFinderId=selected?.id??null;
+  const pins=stalls.filter(stall=>stall.pickup_latitude!=null&&stall.pickup_longitude!=null&&pnsMapContains({latitude:Number(stall.pickup_latitude),longitude:Number(stall.pickup_longitude)}));
+  const mapPins=pins.map(stall=>{const point=mapXY(stall.pickup_latitude,stall.pickup_longitude),left=Math.max(3,Math.min(97,point.x/PNS_MAP.width*100)),top=Math.max(3,Math.min(97,point.y/PNS_MAP.height*100));return `<button type="button" class="stall-finder-pin ${stall.id===state.selectedStallFinderId?'is-selected':''}" style="left:${left}%;top:${top}%" data-stall-map-pin="${stall.id}" aria-label="${esc(stall.name)}, ${stall.on_break?'on a short break':stall.is_open?'open now':'closed'}" aria-pressed="${stall.id===state.selectedStallFinderId}"><span aria-hidden="true">⌂</span></button>`}).join('');
+  const cards=stalls.map(stall=>`<article class="stall-finder-card ${stall.id===state.selectedStallFinderId?'is-selected':''}" id="stall-finder-stall-${stall.id}"><span class="stall-finder-avatar">${stall.logo_url?`<img src="${esc(stall.logo_url)}" alt="" loading="lazy">`:esc(stall.name.trim().charAt(0).toUpperCase())}</span><div class="stall-finder-copy"><strong>${esc(stall.name)}</strong><small><i class="${stall.is_open&&!stall.on_break?'is-open':''}"></i>${stall.on_break?'On a short break':stall.is_open?'Open now':'Closed'} · ${stall.menu_count} ${stall.menu_count===1?'menu item':'menu items'}</small><small>${stall.pickup_latitude!=null&&stall.pickup_longitude!=null?'Pickup point shown on map':'Pickup point not added yet'}</small></div><button type="button" class="button button-primary button-small" data-action="view-stall-from-map" data-stall-id="${stall.id}">View menu</button></article>`).join('');
+  content.innerHTML=`<header class="stall-finder-header"><div><span class="eyebrow">PALAWAN NATIONAL SCHOOL</span><h2 id="stall-finder-title">Find a campus stall</h2><p>See where stalls are located, then open a stall to browse its menu.</p></div><form method="dialog"><button class="icon-button" aria-label="Close stall map">×</button></form></header><div class="stall-finder-toolbar"><label class="search-field"><span aria-hidden="true">⌕</span><input id="stall-finder-search" type="search" value="${esc(state.stallFinderQuery)}" placeholder="Search stalls" aria-label="Search campus stalls"></label><label class="stall-finder-open-filter"><input id="stall-finder-open-only" type="checkbox" ${state.stallFinderOpenOnly?'checked':''}> Open now</label></div><div class="stall-finder-layout"><div class="stall-finder-map-wrap"><div class="stall-finder-map" role="group" aria-label="Map of PNS campus stalls"><img src="assets/pns-campus-safe-routes.jpg" alt="Palawan National School campus map"><div class="stall-finder-pins">${mapPins||'<p class="stall-finder-no-pins">Stall owners can add a map pin in Stall setup.</p>'}</div></div><small class="stall-finder-map-note">Pins appear when a stall has saved its pickup point.</small></div><section class="stall-finder-results" aria-label="Campus stall results"><div class="stall-finder-results-heading"><strong>${stalls.length} ${stalls.length===1?'stall':'stalls'}</strong><span>${pins.length} on map</span></div>${cards||'<p class="stall-finder-empty">No stalls match this search. Try another name or turn off “Open now”.</p>'}</section></div>`;
+}
+async function openStallFinder(){
+  const dialog=$('#stall-finder-dialog');if(!dialog)return;
+  const content=$('#stall-finder-content');if(content)content.innerHTML='<header class="stall-finder-header"><div><span class="eyebrow">PALAWAN NATIONAL SCHOOL</span><h2 id="stall-finder-title">Find a campus stall</h2><p>Loading stall locations…</p></div><form method="dialog"><button class="icon-button" aria-label="Close stall map">×</button></form></header><div class="stall-finder-loading" role="status">Loading campus stalls…</div>';
+  if(!dialog.open)dialog.showModal();
+  try{const result=await api('/api/stalls');state.stallFinderStalls=result.stalls||[];renderStallFinder()}
+  catch(error){if(content)content.innerHTML=`<header class="stall-finder-header"><div><span class="eyebrow">PALAWAN NATIONAL SCHOOL</span><h2 id="stall-finder-title">Find a campus stall</h2><p>Stall locations could not load.</p></div><form method="dialog"><button class="icon-button" aria-label="Close stall map">×</button></form></header><p class="stall-finder-empty" role="alert">${esc(error.message)} <button type="button" class="button button-outline button-small" data-action="open-stall-finder">Try again</button></p>`}
+}
+function renderOwnerStallLocationMap(){
+  const map=$('#owner-stall-location-map');if(map)map.innerHTML=campusMap(null,true,'stall-location');
+  const saved=state.user?.stall_pickup_lat!=null&&state.user?.stall_pickup_lon!=null,hasDraft=Boolean(state.stallLocationDraft&&state.stallLocationDraftOwnerId===state.user?.id);
+  const status=$('#owner-stall-location-status');if(status)status.textContent=hasDraft?'New pickup point selected. Save the location to publish it on the stall map.':saved?'Current pickup point is shown. Tap the map to move it.':'Tap the map to choose where customers can find your stall.';
+  const save=$('[data-form="stall-location"] button');if(save){save.disabled=!hasDraft&&!saved;save.textContent=hasDraft?(saved?'Save new pickup point':'Save pickup point'):saved?'Save pickup point':'Choose a point on the map first'}
+}
 function renderOwnerHoursPanel(){
   const opens=state.user.stall_opens_at||'00:00',closes=state.user.stall_closes_at||'23:59';
   const prep=state.user.stall_prep_minutes||15;
@@ -690,15 +1056,25 @@ function renderOwnerHoursPanel(){
 }
 function renderOwnerProfilePanel(){
   const logo=state.user.stall_logo_url;
-  return `<section class="panel stall-profile-editor"><div class="stall-profile-intro"><span class="eyebrow">YOUR PUBLIC STALL PAGE</span><h2>Your stall profile</h2><p>Set your stall name, add a short welcome, and upload a logo customers will recognize.</p><div class="owner-stall-preview"><span class="stall-mini-logo">${logo?`<img src="${esc(logo)}" alt="">`:esc((state.user.stall_name||'S').trim().charAt(0).toUpperCase())}</span><strong>${esc(state.user.stall_name||'Your stall')}</strong><small>Preview of your public profile</small><button type="button" class="button button-outline button-small" data-action="share-stall" data-stall-id="${state.user.stall_id}">Share stall link</button></div></div><div class="owner-profile-forms"><form class="stack-form" data-form="stall-profile"><label>Stall name<input name="name" maxlength="80" required value="${esc(state.user.stall_name||'')}"></label><label>About your shop<textarea name="description" maxlength="500" rows="4" placeholder="Tell customers what you serve and what makes your stall special">${esc(state.user.stall_description||'')}</textarea><small class="field-hint">A short introduction customers see on your stall page.</small></label><button class="button button-outline button-small">Save stall details</button></form><form class="stack-form stall-logo-form" data-form="stall-logo"><label>Shop logo <span class="field-hint">Choose a JPG, PNG, or WebP image (up to 2 MB).</span><input name="logo_file" type="file" accept="image/jpeg,image/png,image/webp"></label><div class="stall-logo-preview"><img ${logo?`src="${esc(logo)}"`:''} alt="Stall logo preview" ${logo?'':'hidden'}><span ${logo?'hidden':''}>Your logo preview</span></div>${logo?'<label class="photo-remove"><input name="remove_logo" type="checkbox" value="true"><span>Remove current logo</span></label>':''}<button class="button button-primary button-small">Save shop logo</button></form></div></section>`;
+  const hasPickupPoint=state.user.stall_pickup_lat!=null&&state.user.stall_pickup_lon!=null;
+  const hasDraft=Boolean(state.stallLocationDraft&&state.stallLocationDraftOwnerId===state.user.id);
+  return `<section class="panel stall-profile-editor"><div class="stall-profile-intro"><span class="eyebrow">YOUR PUBLIC STALL PAGE</span><h2>Your stall profile</h2><p>Set your stall name, add a short welcome, and upload a logo customers will recognize.</p><div class="owner-stall-preview"><span class="stall-mini-logo">${logo?`<img src="${esc(logo)}" alt="">`:esc((state.user.stall_name||'S').trim().charAt(0).toUpperCase())}</span><strong>${esc(state.user.stall_name||'Your stall')}</strong><small>Preview of your public profile</small><button type="button" class="button button-outline button-small" data-action="share-stall" data-stall-id="${state.user.stall_id}">Share stall link</button></div></div><div class="owner-profile-forms"><form class="stack-form" data-form="stall-profile"><label>Stall name<input name="name" maxlength="80" required value="${esc(state.user.stall_name||'')}"></label><label>About your shop<textarea name="description" maxlength="500" rows="4" placeholder="Tell customers what you serve and what makes your stall special">${esc(state.user.stall_description||'')}</textarea><small class="field-hint">A short introduction customers see on your stall page.</small></label><button class="button button-outline button-small">Save stall details</button></form><form class="stack-form stall-logo-form" data-form="stall-logo"><label>Shop logo <span class="field-hint">Choose a JPG, PNG, or WebP image (up to 2 MB).</span><input name="logo_file" type="file" accept="image/jpeg,image/png,image/webp"></label><div class="stall-logo-preview"><img ${logo?`src="${esc(logo)}"`:''} alt="Stall logo preview" ${logo?'':'hidden'}><span ${logo?'hidden':''}>Your logo preview</span></div>${logo?'<label class="photo-remove"><input name="remove_logo" type="checkbox" value="true"><span>Remove current logo</span></label>':''}<button class="button button-primary button-small">Save shop logo</button></form></div><section class="stall-location-editor"><div><span class="eyebrow">HELP CUSTOMERS FIND YOU</span><h3>Stall pickup point</h3><p>Choose your stall’s location on the PNS map. Guests will see this pin in the campus stall finder.</p></div><div id="owner-stall-location-map">${campusMap(null,true,'stall-location')}</div><p id="owner-stall-location-status" class="stall-location-status" role="status">${hasDraft?'New pickup point selected. Save the location to publish it on the stall map.':hasPickupPoint?'Your current pickup point is shown. Tap the map to move it.':'Tap the map to choose where customers can find your stall.'}</p><form data-form="stall-location"><button class="button button-primary button-small" ${hasPickupPoint||hasDraft?'':'disabled'}>${hasDraft?(hasPickupPoint?'Save new pickup point':'Save pickup point'):hasPickupPoint?'Save pickup point':'Choose a point on the map first'}</button></form></section></section>`;
 }
-async function renderStallProfile(id){
+async function renderStallProfile(id,ownerPreview=false){
   const stall=await api(`/api/stalls/${Number(id)}`);
-  if(!(state.user?.role==='owner'&&state.user.stall_id===stall.id)&&state.user?.role!=='admin')recordReachView(stall.id);
+  ownerPreview=Boolean(ownerPreview&&state.user?.role==='owner'&&Number(state.user.stall_id)===Number(stall.id));
+  if(!ownerPreview&&!(state.user?.role==='owner'&&state.user.stall_id===stall.id)&&state.user?.role!=='admin')recordReachView(stall.id);
   const logo=stall.logo_url?`<img src="${esc(stall.logo_url)}" alt="${esc(stall.name)} logo">`:`<span>${esc(stall.name.trim().charAt(0).toUpperCase())}</span>`;
-  $('#stall-content').innerHTML=`<form method="dialog" class="modal-dismiss"><button class="icon-button" aria-label="Close stall profile">×</button></form><header class="stall-social-header"><div class="stall-cover-art"><span>PALAWAN NATIONAL SCHOOL - STALL</span></div><div class="stall-social-identity"><div class="stall-profile-avatar">${logo}</div><div class="stall-social-title"><h2>${esc(stall.name)}</h2><p>${esc(stall.owner_name||'Campus stall owner')} · ${stall.menu_count} menu ${stall.menu_count===1?'item':'items'}</p>${stall.rating?`<span class="stall-rating">★ ${Number(stall.rating).toFixed(1)} <small>from ${stall.review_count} verified order ${stall.review_count===1?'review':'reviews'}</small></span>`:'<small class="stall-rating-new">New campus stall</small>'}</div><span class="stall-open-badge ${stall.is_open?'is-open':''}"><i></i>${stall.is_open?'Open now':'Closed'}</span></div></header><section class="stall-about-card"><span class="eyebrow">ABOUT THIS STALL</span><p class="stall-profile-description">${esc(stall.description||'Welcome! We are serving fresh breaks at your school.')}</p><div class="stall-profile-facts"><span><small>HOURS</small><strong>${esc(stall.opens_at)}–${esc(stall.closes_at)}</strong></span><span><small>MENU</small><strong>${stall.menu_count} ${stall.menu_count===1?'item':'items'}</strong></span><span><small>LOCATION</small><strong>Your school</strong></span></div></section><section class="stall-profile-menu"><div class="stall-menu-heading"><div><span class="eyebrow">FROM THE KITCHEN</span><h3>Explore the menu</h3></div><span class="stall-menu-count">${stall.menu_count} ${stall.menu_count===1?'choice':'choices'}</span></div>${stall.products.length?`<div class="stall-menu-grid">${stall.products.map((item,index)=>`<article class="stall-menu-item" style="--menu-index:${index}"><button class="stall-menu-photo" data-product-details="${item.id}" aria-label="View details for ${esc(item.name)}">${item.photo_url?`<img src="${esc(item.photo_url)}" alt="Photo of ${esc(item.name)}" loading="lazy">`:`<span aria-hidden="true">${esc(item.emoji)}</span>`}<small>${esc(item.category)}</small></button><div class="stall-menu-copy"><button class="stall-product-title" data-product-details="${item.id}">${esc(item.name)}</button><small>${esc(item.description||'Freshly made for your break.')}</small><div><b>${money(item.price)}</b><button class="button button-primary button-small" data-add="${item.id}" ${state.paused||!stall.is_open||item.stock_count===0?'disabled':''}>${item.stock_count===0?'Sold out':'Add +'}</button></div></div></article>`).join('')}</div>`:emptyState('⌂','No menu items available','This stall has not published any available items.')}</section>`;
-  const shareButton=document.createElement('button');shareButton.type='button';shareButton.className='button button-outline button-small stall-share-button';shareButton.dataset.action='share-stall';shareButton.dataset.stallId=String(stall.id);shareButton.textContent='Share this stall';
-  $('#stall-content .stall-about-card').append(shareButton);
+  $('#stall-content').innerHTML=`<form method="dialog" class="modal-dismiss"><button class="icon-button" aria-label="Close stall profile">×</button></form><header class="stall-social-header"><div class="stall-cover-art"><span>PALAWAN NATIONAL SCHOOL - STALL</span></div><div class="stall-social-identity"><div class="stall-profile-avatar">${logo}</div><div class="stall-social-title"><h2>${esc(stall.name)}</h2><p>${esc(stall.owner_name||'Campus stall owner')} · ${stall.menu_count} menu ${stall.menu_count===1?'item':'items'}</p>${stall.rating?`<span class="stall-rating">★ ${Number(stall.rating).toFixed(1)} <small>from ${stall.review_count} verified order ${stall.review_count===1?'review':'reviews'}</small></span>`:'<small class="stall-rating-new">New campus stall</small>'}</div><span class="stall-open-badge ${stall.is_open&&!stall.on_break?'is-open':''} ${stall.on_break?'is-on-break':''}"><i></i>${stall.on_break?'On a short break':stall.is_open?'Open now':'Closed'}</span></div></header><section class="stall-about-card"><span class="eyebrow">ABOUT THIS STALL</span><p class="stall-profile-description">${esc(stall.description||'Welcome! We are serving fresh breaks at your school.')}</p>${stall.on_break?'<p class="stall-break-message" role="status">This stall is taking a short break. Browse the menu and check back soon.</p>':''}<div class="stall-profile-facts"><span><small>HOURS</small><strong>${esc(stall.opens_at)}–${esc(stall.closes_at)}</strong></span><span><small>MENU</small><strong>${stall.menu_count} ${stall.menu_count===1?'item':'items'}</strong></span><span><small>LOCATION</small><strong>Your school</strong></span></div></section><section class="stall-profile-menu"><div class="stall-menu-heading"><div><span class="eyebrow">FROM THE KITCHEN</span><h3>Explore the menu</h3></div><span class="stall-menu-count">${stall.menu_count} ${stall.menu_count===1?'choice':'choices'}</span></div>${stall.products.length?`<div class="stall-menu-grid">${stall.products.map((item,index)=>`<article class="stall-menu-item" style="--menu-index:${index}"><button class="stall-menu-photo" data-product-details="${item.id}" aria-label="View details for ${esc(item.name)}">${item.photo_url?`<img src="${esc(item.photo_url)}" alt="Photo of ${esc(item.name)}" loading="lazy">`:`<span aria-hidden="true">${esc(item.emoji)}</span>`}<small>${esc(item.category)}</small></button><div class="stall-menu-copy"><button class="stall-product-title" data-product-details="${item.id}">${esc(item.name)}</button><small>${esc(item.description||'Freshly made for your break.')}</small><div><b>${money(item.price)}</b>${item.available&&stall.is_open&&!stall.on_break?`<button class="button button-primary button-small" data-add="${item.id}" ${state.paused?'disabled':''}>${state.paused?'Paused':'Add +'}</button>`:stall.on_break?`<button type="button" class="button button-outline button-small" disabled>Back soon</button>`:`<button type="button" class="button button-outline button-small" data-product-details="${item.id}">Find a similar pick</button>`}</div></div></article>`).join('')}</div>`:emptyState('⌂','No menu items available','This stall has not published any available items.')}</section>`;
+  if(ownerPreview){
+    const notice=document.createElement('p');notice.className='owner-storefront-preview-notice';notice.textContent=stall.status==='approved'?'Customer preview · your visitors see this stall page. Ordering is disabled in preview.':'Owner preview · this stall is not visible to customers yet. Ordering is disabled in preview.';$('#stall-content .stall-about-card').prepend(notice);
+    $('#stall-content').querySelectorAll('[data-add]').forEach(button=>{button.disabled=true;button.textContent='Preview only'});
+  }else{
+    const shareButton=document.createElement('button');shareButton.type='button';shareButton.className='button button-outline button-small stall-share-button';shareButton.dataset.action='share-stall';shareButton.dataset.stallId=String(stall.id);shareButton.textContent='Share this stall';
+    $('#stall-content .stall-about-card').append(shareButton);
+    const favoriteButton=document.createElement('button');favoriteButton.type='button';favoriteButton.className=`button button-outline button-small stall-save-button ${state.savedStalls.includes(stall.id)?'is-saved':''}`;favoriteButton.dataset.action='toggle-favorite-stall';favoriteButton.dataset.id=String(stall.id);favoriteButton.setAttribute('aria-pressed',String(state.savedStalls.includes(stall.id)));favoriteButton.textContent=state.savedStalls.includes(stall.id)?'♥ Saved':'♡ Save stall';
+    $('#stall-content .stall-about-card').append(favoriteButton);
+  }
   if(!$('#stall-dialog').open)$('#stall-dialog').showModal();
 }
 function recordReachView(stallId,productId=null){
@@ -713,6 +1089,11 @@ async function openSharedStall(){
   if(!/^\d+$/.test(id||'')||state.user&&state.user.role!=='buyer')return;
   try{await renderStallProfile(id)}catch(error){toast(`This shared stall is unavailable. ${error.message}`)}
 }
+function renderOwnerBreakControl(){
+  const onBreak=state.user.stall_on_break===true;
+  if(state.user.stall_status!=='approved')return '<span class="live-pill is-paused"><i></i>Stall paused</span>';
+  return `<div class="owner-break-control"><span class="owner-break-state ${onBreak?'is-on-break':''}"><i></i>${onBreak?'On a short break':'Taking orders per your hours'}</span><button type="button" class="button ${onBreak?'button-primary':'button-outline'} button-small" data-stall-break-toggle data-next-break="${!onBreak}" aria-pressed="${onBreak}" title="New orders pause during a break; placed orders continue.">${onBreak?'We are back':'Take a short break'}</button><small>Placed orders continue as usual.</small></div>`;
+}
 function renderOwner(){
   const active=state.orders.filter(o=>!['completed','declined'].includes(o.status));
   const completed=state.orders.filter(o=>o.status==='completed').reduce((s,o)=>s+o.total,0);
@@ -724,9 +1105,18 @@ function renderOwner(){
   if(view==='orders')page=renderOwnerOrders(active,active.length,false);
   if(view==='menu')page=renderOwnerMenu(items);
   if(view==='stall')page=`<div class="owner-settings-grid workspace-page" id="owner-stall">${renderOwnerProfilePanel()}${renderOwnerHoursPanel()}</div>`;
-  if(view==='insights')page=`<div class="workspace-page">${renderOwnerReach()}<section class="panel owner-feedback" id="owner-feedback"><div class="section-title"><div><span class="eyebrow">HEAR FROM YOUR CUSTOMERS</span><h2>Recent feedback</h2></div><span class="result-count">${feedback.length} reviews</span></div>${feedback.length?`<div class="feedback-list">${feedback.map(order=>`<article class="feedback-entry"><div><strong>Order #${order.id} · ${esc(order.buyer)}</strong><small>${new Date(order.created_at).toLocaleDateString()}</small></div><span class="feedback-stars">${'★'.repeat(order.feedback.rating)}${'☆'.repeat(5-order.feedback.rating)}</span>${order.feedback.comment?`<p>${esc(order.feedback.comment)}</p>`:'<p class="muted-feedback">No written comment.</p>'}</article>`).join('')}</div>`:emptyState('★','No customer feedback yet','Reviews arrive here after completed orders.')}</section></div>`;
-  root.innerHTML=`${heading('YOUR MARKET STALL',`Welcome, ${esc(state.user.name.split(' ')[0])}.`,'Manage your menu, orders, and stall details in one place.',`<span class="live-pill"><i></i>Owner account</span>`)}${workspaceNav('owner',tabs,view)}<main class="workspace-content owner-workspace-content" id="owner-workspace">${page}</main>`;
+  if(view==='insights')page=`<div class="workspace-page">${renderOwnerReach()}<section class="panel owner-feedback" id="owner-feedback"><div class="section-title"><div><span class="eyebrow">HEAR FROM YOUR CUSTOMERS</span><h2>Recent feedback</h2></div><span class="result-count">${feedback.length} reviews</span></div>${feedback.length?`<div class="feedback-list">${feedback.map(order=>`<article class="feedback-entry"><div><strong>Order #${order.id} · ${esc(order.buyer)}</strong><small>${order.feedback.verified_guest?'Verified guest order · ':''}${new Date(order.created_at).toLocaleDateString()}</small></div><span class="feedback-stars">${'★'.repeat(order.feedback.rating)}${'☆'.repeat(5-order.feedback.rating)}</span>${order.feedback.comment?`<p>${esc(order.feedback.comment)}</p>`:'<p class="muted-feedback">No written comment.</p>'}</article>`).join('')}</div>`:emptyState('★','No customer feedback yet','Reviews arrive here after completed orders.')}</section></div>`;
+  root.innerHTML=`${heading('YOUR MARKET STALL',`Welcome, ${esc(state.user.name.split(' ')[0])}.`,'Manage your menu, orders, and stall details in one place.',renderOwnerBreakControl())}${workspaceNav('owner',tabs,view)}<main class="workspace-content owner-workspace-content" id="owner-workspace">${page}</main>`;
+  if(view==='menu')root.querySelector('#owner-menu')?.insertAdjacentHTML('beforeend',renderOwnerWeeklyPlanner(items));
+  if(view==='stall')root.querySelector('.owner-stall-preview')?.insertAdjacentHTML('beforeend',`<button type="button" class="button button-primary button-small owner-customer-preview" data-action="open-customer-stall-preview" data-stall-id="${Number(state.user.stall_id)||0}" ${state.user.stall_id?'':'disabled'}>Preview customer storefront <span aria-hidden="true">→</span></button>`);
   root.querySelectorAll('.inventory-item').forEach(item=>{const id=Number(item.querySelector('[data-edit-product]')?.dataset.editProduct),product=state.products.find(entry=>entry.id===id);if(product?.photo_url){const art=item.querySelector('.inventory-emoji');if(art)art.innerHTML=`<img src="${esc(product.photo_url)}" alt="">`}});
+}
+function renderOwnerWeeklyPlanner(items){
+  if(!state.weeklyMenuAvailable)return `<section class="panel weekly-menu-planner is-unavailable"><div><span class="eyebrow">PLAN AHEAD</span><h2>Weekly menu planner</h2><p>This workspace needs the new notification and weekly menu migration in Supabase before plans can be saved.</p></div></section>`;
+  const weekdays=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+  const rows=state.weeklyMenu.filter(entry=>entry.stall_id===state.user?.stall_id);
+  const options=items.map(item=>`<option value="${item.id}">${esc(item.name)} · ${money(item.price)}</option>`).join('');
+  return `<section class="panel weekly-menu-planner"><div class="weekly-menu-heading"><div><span class="eyebrow">PLAN AHEAD</span><h2>Weekly menu planner</h2><p>Choose what you expect to serve at each school break. Your plan repeats every week.</p></div><span class="weekly-menu-repeat-mark" aria-hidden="true">↻</span></div><form class="weekly-menu-form" data-form="weekly-menu-plan"><label>Menu item<select name="product_id" required ${items.length?'':'disabled'}><option value="">Choose an item</option>${options}</select></label><label>Day<select name="weekday" required><option value="0">Monday</option><option value="1">Tuesday</option><option value="2">Wednesday</option><option value="3">Thursday</option><option value="4">Friday</option><option value="5">Saturday</option><option value="6">Sunday</option></select></label><label>Break period<select name="service_period" required><option>Morning break</option><option>Lunch</option><option>Afternoon break</option></select></label><button class="button button-primary" type="submit" ${items.length?'':'disabled'}>Add to weekly plan <span aria-hidden="true">+</span></button></form>${rows.length?`<ul class="weekly-menu-plan-list">${rows.map(entry=>`<li class="weekly-menu-plan-item"><span class="weekly-menu-plan-icon">${entry.photo_url?`<img src="${esc(entry.photo_url)}" alt="" loading="lazy">`:esc(entry.emoji)}</span><span class="weekly-menu-plan-copy"><strong>${esc(entry.name)}</strong><small>${esc(weekdays[entry.weekday]||'Day')} · ${esc(entry.service_period)} · ${esc(entry.stall_name)}</small></span><b>${money(entry.price)}</b><button type="button" class="button button-outline button-small" data-action="remove-weekly-menu-plan" data-schedule-id="${Number(entry.schedule_id)}">Remove</button></li>`).join('')}</ul>`:emptyState('↻','No weekly picks planned yet','Add a menu item above to start your repeating weekly plan.')}${items.length?'':'<p class="weekly-menu-empty-hint">Add a menu item first, then place it into your weekly plan.</p>'}</section>`;
 }
 function renderOwnerOrders(orders,total,preview){
   return `<section class="panel owner-order-queue workspace-page" id="owner-orders"><div class="section-title"><div><span class="eyebrow">ORDER QUEUE</span><h2>${preview?'Incoming orders':'Active orders'}</h2><p class="helper-text">New orders appear at the top. Update each one as you prepare it.</p></div><span class="result-count">${total} active</span></div>${orders.length?`<div class="order-list">${orders.map(orderCard).join('')}</div>`:emptyState('✓','All caught up','New orders will appear here.')}${preview&&total>orders.length?`<button type="button" class="button button-outline owner-view-all" data-workspace-role="owner" data-workspace-view="orders">View all ${total} active orders <span>→</span></button>`:''}</section>`;
@@ -741,7 +1131,7 @@ function renderOwnerReach(){
 function renderRunner(){
   const active=state.orders.filter(o=>!['completed','declined'].includes(o.status));
   const delivered=state.orders.filter(o=>o.status==='completed').length;
-  root.innerHTML=`${heading('CAMPUS RUNNER WORKSPACE','Every handoff, in sync.','Your assigned school deliveries, from stall pickup to buyer handoff.',`<span class="live-pill"><i></i>Runner account</span>`)}${workspaceNav('runner',[['runner-summary','Today','◷'],['runner-queue','Delivery queue','↗']])}<section class="stats-grid" id="runner-summary">${stat('Active deliveries',active.length,'Assigned to you','↗')}${stat('Delivered',delivered,'Completed handoffs','✓')}${stat('Next up',active[0]?.status==='ready'?'Pick up':'—',active[0]?.stall||'No pending pickup','⌖')}</section><section class="panel" id="runner-queue"><div class="section-title"><div><span class="eyebrow">YOUR DELIVERY QUEUE</span><h2>Assigned runs</h2></div><span class="result-count">${active.length} active</span></div>${active.length?`<div class="order-list">${active.map(orderCard).join('')}</div>`:emptyState('⌖','No assigned deliveries','When a stall assigns you an order, it will appear here.')}</section>`;
+  root.innerHTML=`${heading('CAMPUS RUNNER WORKSPACE','Every handoff, in sync.','Your assigned school deliveries, from stall pickup to buyer handoff.',`<span class="live-pill"><i></i>Runner account</span>`)}${workspaceNav('runner',[['summary','Today','◷'],['queue','Delivery queue','↗',active.length]],state.runnerView)}<section class="stats-grid" id="runner-summary">${stat('Active deliveries',active.length,'Assigned to you','↗')}${stat('Delivered',delivered,'Completed handoffs','✓')}${stat('Next up',active[0]?.status==='ready'?'Pick up':'—',active[0]?.stall||'No pending pickup','⌖')}</section><section class="panel" id="runner-queue"><div class="section-title"><div><span class="eyebrow">YOUR DELIVERY QUEUE</span><h2>Assigned runs</h2></div><span class="result-count">${active.length} active</span></div>${active.length?`<div class="order-list">${active.map(orderCard).join('')}</div>`:emptyState('⌖','No assigned deliveries','When a stall assigns you an order, it will appear here.')}</section>`;
   ensureLocationSharing();
 }
 function ensureLocationSharing(){
@@ -775,6 +1165,18 @@ function campusDateString(date=new Date()){
   const part=type=>parts.find(item=>item.type===type)?.value||'';
   return `${part('year')}-${part('month')}-${part('day')}`;
 }
+function renderAdminReportStatus(){
+  if(state.adminReportsError){
+    const context=state.adminReports?'Showing the last loaded report data.':'The study report is temporarily unavailable; the rest of the admin area is still available.';
+    return `<p class="report-definition" role="status">${context} ${esc(state.adminReportsError)}</p>`;
+  }
+  if(!state.adminReports)return '<p class="report-definition" role="status">Loading study data…</p>';
+  const report=state.adminReports,daily=report.daily||[];
+  const totals=daily.reduce((sum,row)=>sum+(row.units_ordered||0),0);
+  const completed=daily.reduce((sum,row)=>sum+(row.completed_orders||0),0);
+  const declined=daily.reduce((sum,row)=>sum+(row.declined_orders||0),0);
+  return `<p class="report-definition">Items ordered: ${totals} · Completed orders: ${completed} · Declined orders: ${declined}. Value is based on the menu total for completed orders; payment is not tracked. Views are anonymous and deduplicated per browser, stall or item, and day.</p>`;
+}
 function renderAdminReports(){
   const report=state.adminReports||{daily:[],stalls:[],products:[]};
   const today=campusDateString(),days=Number(state.reportRange);
@@ -788,7 +1190,7 @@ function renderAdminReports(){
   const dailyRows=daily.length?`<div class="report-table-wrap" role="region" aria-label="Daily study data" tabindex="0"><table class="report-table"><caption>Daily order and reach counts · ${esc(period)}</caption><thead><tr><th scope="col">Date · PHT</th><th scope="col">Orders</th><th scope="col">Completed</th><th scope="col">Declined</th><th scope="col">Items ordered</th><th scope="col">Completed order value</th><th scope="col">Stall views</th><th scope="col">Menu views</th></tr></thead><tbody>${daily.map(row=>`<tr><th scope="row">${esc(row.date)}</th><td>${row.orders}</td><td>${row.completed_orders}</td><td>${row.declined_orders}</td><td>${row.units_ordered}</td><td>${money(row.sales_cents/100)}</td><td>${row.stall_views}</td><td>${row.item_views}</td></tr>`).join('')}</tbody></table></div>`:emptyState('▤','No activity in this period','Choose another date range or collect more activity.');
   const stallRows=report.stalls.length?`<div class="report-table-wrap" role="region" aria-label="All-time stall summary" tabindex="0"><table class="report-table"><caption>Stall performance · all time</caption><thead><tr><th scope="col">Stall</th><th scope="col">Orders</th><th scope="col">Completed</th><th scope="col">Declined</th><th scope="col">Items ordered</th><th scope="col">Completed order value</th><th scope="col">Stall views</th><th scope="col">Menu views</th></tr></thead><tbody>${report.stalls.map(row=>`<tr><th scope="row">${esc(row.name)}</th><td>${row.orders}</td><td>${row.completed_orders}</td><td>${row.declined_orders}</td><td>${row.units_ordered}</td><td>${money(row.sales_cents/100)}</td><td>${row.stall_views}</td><td>${row.item_views}</td></tr>`).join('')}</tbody></table></div>`:emptyState('⌂','No stalls to report','Stall summaries will appear when sellers join.');
   const productRows=report.products.length?`<div class="report-table-wrap" role="region" aria-label="All-time menu item summary" tabindex="0"><table class="report-table"><caption>Menu item performance · all time</caption><thead><tr><th scope="col">Menu item</th><th scope="col">Stall</th><th scope="col">Detail views</th><th scope="col">Orders</th><th scope="col">Items ordered</th><th scope="col">Completed order value</th></tr></thead><tbody>${report.products.map(row=>`<tr><th scope="row">${esc(row.name)}</th><td>${esc(row.stall_name)}</td><td>${row.views}</td><td>${row.orders}</td><td>${row.units_ordered}</td><td>${money(row.sales_cents/100)}</td></tr>`).join('')}</tbody></table></div>`:emptyState('▦','No menu items to report','Menu item summaries will appear here.');
-  return `<section class="panel admin-reports" id="admin-reports" aria-labelledby="admin-report-title"><div class="section-title report-heading"><div><span class="eyebrow">STUDY DATA</span><h2 id="admin-report-title">Data &amp; reports</h2><p class="helper-text">Aggregated activity for your study. This report does not show buyer names, email addresses, or delivery locations.</p></div><div class="report-actions"><label>Summary period<select id="report-range" aria-label="Choose report summary period"><option value="7" ${state.reportRange==='7'?'selected':''}>Last 7 days</option><option value="30" ${state.reportRange==='30'?'selected':''}>Last 30 days</option><option value="90" ${state.reportRange==='90'?'selected':''}>Last 90 days</option><option value="all" ${state.reportRange==='all'?'selected':''}>All recorded dates</option></select></label><button type="button" class="button button-outline button-small" data-action="export-report" ${state.adminReports?'':'disabled'}>Download CSV</button></div></div><div class="report-stat-grid">${stat('Orders',totals.orders,period,'▣')}${stat('Completed order value',money(totals.sales/100),'Value of completed orders','₱')}${stat('Stall page views',totals.stallViews,'Anonymous daily counts','⌂')}${stat('Menu item views',totals.itemViews,'Anonymous daily counts','⌕')}</div>${state.adminReports?`<p class="report-definition">Items ordered: ${totals.units} · Completed orders: ${totals.completed} · Declined orders: ${totals.declined}. Value is based on the menu total for completed orders; payment is not tracked. Views are anonymous and deduplicated per browser, stall or item, and day.</p>`:'<p class="report-definition" role="status">Loading study data…</p>'}<div class="report-section"><h3>Daily activity</h3>${dailyRows}</div><div class="report-section"><h3>By stall</h3>${stallRows}</div><div class="report-section"><h3>By menu item</h3>${productRows}</div></section>`;
+  return `<section class="panel admin-reports" id="admin-reports" aria-labelledby="admin-report-title"><div class="section-title report-heading"><div><span class="eyebrow">STUDY DATA</span><h2 id="admin-report-title">Data &amp; reports</h2><p class="helper-text">Aggregated activity for your study. This report does not show buyer names, email addresses, or delivery locations.</p></div><div class="report-actions"><label>Summary period<select id="report-range" aria-label="Choose report summary period"><option value="7" ${state.reportRange==='7'?'selected':''}>Last 7 days</option><option value="30" ${state.reportRange==='30'?'selected':''}>Last 30 days</option><option value="90" ${state.reportRange==='90'?'selected':''}>Last 90 days</option><option value="all" ${state.reportRange==='all'?'selected':''}>All recorded dates</option></select></label><button type="button" class="button button-outline button-small" data-action="export-report" ${state.adminReports?'':'disabled'}>Download CSV</button></div></div><div class="report-stat-grid">${stat('Orders',totals.orders,period,'▣')}${stat('Completed order value',money(totals.sales/100),'Value of completed orders','₱')}${stat('Stall page views',totals.stallViews,'Anonymous daily counts','⌂')}${stat('Menu item views',totals.itemViews,'Anonymous daily counts','⌕')}</div>${renderAdminReportStatus()}<div class="report-section"><h3>Daily activity</h3>${dailyRows}</div><div class="report-section"><h3>By stall</h3>${stallRows}</div><div class="report-section"><h3>By menu item</h3>${productRows}</div></section>`;
 }
 function downloadAdminReport(){
   const report=state.adminReports;if(!report)return;
@@ -806,31 +1208,72 @@ function downloadAdminReport(){
   const link=document.createElement('a');link.href=url;link.download=`bitehub-study-data-${state.reportRange}-${today}.csv`;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
   toast('Privacy-safe study data downloaded.');
 }
+function renderAdminStallResults(){
+  const query=state.adminStallSearch.trim().toLocaleLowerCase();
+  const stalls=(state.overview?.stall_list||[]).filter(stall=>{
+    const searchable=`${stall.name} ${stall.owner_name} ${stall.owner_email}`.toLocaleLowerCase();
+    if(query&&!searchable.includes(query))return false;
+    if(state.adminStallStatusFilter!=='all'&&stall.status!==state.adminStallStatusFilter)return false;
+    if(state.adminStallOpenFilter==='open'&&!stall.currently_open)return false;
+    if(state.adminStallOpenFilter==='closed'&&stall.currently_open)return false;
+    if(state.adminStallProductFilter==='none'&&stall.product_count!==0)return false;
+    if(state.adminStallProductFilter==='has'&&stall.product_count===0)return false;
+    if(state.adminStallProductFilter==='four-plus'&&stall.product_count<4)return false;
+    return true;
+  });
+  if(!stalls.length)return emptyState('⌕','No matching stall accounts','Try changing the search or filters.');
+  return `<div class="stall-review-list">${stalls.map(stall=>{
+    const paused=stall.status==='paused',pending=stall.status==='pending';
+    const action=pending?['approved','Approve stall']:paused?['approved','Resume stall']:['paused','Pause stall'];
+    const confirmStall=state.adminDeleteConfirm===`stall:${stall.id}`;
+    const products=state.products.filter(product=>Number(product.stall_id)===Number(stall.id));
+    return `<article class="stall-review-item"><div class="stall-review-head"><div class="stall-review-copy"><strong>${esc(stall.name)}</strong><span>${esc(stall.owner_name)} · ${esc(stall.owner_email)}</span><small>${stall.product_count} menu ${stall.product_count===1?'item':'items'} · Joined ${new Date(stall.created_at).toLocaleDateString()} · ${stall.currently_open?'Open now':'Closed now'}</small></div><span class="stall-status-badge status-${esc(stall.status)}">${pending?'Needs approval':paused?'Paused':'Approved'}</span><div class="stall-review-actions"><button class="button button-outline button-small" data-stall-status="${stall.id}" data-next-status="${action[0]}">${action[1]}</button><button class="button button-danger button-small" data-admin-delete-stall="${stall.id}">${confirmStall?'Confirm removal':'Remove account'}</button>${confirmStall?'<button class="button button-ghost button-small" data-admin-cancel-delete>Cancel</button>':''}</div></div><details class="admin-stall-products" data-stall-products="${stall.id}"><summary>Manage food items <span>${products.length}</span></summary>${products.length?`<ul>${products.map(product=>{const confirmProduct=state.adminDeleteConfirm===`product:${product.id}`;return `<li><span><strong>${esc(product.name)}</strong><small>${esc(product.category)} · ${money(product.price)} · ${product.available?'In menu':'Unavailable'}</small></span><span class="admin-product-actions"><button type="button" class="button button-danger button-small" data-admin-delete-product="${product.id}">${confirmProduct?'Confirm removal':'Remove food'}</button>${confirmProduct?'<button type="button" class="button button-ghost button-small" data-admin-cancel-delete>Cancel</button>':''}</span></li>`}).join('')}</ul>`:'<p class="helper-text">No food items have been added to this stall yet.</p>'}</details>${confirmStall?'<p class="admin-delete-hint" role="status">The owner will lose sign-in access and the stall will disappear from browsing. Order history stays saved. Press Confirm removal again to continue.</p>':''}</article>`;
+  }).join('')}</div>`;
+}
+function updateAdminStallResults(){
+  const results=$('#admin-stall-results');
+  if(!results)return;
+  const openStalls=new Set([...results.querySelectorAll('details[open][data-stall-products]')].map(item=>item.dataset.stallProducts));
+  results.innerHTML=renderAdminStallResults();
+  for(const item of results.querySelectorAll('details[data-stall-products]'))if(openStalls.has(item.dataset.stallProducts))item.open=true;
+}
 function renderStallApprovals(){
-  const stalls=state.overview?.stall_list||[];
-  return `<section class="panel stall-approvals" id="admin-stalls"><div class="section-title"><div><span class="eyebrow">CAMPUS STALLS</span><h2>Stall status</h2></div><span class="result-count">${stalls.length} registered</span></div>${stalls.length?`<div class="stall-review-list">${stalls.map(stall=>{const paused=stall.status==='paused';const action=paused?['approved','Resume stall']:['paused','Pause stall'];return `<article class="stall-review-item"><div class="stall-review-copy"><strong>${esc(stall.name)}</strong><span>${esc(stall.owner_name)} · ${esc(stall.owner_email)}</span><small>${stall.product_count} menu ${stall.product_count===1?'item':'items'} · Joined ${new Date(stall.created_at).toLocaleDateString()}</small></div><span class="stall-status-badge status-${paused?'paused':'approved'}">${paused?'paused':'open'}</span><button class="button button-outline button-small" data-stall-status="${stall.id}" data-next-status="${action[0]}">${action[1]}</button></article>`}).join('')}</div>`:emptyState('⌂','No stall accounts yet','Registered stalls will appear here.')}</section>`;
+  const stalls=state.overview?.stall_list||[],mode=state.overview?.stall_registration_mode||'allow_all';
+  const modes=[
+    ['allow_all','Allow all stalls','New stalls are approved as soon as they register and may publish food.'],
+    ['limited','Limited · approve first','Stalls can create accounts, but cannot sell until you approve them.'],
+    ['stop_all','Stop all stalls','Block new stall accounts and pause all stall listings and sales.']
+  ];
+  return `<section class="panel admin-stall-policy"><div class="section-title"><div><span class="eyebrow">REGISTRATION &amp; SALES</span><h2>Stall access mode</h2><p class="helper-text">Choose how PNS stall accounts and food listings work.</p></div><span class="stall-status-badge status-${mode==='stop_all'?'paused':mode==='limited'?'pending':'approved'}">${mode==='stop_all'?'Stopped':mode==='limited'?'Approval required':'Open access'}</span></div><div class="admin-stall-mode-grid">${modes.map(([key,title,description])=>`<button type="button" class="admin-stall-mode ${mode===key?'is-selected':''}" data-stall-mode="${key}" aria-pressed="${mode===key}"><span class="admin-stall-mode-mark" aria-hidden="true">${mode===key?'✓':'○'}</span><strong>${title}</strong><small>${description}</small></button>`).join('')}</div></section><section class="panel stall-approvals" id="admin-stalls"><div class="section-title"><div><span class="eyebrow">CAMPUS DIRECTORY</span><h2>Find and manage a stall</h2><p class="helper-text">Search an owner, approve or pause their stall, or remove food from both the stall menu and customer catalog.</p></div><span class="result-count">${stalls.length} registered</span></div><div class="admin-stall-filters"><label class="admin-stall-search">Search stall or owner<input type="search" id="admin-stall-search" value="${esc(state.adminStallSearch)}" placeholder="Stall name, owner, or email" autocomplete="off"></label><label>Status<select id="admin-stall-status-filter"><option value="all" ${state.adminStallStatusFilter==='all'?'selected':''}>Any status</option><option value="pending" ${state.adminStallStatusFilter==='pending'?'selected':''}>Needs approval</option><option value="approved" ${state.adminStallStatusFilter==='approved'?'selected':''}>Approved</option><option value="paused" ${state.adminStallStatusFilter==='paused'?'selected':''}>Paused</option></select></label><label>Open now<select id="admin-stall-open-filter"><option value="all" ${state.adminStallOpenFilter==='all'?'selected':''}>Any</option><option value="open" ${state.adminStallOpenFilter==='open'?'selected':''}>Open</option><option value="closed" ${state.adminStallOpenFilter==='closed'?'selected':''}>Closed</option></select></label><label>Food items<select id="admin-stall-product-filter"><option value="all" ${state.adminStallProductFilter==='all'?'selected':''}>Any count</option><option value="has" ${state.adminStallProductFilter==='has'?'selected':''}>Has items</option><option value="none" ${state.adminStallProductFilter==='none'?'selected':''}>No items</option><option value="four-plus" ${state.adminStallProductFilter==='four-plus'?'selected':''}>4 or more</option></select></label></div><div id="admin-stall-results" aria-live="polite">${renderAdminStallResults()}</div></section>`;
 }
 function renderOwnerStallNotice(){
   const status=state.user.stall_status;
+  if(status==='pending'){
+    root.insertAdjacentHTML('afterbegin',`<aside class="stall-status-notice is-pending"><strong>Stall application under review</strong><p>You can sign in while BiteHub’s administrator reviews the stall. You can publish food and accept orders after approval.</p></aside>`);
+    return;
+  }
   if(status!=='paused')return;
   root.insertAdjacentHTML('afterbegin',`<aside class="stall-status-notice is-paused"><strong>Stall paused</strong><p>Customers cannot see or order from your stall while it is paused. Contact an administrator to resume it.</p></aside>`);
 }
 function render(){
+  $('#app')?.classList.remove('guest-entering');
+  root.removeAttribute('aria-busy');
   const footerReturn=document.querySelector('.auth-front-footer-return');
   if(footerReturn)footerReturn.hidden=true;
   accountTools();
-  if(!state.user){if(state.publicBrowse){document.querySelector('#app')?.classList.remove('auth-open');renderBuyerView();return}return renderAuthWall()}
+  renderRoleBottomNav();
+  if(!state.user){if(state.publicBrowse){document.querySelector('#app')?.classList.remove('auth-open');renderBuyerView();mountNotificationNudge('guest');return}return renderAuthWall()}
   document.querySelector('#app')?.classList.remove('auth-open');
-  if(state.user.role==='buyer'){renderBuyerView();enhanceGoogleCampusMaps();return}
+  if(state.user.role==='buyer'){renderBuyerView();mountNotificationNudge('buyer');enhanceGoogleCampusMaps();return}
   if(state.user.role==='owner'){
-    renderOwner();renderOwnerStallNotice();
+    renderOwner();mountNotificationNudge('owner');renderOwnerStallNotice();
     addProductMetadataFields(root.querySelector('form[data-form="product"]'));
     enhanceGoogleCampusMaps();return;
   }
   if(state.user.role==='runner'){renderRunner();enhanceGoogleCampusMaps();return}
   renderAdmin();
 }
-function renderError(message){root.innerHTML=`${heading('CONNECTION ISSUE','The hub could not load.','Check the local server, then try again.')}<section class="panel error-panel"><p>${esc(message)}</p><button class="button button-primary" data-action="retry">Try again</button></section>`}
+function renderError(message){$('#app')?.classList.remove('guest-entering');root.removeAttribute('aria-busy');root.innerHTML=`${heading('CONNECTION ISSUE','The hub could not load.','Check the local server, then try again.')}<section class="panel error-panel"><p>${esc(message)}</p><button class="button button-primary" data-action="retry">Try again</button></section>`}
 async function showAuth(mode='login'){$('#auth-dialog').close?.();renderAuthForm(mode);$('#auth-dialog').showModal()}
 function showAccountEmailDialog(mode,token=''){
   const dialog=$('#auth-dialog');if(!dialog)return;
@@ -855,6 +1298,7 @@ function updateCartShortcut(){
   document.body.classList.toggle('has-cart-fab',!shortcut.hidden);
   shortcut.innerHTML=`<span class="cart-fab-icon" aria-hidden="true">▣</span><span class="cart-fab-copy"><small>Your bag · ${count} ${count===1?'item':'items'}</small><strong>${money(cartTotal())}</strong></span><b>Review bag <span aria-hidden="true">→</span></b>`;
   shortcut.setAttribute('aria-label',`Review your bag with ${count} ${count===1?'item':'items'}, total ${money(cartTotal())}`);
+  renderRoleBottomNav();
 }
 function renderBagLine(item){
   const art=item.photo_url?`<img src="${esc(item.photo_url)}" alt="">`:`<span aria-hidden="true">${esc(item.emoji)}</span>`;
@@ -862,7 +1306,7 @@ function renderBagLine(item){
   return `<article class="bag-item" data-bag-item="${item.id}"><div class="bag-item-art">${art}</div><div class="bag-item-content"><div class="bag-item-heading"><strong>${esc(item.name)}</strong><button type="button" class="bag-remove" data-remove-cart="${item.id}" aria-label="Remove ${esc(item.name)} from bag">Remove</button></div><small class="bag-item-stall">${esc(item.stall_name)} · ${money(item.price)} each</small><div class="bag-item-bottom"><div class="quantity-control bag-quantity"><button type="button" data-quantity="-1" data-id="${item.id}" aria-label="Remove one ${esc(item.name)}">−</button><span aria-label="Quantity">${item.quantity}</span><button type="button" data-quantity="1" data-id="${item.id}" aria-label="Add one ${esc(item.name)}" ${item.quantity>=limit?'disabled':''}>+</button></div><strong class="bag-line-total">${money(item.price*item.quantity)}</strong></div></div></article>`;
 }
 function renderCart(){
-  const items=cartEntries(),deliveryAvailable=activeCampus().configured;
+  const items=cartEntries(),deliveryAvailable=activeCampus().configured,cartOnBreak=items.some(item=>item.stall_on_break);
   if(!deliveryAvailable&&state.fulfillment==='delivery'){state.fulfillment='pickup';state.deliveryLocation=null}
   const dialog=$('#cart-dialog'),content=$('#cart-content'),wasOpen=dialog.open,body=$('#bag-scroll'),previousScroll=body?.scrollTop||0;
   const focused=document.activeElement,quantity=focused?.closest('[data-quantity]'),remove=focused?.closest('[data-remove-cart]');
@@ -875,17 +1319,26 @@ function renderCart(){
     if($('#guest-order-section'))state.guestSection=$('#guest-order-section').value;
   }
   const controls=items.length&&!guest?`<section class="bag-section" aria-labelledby="bag-fulfillment-title"><h3 id="bag-fulfillment-title">How do you want to get it?</h3><div class="fulfillment-options" role="radiogroup" aria-label="Choose pickup or school delivery"><label class="fulfillment-choice ${state.fulfillment==='pickup'?'is-selected':''}"><input type="radio" id="fulfillment" name="fulfillment" value="pickup" ${state.fulfillment==='pickup'?'checked':''}><i class="fulfillment-icon" aria-hidden="true">⌂</i><span><strong>Pick up</strong><small>Collect from the stall</small></span></label><label class="fulfillment-choice ${state.fulfillment==='delivery'?'is-selected':''} ${deliveryAvailable?'':'is-disabled'}"><input type="radio" id="fulfillment-delivery" name="fulfillment" value="delivery" ${state.fulfillment==='delivery'?'checked':''} ${deliveryAvailable?'':'disabled'}><i class="fulfillment-icon" aria-hidden="true">↗</i><span><strong>School delivery</strong><small>${deliveryAvailable?'Meet your runner at school':'School delivery needs a location pin'}</small></span></label></div><div class="delivery-map-wrap" id="delivery-map-wrap" ${state.fulfillment!=='delivery'?'hidden':''}><strong>Choose a PNS handoff point</strong><small>Tap a blue campus path or nearby meeting point on the map.</small>${campusMap(null,true)}<small class="map-attribution">PNS campus map data © Overture Maps Foundation, Meta/WRI, and OpenGeoHub · GPS accuracy varies.</small><span class="map-key"><i class="map-key-destination"></i>Handoff point</span><span id="delivery-map-status" role="status">${state.deliveryLocation?'Delivery point selected':'No delivery point selected'}</span><a class="button button-outline button-small map-google-link" id="delivery-google-link" href="${googleMapsPointUrl(state.deliveryLocation)}" target="_blank" rel="noopener noreferrer">${state.deliveryLocation?'Check handoff point':'View school map'} in Google Maps <span aria-hidden="true">↗</span></a></div><label class="bag-note">Note for the stall <small>Optional · allergies or pickup details</small><textarea id="order-note" maxlength="240" rows="2" placeholder="Add a note for the stall">${esc(state.cartNote)}</textarea></label></section>`:'';
-  content.innerHTML=`<div class="bag-layout"><header class="bag-header"><div class="bag-heading"><span class="bag-heading-mark" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M12 19h24l-2 20H14l-2-20Z" fill="#FFEACF" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/><path d="M18 20v-4a6 6 0 0 1 12 0v4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M18 27h12M20 32h8" stroke="#A85649" stroke-width="2.2" stroke-linecap="round"/></svg></span><div class="bag-heading-copy"><span class="bag-heading-kicker"><i aria-hidden="true">✦</i> YOUR PNS ORDER</span><h2 id="cart-title">${items.length?'Review your bag':'Your bag'}</h2><p>${items.length?`${cartCount()} ${cartCount()===1?'item':'items'} · ${esc(first.stall_name)}`:'Pick something good for your break.'}</p></div></div>${items.length?`<div class="bag-header-actions"><span class="bag-item-count">${cartCount()} ${cartCount()===1?'item':'items'}</span><button type="button" class="bag-clear" data-action="clear-cart">Clear bag</button></div>`:`<span class="bag-ready-pill"><i aria-hidden="true"></i> READY FOR A GOOD BREAK</span>`}</header><div class="bag-scroll" id="bag-scroll">${items.length?`<div class="bag-stall-note"><span aria-hidden="true">⌂</span><span><strong>${esc(first.stall_name)}</strong><small>One stall per order · review your items below</small></span></div><div class="bag-lines">${items.map(renderBagLine).join('')}</div>${controls}`:`<div class="bag-empty"><span class="bag-empty-kicker">A GOOD BREAK STARTS HERE</span><div class="bag-empty-art" aria-hidden="true"><span class="bag-empty-spark bag-empty-spark-one">✦</span><span class="bag-empty-spark bag-empty-spark-two">✳</span><svg viewBox="0 0 176 148"><ellipse cx="88" cy="133" rx="48" ry="7" fill="#174A5730"/><circle cx="88" cy="72" r="61" fill="#E5F3ED"/><path d="M59 61V48a29 29 0 0 1 58 0v13" fill="none" stroke="#226C82" stroke-width="5" stroke-linecap="round"/><path d="M49 57h78l-7 65a11 11 0 0 1-11 10H67a11 11 0 0 1-11-10l-7-65Z" fill="#FFF4DF" stroke="#226C82" stroke-width="3" stroke-linejoin="round"/><path d="M49 61h78v14H49z" fill="#FAB2A4" stroke="#226C82" stroke-width="3"/><path d="M65 60c0-11 9-20 21-20 12 0 21 9 21 20" fill="#FFEACF" stroke="#A85649" stroke-width="3"/><path d="M69 56c5-5 10 4 16-1s11 4 17-1" fill="none" stroke="#72B99A" stroke-width="4" stroke-linecap="round"/><circle cx="77" cy="93" r="2.8" fill="#226C82"/><circle cx="99" cy="93" r="2.8" fill="#226C82"/><path d="M80 103c5 6 12 6 17 0" fill="none" stroke="#A85649" stroke-width="2.8" stroke-linecap="round"/><path d="m45 38 3 7 7 3-7 3-3 7-3-7-7-3 7-3 3-7Zm88 29 2 5 5 2-5 2-2 5-2-5-5-2 5-2 2-5Z" fill="#D99A68"/></svg></div><h3>Let’s find your next favorite</h3><p>Explore the PNS menu and add a tasty break-time pick from one of your school stalls.</p><button type="button" class="button button-primary" data-action="continue-shopping">Explore the menu <span aria-hidden="true">→</span></button><div class="bag-empty-promises" aria-hidden="true"><span>✦ PNS stall favorites</span><i></i><span>⌂ Easy pickup</span></div></div>`}</div>${items.length?`<footer class="bag-footer"><div class="bag-total"><span>${cartCount()} ${cartCount()===1?'item':'items'} · total</span><strong>${money(cartTotal())}</strong></div>${guest?`<small class="bag-payment-note">Log in to choose pickup or delivery and place your order.</small><button type="button" class="button button-primary button-wide" data-action="guest-checkout">Log in to order <span>→</span></button>`:`<small class="bag-payment-note">Pay the stall directly at pickup or handoff.</small><button type="button" class="button button-primary button-wide" data-action="place-order" ${state.paused||(state.fulfillment==='delivery'&&!state.deliveryLocation)?'disabled':''}>${state.paused?'Ordering paused':`Place order · ${money(cartTotal())}`} <span>→</span></button>`}</footer>`:''}</div>`;
+  content.innerHTML=`<div class="bag-layout"><header class="bag-header"><div class="bag-heading"><span class="bag-heading-mark" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M12 19h24l-2 20H14l-2-20Z" fill="#FFEACF" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/><path d="M18 20v-4a6 6 0 0 1 12 0v4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M18 27h12M20 32h8" stroke="#A85649" stroke-width="2.2" stroke-linecap="round"/></svg></span><div class="bag-heading-copy"><span class="bag-heading-kicker"><i aria-hidden="true">✦</i> YOUR PNS ORDER</span><h2 id="cart-title">${items.length?'Review your bag':'Your bag'}</h2><p>${items.length?`${cartCount()} ${cartCount()===1?'item':'items'} · ${esc(first.stall_name)}`:'Pick something good for your break.'}</p></div></div>${items.length?`<div class="bag-header-actions"><span class="bag-item-count">${cartCount()} ${cartCount()===1?'item':'items'}</span><button type="button" class="bag-clear" data-action="clear-cart">Clear bag</button></div>`:`<span class="bag-ready-pill"><i aria-hidden="true"></i> READY FOR A GOOD BREAK</span>`}</header><div class="bag-scroll" id="bag-scroll">${items.length?`<div class="bag-stall-note"><span aria-hidden="true">⌂</span><span><strong>${esc(first.stall_name)}</strong><small>One stall per order · review your items below</small></span></div><div class="bag-lines">${items.map(renderBagLine).join('')}</div>${cartOnBreak?'<p class="stall-break-message" role="status">This stall is taking a short break. New orders are paused; check back soon.</p>':''}${controls}`:`<div class="bag-empty"><span class="bag-empty-kicker">A GOOD BREAK STARTS HERE</span><div class="bag-empty-art" aria-hidden="true"><span class="bag-empty-spark bag-empty-spark-one">✦</span><span class="bag-empty-spark bag-empty-spark-two">✳</span><svg viewBox="0 0 176 148"><ellipse cx="88" cy="133" rx="48" ry="7" fill="#174A5730"/><circle cx="88" cy="72" r="61" fill="#E5F3ED"/><path d="M59 61V48a29 29 0 0 1 58 0v13" fill="none" stroke="#226C82" stroke-width="5" stroke-linecap="round"/><path d="M49 57h78l-7 65a11 11 0 0 1-11 10H67a11 11 0 0 1-11-10l-7-65Z" fill="#FFF4DF" stroke="#226C82" stroke-width="3" stroke-linejoin="round"/><path d="M49 61h78v14H49z" fill="#FAB2A4" stroke="#226C82" stroke-width="3"/><path d="M65 60c0-11 9-20 21-20 12 0 21 9 21 20" fill="#FFEACF" stroke="#A85649" stroke-width="3"/><path d="M69 56c5-5 10 4 16-1s11 4 17-1" fill="none" stroke="#72B99A" stroke-width="4" stroke-linecap="round"/><circle cx="77" cy="93" r="2.8" fill="#226C82"/><circle cx="99" cy="93" r="2.8" fill="#226C82"/><path d="M80 103c5 6 12 6 17 0" fill="none" stroke="#A85649" stroke-width="2.8" stroke-linecap="round"/><path d="m45 38 3 7 7 3-7 3-3 7-3-7-7-3 7-3 3-7Zm88 29 2 5 5 2-5 2-2 5-2-5-5-2 5-2 2-5Z" fill="#D99A68"/></svg></div><h3>Let’s find your next favorite</h3><p>Explore the PNS menu and add a tasty break-time pick from one of your school stalls.</p><button type="button" class="button button-primary" data-action="continue-shopping">Explore the menu <span aria-hidden="true">→</span></button><div class="bag-empty-promises" aria-hidden="true"><span>✦ PNS stall favorites</span><i></i><span>⌂ Easy pickup</span></div></div>`}</div>${items.length?`<footer class="bag-footer"><div class="bag-total"><span>${cartCount()} ${cartCount()===1?'item':'items'} · total</span><strong>${money(cartTotal())}</strong></div>${guest?`<small class="bag-payment-note">Log in to choose pickup or delivery and place your order.</small><button type="button" class="button button-primary button-wide" data-action="guest-checkout">Log in to order <span>→</span></button>`:`<small class="bag-payment-note">${cartOnBreak?'This stall is on a short break. Keep your items and check back soon.':'Pay the stall directly at pickup or handoff.'}</small><button type="button" class="button button-primary button-wide" data-action="place-order" ${state.paused||cartOnBreak||(state.fulfillment==='delivery'&&!state.deliveryLocation)?'disabled':''}>${cartOnBreak?'Stall on a short break':state.paused?'Ordering paused':`Place order · ${money(cartTotal())}`} <span>→</span></button>`}</footer>`:''}</div>`;
   if(guest&&items.length){
     const guestFields=document.createElement('section');guestFields.className='bag-section guest-checkout-fields';
     guestFields.setAttribute('aria-labelledby','guest-checkout-title');
     guestFields.innerHTML=`<h3 id="guest-checkout-title">Place your order as a guest</h3><label class="guest-name-field">Name for this order<input id="guest-order-name" name="guest_name" maxlength="80" autocomplete="name" required value="${esc(state.guestName)}" placeholder="What should the stall call you?"></label><div class="fulfillment-options" role="radiogroup" aria-label="Choose pickup or school delivery"><label class="fulfillment-choice ${state.fulfillment==='pickup'?'is-selected':''}"><input type="radio" id="fulfillment" name="fulfillment" value="pickup" ${state.fulfillment==='pickup'?'checked':''}><i class="fulfillment-icon" aria-hidden="true">⌂</i><span><strong>Pick up</strong><small>Collect from the stall</small></span></label><label class="fulfillment-choice ${state.fulfillment==='delivery'?'is-selected':''} ${deliveryAvailable?'':'is-disabled'}"><input type="radio" id="fulfillment-delivery" name="fulfillment" value="delivery" ${state.fulfillment==='delivery'?'checked':''} ${deliveryAvailable?'':'disabled'}><i class="fulfillment-icon" aria-hidden="true">↗</i><span><strong>School delivery</strong><small>${deliveryAvailable?'Meet your runner at school':'School delivery needs a location pin'}</small></span></label></div><div class="delivery-map-wrap" id="delivery-map-wrap" ${state.fulfillment!=='delivery'?'hidden':''}><strong>Choose a PNS handoff point</strong><small>Tap the map to select a campus meeting point.</small>${campusMap(null,true)}<span id="delivery-map-status" role="status">${state.deliveryLocation?'Delivery point selected':'No delivery point selected'}</span></div><label class="bag-note">Note for the stall <small>Optional · allergies or pickup details</small><textarea id="order-note" maxlength="240" rows="2" placeholder="Add a note for the stall">${esc(state.cartNote)}</textarea></label>`;
     guestFields.querySelector('.fulfillment-options')?.insertAdjacentHTML('afterend',`<section class="guest-delivery-details" id="guest-delivery-details" ${state.fulfillment!=='delivery'?'hidden':''}><p>For school delivery, add the details the stall needs to find you.</p><label id="guest-school-role-field">School role<select id="guest-school-role" name="guest_school_role" required><option value="">Choose your school role</option><option value="junior_student" ${state.guestSchoolRole==='junior_student'?'selected':''}>Junior high student</option><option value="senior_student" ${state.guestSchoolRole==='senior_student'?'selected':''}>Senior high student</option><option value="teacher" ${state.guestSchoolRole==='teacher'?'selected':''}>Teacher</option><option value="staff" ${state.guestSchoolRole==='staff'?'selected':''}>School staff</option></select></label><label id="guest-grade-field" ${!['junior_student','senior_student'].includes(state.guestSchoolRole)||state.fulfillment!=='delivery'?'hidden':''}>Grade<select id="guest-order-grade" name="guest_grade" required><option value="">Choose your grade</option></select></label><label id="guest-section-field">Section or office<input id="guest-order-section" name="guest_section" maxlength="80" required value="${esc(state.guestSection)}" placeholder="Your section or office"></label></section>`);
-    $('#bag-scroll .bag-lines')?.after(guestFields);
+    const bagLines=$('#bag-scroll .bag-lines');
+    const deliveryMap=guestFields.querySelector('.delivery-map-wrap');
+    if(bagLines){
+      const itemsColumn=document.createElement('div');itemsColumn.className='bag-items-column';
+      bagLines.before(itemsColumn);itemsColumn.append(bagLines);
+      if(deliveryMap)itemsColumn.append(deliveryMap);
+      itemsColumn.after(guestFields);
+    }else $('#bag-scroll').append(guestFields);
     const oldCheckout=$('#cart-content [data-action="guest-checkout"]');
-    if(oldCheckout){const place=document.createElement('button');place.type='button';place.className='button button-primary button-wide';place.dataset.action='place-order';place.innerHTML=`Place guest order · ${money(cartTotal())} <span aria-hidden="true">→</span>`;oldCheckout.replaceWith(place)}
-    const paymentNote=$('#cart-content .bag-payment-note');if(paymentNote)paymentNote.textContent='No customer account needed. Order updates will appear in My orders on this device.';
+    if(oldCheckout){const place=document.createElement('button');place.type='button';place.className='button button-primary button-wide';place.dataset.action='place-order';place.disabled=state.paused||cartOnBreak;place.innerHTML=`Place guest order · ${money(cartTotal())} <span aria-hidden="true">→</span>`;oldCheckout.replaceWith(place)}
+    const paymentNote=$('#cart-content .bag-payment-note');if(paymentNote)paymentNote.textContent=cartOnBreak?'This stall is on a short break. Keep your items and check back soon.':'No customer account needed. Order updates will appear in My orders on this device.';
     syncGuestDeliveryFields();
+    syncGuestMapPlacement();
+    updateCartCheckoutButton();
   }
   accountTools();
   if(!dialog.open)dialog.showModal();
@@ -911,13 +1364,41 @@ function syncGuestDeliveryFields(){
   if(sectionField){sectionField.required=delivery;sectionField.disabled=!delivery}
   if(sectionLabel){const label=sectionLabel.firstChild;if(label&&label.nodeType===Node.TEXT_NODE)label.textContent=role==='teacher'||role==='staff'?'Office or department':'';if(role!=='teacher'&&role!=='staff'&&label)label.textContent='Section or office'}
 }
+function syncGuestMapPlacement(){
+  const map=$('#delivery-map-wrap'),guestFields=$('#cart-dialog .guest-checkout-fields'),itemsColumn=$('#cart-dialog .bag-items-column');
+  if(!map||!guestFields||!itemsColumn)return;
+  const compactViewport=window.matchMedia?.(guestMapBreakpointQuery).matches??window.innerWidth<=700;
+  if(compactViewport){
+    const anchor=guestFields.querySelector('.guest-delivery-details')||guestFields.querySelector('.fulfillment-options')||guestFields.querySelector('.guest-name-field');
+    if(anchor&&map.previousElementSibling!==anchor)anchor.after(map);
+  }else{
+    const anchor=itemsColumn.querySelector('.bag-lines');
+    if(anchor&&map.parentElement!==itemsColumn)anchor.after(map);
+    else if(anchor&&map.previousElementSibling!==anchor)anchor.after(map);
+  }
+}
+function onGuestMapBreakpointChange(){if($('#cart-dialog')?.open)syncGuestMapPlacement()}
+const guestMapBreakpointQuery='(max-width: 700px)';
+const guestMapBreakpoint=window.matchMedia?.(guestMapBreakpointQuery);
+if(guestMapBreakpoint?.addEventListener)guestMapBreakpoint.addEventListener('change',onGuestMapBreakpointChange);
+else guestMapBreakpoint?.addListener?.(onGuestMapBreakpointChange);
 function updateCartCheckoutButton(){
   const place=$('#cart-content [data-action="place-order"]');
-  if(place)place.disabled=state.paused||(state.fulfillment==='delivery'&&!state.deliveryLocation);
+  const awaitingHandoff=state.fulfillment==='delivery'&&!state.deliveryLocation;
+  const cartOnBreak=cartEntries().some(item=>item.stall_on_break);
+  if(place)place.disabled=state.paused||awaitingHandoff||cartOnBreak;
+  const note=$('#cart-content .bag-payment-note');
+  if(note){
+    note.dataset.awaitingHandoff=String(awaitingHandoff);
+    note.textContent=state.paused?'Ordering is paused right now.':cartOnBreak
+      ?'This stall is on a short break. Keep your items and check back soon.':awaitingHandoff
+      ?'Choose a PNS handoff point on the map to enable order placement.'
+      :state.user?'Pay the stall directly at pickup or handoff.':'No customer account needed. Order updates will appear in My orders on this device.';
+  }
 }
 function cartCount(){return cartEntries().reduce((count,item)=>count+item.quantity,0)}
 function animateFoodIntoBag(product,startRect){
-  const bag=$('#account-tools [data-action="open-cart"]');
+  const bag=$('#role-bottom-nav:not([hidden]) [data-action="open-cart"]')||$('#account-tools [data-action="open-cart"]');
   if(!bag||!startRect?.width||!startRect?.height||typeof Element.prototype.animate!=='function'||window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)return;
   const targetRect=bag.getBoundingClientRect(),size=Math.min(68,Math.max(46,Math.min(startRect.width,startRect.height)*.48));
   const flyer=document.createElement('span');flyer.className='food-to-bag-flight';flyer.setAttribute('aria-hidden','true');
@@ -934,7 +1415,7 @@ function animateFoodIntoBag(product,startRect){
 }
 function addToCart(product,sourceButton=null){
   if(state.paused){toast('Ordering is paused right now.');return}
-  if(!product.stall_open){toast(`This stall is closed. It opens at ${product.opens_at}.`);return}
+  if(product.stall_on_break){toast('This stall is taking a short break and is not accepting new orders.');return}if(!product.stall_open){toast(`This stall is closed. It opens at ${product.opens_at}.`);return}
   if(!product.available){toast('This menu item is currently unavailable.');return}
   if([...state.cart.values()].some(item=>item.stall_id!==product.stall_id)){toast('Place a separate order for each stall.');return}
   const item=state.cart.get(product.id)||{...product,quantity:0};
@@ -954,13 +1435,27 @@ function requireGuestOrderField(field,message){
   return false;
 }
 function changeQuantity(id,delta){const item=state.cart.get(Number(id));if(!item)return;const limit=item.stock_count===null||item.stock_count===undefined?50:Math.min(50,item.stock_count);if(item.quantity+delta>limit){toast(item.stock_count===null||item.stock_count===undefined?'You can order up to 50 of each item.':`Only ${item.stock_count} available.`);return}item.quantity+=delta;if(item.quantity<=0)state.cart.delete(Number(id));resetEmptyBag();accountTools();renderCart()}
+function similarAvailableProducts(product){
+  const cartStallId=cartEntries()[0]?.stall_id;
+  return state.products.filter(item=>item.id!==product.id&&item.available&&item.stall_open&&!item.stall_on_break&&item.stock_count!==0&&
+    (cartStallId==null||item.stall_id===cartStallId)&&
+    (state.dietaryFilter==='All'||item.dietary_tags.includes(state.dietaryFilter))&&
+    (state.allergenFilter==='All'||!item.allergen_tags.includes(state.allergenFilter)))
+    .sort((a,b)=>(Number(a.category!==product.category)-Number(b.category!==product.category))||
+      (Number(a.stall_id!==product.stall_id)-Number(b.stall_id!==product.stall_id))||
+      (Math.abs(a.price-product.price)-Math.abs(b.price-product.price))||a.name.localeCompare(b.name))
+    .slice(0,3);
+}
 function renderProductDetails(id){
   const product=state.products.find(item=>item.id===Number(id));if(!product)return;
   if(!(state.user?.role==='owner'&&state.user.stall_id===product.stall_id)&&state.user?.role!=='admin')recordReachView(product.stall_id,product.id);
   const logo=product.stall_logo_url?`<img src="${esc(product.stall_logo_url)}" alt="">`:esc(product.stall_name.trim().charAt(0).toUpperCase());
-  $('#product-content').innerHTML=`<form method="dialog" class="modal-dismiss"><button class="icon-button" aria-label="Close item details">×</button></form><div class="product-detail-hero">${product.photo_url?`<img src="${esc(product.photo_url)}" alt="Photo of ${esc(product.name)}">`:`<span aria-hidden="true">${esc(product.emoji)}</span>`}</div><div class="product-detail-body"><button class="product-detail-stall" data-stall-profile="${product.stall_id}"><span class="stall-mini-logo">${logo}</span><span><small>FROM THIS STALL</small><strong>${esc(product.stall_name)}</strong></span><b aria-hidden="true">›</b></button><span class="eyebrow">${esc(product.category)}</span><h2>${esc(product.name)}</h2><p class="product-detail-description">${esc(product.description||'Fresh from the stall, ready for your break.')}</p>${product.ingredients?`<section class="product-info-block"><h3>Ingredients</h3><p>${esc(product.ingredients)}</p></section>`:''}${productTags(product)?`<section class="product-info-block"><h3>Dietary & allergen information</h3><div class="product-tag-summary detail-tags">${productTags(product)}</div><small>Information is provided by the stall. Confirm allergy details with the owner.</small></section>`:''}<p class="detail-stock">${product.stall_open?`Open · ${esc(product.opens_at)}–${esc(product.closes_at)} PHT`:`Closed · opens ${esc(product.opens_at)} PHT`}${product.stock_count!==null?` · ${product.available?`${product.stock_count} left`:'Sold out'}`:''}</p><div class="product-detail-footer"><strong>${money(product.price)}</strong><button class="button button-primary" data-add="${product.id}" ${state.paused||!product.available?'disabled':''}>${!product.available?'Unavailable':state.paused?'Ordering paused':'Add to bag'}</button></div></div>`;
+  const unavailable=!product.available||!product.stall_open||product.stall_on_break;
+  const alternatives=unavailable?similarAvailableProducts(product):[];
+  const alternativePanel=unavailable?`<section class="product-alternatives" aria-labelledby="product-alternatives-title"><div><span class="eyebrow">${product.stall_on_break?'SHORT BREAK':product.available?'STALL CLOSED':'SOLD OUT'}</span><h3 id="product-alternatives-title">${product.stall_on_break?'Check back soon':alternatives.length?'Try an available pick':'Looking for something else?'}</h3><p>${product.stall_on_break?'This stall is taking a short break, so new orders are paused.':alternatives.length?'Similar PNS menu items that are available now.':'There are no matching available items right now. Browse the menu for other campus picks.'}</p></div>${alternatives.length?`<div class="product-alternative-list">${alternatives.map(item=>`<article class="product-alternative-card"><button type="button" class="product-alternative-art" data-product-details="${item.id}" aria-label="View ${esc(item.name)} details">${item.photo_url?`<img src="${esc(item.photo_url)}" alt="">`:`<span aria-hidden="true">${esc(item.emoji)}</span>`}</button><div class="product-alternative-copy"><strong>${esc(item.name)}</strong><small>${esc(item.stall_name)} · ${esc(item.category)}</small><b>${money(item.price)}</b></div><button type="button" class="button button-primary button-small" data-add="${item.id}" ${state.paused?'disabled':''}>${state.paused?'Paused':'Add +'}</button></article>`).join('')}</div>`:''}<small class="product-alternatives-note">Suggestions respect your selected dietary and allergen filters. PNS stalls provide the menu details.</small></section>`:'';
+  $('#product-content').innerHTML=`<form method="dialog" class="modal-dismiss"><button class="icon-button" aria-label="Close item details">×</button></form><div class="product-detail-hero">${product.photo_url?`<img src="${esc(product.photo_url)}" alt="Photo of ${esc(product.name)}">`:`<span aria-hidden="true">${esc(product.emoji)}</span>`}</div><div class="product-detail-body"><button class="product-detail-stall" data-stall-profile="${product.stall_id}"><span class="stall-mini-logo">${logo}</span><span><small>FROM THIS STALL</small><strong>${esc(product.stall_name)}</strong></span><b aria-hidden="true">›</b></button><span class="eyebrow">${esc(product.category)}</span><h2>${esc(product.name)}</h2><p class="product-detail-description">${esc(product.description||'Fresh from the stall, ready for your break.')}</p>${product.ingredients?`<section class="product-info-block"><h3>Ingredients</h3><p>${esc(product.ingredients)}</p></section>`:''}${productTags(product)?`<section class="product-info-block"><h3>Dietary & allergen information</h3><div class="product-tag-summary detail-tags">${productTags(product)}</div><small>Information is provided by the stall. Confirm allergy details with the owner.</small></section>`:''}<p class="detail-stock">${product.stall_on_break?'On a short break - be right back':product.stall_open?`Open · ${esc(product.opens_at)}–${esc(product.closes_at)} PHT`:`Closed · opens ${esc(product.opens_at)} PHT`}${product.stock_count!==null?` · ${product.available?`${product.stock_count} left`:'Sold out'}`:''}</p><div class="product-detail-footer"><strong>${money(product.price)}</strong><button class="button button-primary" data-add="${product.id}" ${state.paused||!product.available?'disabled':''}>${!product.available?'Unavailable':state.paused?'Ordering paused':'Add to bag'}</button></div>${alternativePanel}</div>`;
   const add=$('#product-content [data-add]');
-  if(add){add.disabled=state.paused||!product.stall_open||!product.available;add.textContent=state.paused?'Ordering paused':!product.stall_open?'Stall closed':!product.available?'Sold out':'Add to bag'}
+  if(add){add.disabled=state.paused||!product.stall_open||product.stall_on_break||!product.available;add.textContent=state.paused?'Ordering paused':product.stall_on_break?'Back soon':!product.stall_open?'Stall closed':!product.available?'Sold out':'Add to bag'}
   if(!$('#product-dialog').open)$('#product-dialog').showModal();
 }
 function renderProductEdit(id){
@@ -971,8 +1466,16 @@ function renderProductEdit(id){
 }
 async function orderAction(button){
   const id=button.dataset.id,action=button.dataset.orderAction,payload={action};
+  if(action==='reorder'){reorderCompletedOrder(id);button.disabled=false;return}
+  if(action==='edit-pending'||action==='cancel-pending'){
+    payload.action='cancel-pending';
+  }
   if(!state.user){payload.guest_token=guestOrderToken(id);if(!payload.guest_token)throw new Error('This private order link is missing. Open this order in the browser where you placed it.')}
   if(action==='assign'){payload.runner_name=$(`[data-assign-runner="${id}"]`)?.value.trim()||'';if(!payload.runner_name)throw new Error('Type the name of the runner for this delivery.')}
+  if(action==='verify-pickup'){
+    payload.pickup_code=$(`[data-pickup-code="${id}"]`)?.value.trim().toUpperCase()||'';
+    if(!/^[A-HJ-NP-Z2-9]{8}$/.test(payload.pickup_code))throw new Error('Enter the 8-character pickup code shown by the customer.');
+  }
   if(action==='runner-link'){
     const result=await api(`/api/orders/${id}/runner-link`,{method:'POST',body:'{}'}),shareUrl=new URL('/',location.origin);
     shareUrl.hash=`runner-track=${id}.${result.token}`;state.runnerLinks[id]=shareUrl.href;render();
@@ -981,14 +1484,86 @@ async function orderAction(button){
     return;
   }
   await api(`/api/orders/${id}`,{method:'PATCH',body:json(payload)});
-  const messages={assign:'Runner assigned. The customer can see their name.','offer-pickup':'Pickup option sent to the customer.','accept-pickup':'Your order will be ready for pickup at the stall.','cancel-no-runner':'Order cancelled.','out':'The order is on its way.','delivered':'Delivery marked complete.',collect:'Pickup confirmed.'};
+  if(action==='edit-pending'){
+    await refresh();
+    const cancelled=state.orders.find(item=>item.id===Number(id)&&item.cancelled_by_buyer);
+    if(!cancelled){toast('The order was cancelled, but BiteHub could not reload it yet. Refresh My orders to restore the available items.');return}
+    reorderCompletedOrder(id);return;
+  }
+  const messages={assign:'Runner assigned. The customer can see their name.','offer-pickup':'Pickup option sent to the customer.','accept-pickup':'Your order will be ready for pickup at the stall.','cancel-no-runner':'Order cancelled.','cancel-pending':'Order cancelled. The stall’s reserved stock has been returned.','out':'The order is on its way.','delivered':'Delivery marked complete.','verify-pickup':'Pickup verified. The order is complete.'};
   toast(messages[action]||'Order updated.');await refresh();
+}
+function openPendingOrderAction(button){
+  const id=Number(button.dataset.id),action=button.dataset.orderAction,order=state.orders.find(item=>item.id===id),dialog=$('#order-action-dialog');
+  if(!order||order.status!=='placed')throw new Error('This order has already changed. Refresh My orders and try again.');
+  if(action==='edit-pending'&&state.cart.size)throw new Error('Your bag already has items. Place or clear it before editing this order so the items stay separate.');
+  if(!dialog)throw new Error('BiteHub could not open the order options. Refresh the page and try again.');
+  pendingOrderAction={id,action};
+  const editing=action==='edit-pending';
+  $('#order-action-title').textContent=editing?'Edit this order?':'Cancel this order?';
+  $('#order-action-description').textContent=editing
+    ?'BiteHub will cancel this new order and return currently available items to your bag. You can then change quantities and place it again. This is only possible before the stall accepts it.'
+    :'You can cancel only while this order is new and the stall has not accepted it. Available items will be returned to the stall.';
+  $('#order-action-confirm').textContent=editing?'Edit order':'Cancel order';
+  $('#order-action-confirm').classList.toggle('button-danger',!editing);
+  $('#order-action-confirm').classList.toggle('button-primary',editing);
+  if(!dialog.open)dialog.showModal();
+  $('#order-action-keep')?.focus({preventScroll:true});
+}
+async function confirmPendingOrderAction(){
+  const pending=pendingOrderAction;if(!pending)return;
+  pendingOrderAction=null;
+  const dialog=$('#order-action-dialog');if(dialog?.open)dialog.close();
+  const selector=`[data-order-action="${pending.action}"][data-id="${pending.id}"]`,button=root.querySelector(selector);
+  if(button)button.disabled=true;
+  try{await orderAction(button||{dataset:{id:String(pending.id),orderAction:pending.action},disabled:true})}
+  catch(error){toast(error.message);if(button?.isConnected)button.disabled=false}
+}
+$('#order-action-dialog')?.addEventListener('close',()=>{pendingOrderAction=null});
+function reorderCompletedOrder(orderId){
+  const order=state.orders.find(item=>item.id===Number(orderId));
+  if(!order||(order.status!=='completed'&&!order.cancelled_by_buyer)){toast('Only a completed or cancelled-by-you order can be ordered again.');return}
+  if(state.paused&&!order.cancelled_by_buyer){toast('Ordering is paused right now.');return}
+  const current=[...state.cart.values()];
+  const orderStallId=order.items.map(line=>state.products.find(item=>item.id===Number(line.product_id))?.stall_id).find(id=>id!=null);
+  if(current.length&&current.some(item=>orderStallId==null||item.stall_id!==orderStallId)){
+    toast('Your bag has food from another stall. Clear it before reordering this one.');return;
+  }
+  const missed=[];let added=0;
+  for(const line of order.items){
+    const product=state.products.find(item=>item.id===Number(line.product_id));
+    if(!product||!product.available||!product.stall_open){missed.push(line.name);continue}
+    const item=state.cart.get(product.id)||{...product,quantity:0};
+    const limit=item.stock_count==null?50:Math.min(50,Number(item.stock_count));
+    const next=Math.min(limit,item.quantity+Number(line.quantity||0));
+    if(next<=item.quantity){missed.push(line.name);continue}
+    added+=next-item.quantity;item.quantity=next;state.cart.set(product.id,item);
+  }
+  if(!added){toast(missed.length?'Those items are no longer available. Browse the current menu for similar picks.':'This order has no available menu items to add.');return}
+  state.fulfillment='pickup';state.deliveryLocation=null;state.cartNote='';
+  accountTools();renderCart();$('#cart-dialog').showModal();
+  toast(missed.length?`${added} item${added===1?'':'s'} added. Some old items are no longer available.`:order.cancelled_by_buyer?`${added} item${added===1?'':'s'} from your cancelled order are back in your bag. Review and update them before placing a new order.`:`${added} item${added===1?'':'s'} from your old order are back in your bag. Review details before placing it.`);
 }
 root.addEventListener('input',e=>{
   const authForm=e.target.closest('.auth-front-form');if(authForm){const status=authForm.querySelector('.auth-front-status');if(status){status.textContent='';status.classList.remove('is-visible')}}
+  if(e.target.id==='admin-stall-search'){state.adminStallSearch=e.target.value;updateAdminStallResults();return}
   if(e.target.id==='menu-search'){state.query=e.target.value;const start=e.target.selectionStart;renderBuyerView();const input=$('#menu-search');input.focus();input.setSelectionRange(start,start)}
 });
-document.addEventListener('change',e=>{
+$('#order-messages-dialog')?.addEventListener('close',()=>{
+  clearInterval(orderMessageRefreshTimer);
+  orderMessageRefreshTimer=null;
+  activeOrderMessageOrderId=null;
+  ownerMessageKnownOrderIds.clear();state.ownerChatNewOrderIds.clear();syncOwnerChatNewOrderAlert();
+  orderMessageRequestSequence++;
+});
+document.addEventListener('change',async e=>{
+  if(e.target.matches('input[name="guest_photo_file"]')){
+    const input=e.target,file=input.files?.[0];if(!file)return;
+    if(!['image/jpeg','image/png','image/webp'].includes(file.type)||file.size>2*1024*1024){input.value='';toast('Choose a JPG, PNG, or WebP guest photo under 2 MB.');return}
+    try{localStorage.setItem(guestPhotoStorageKey(),await compressGuestPhoto(file));renderSidebar();toast('Guest photo saved on this device.')}
+    catch(error){toast(error.name==='QuotaExceededError'?'There is not enough browser storage for this photo. Try a smaller image.':error.message||'The guest photo could not be saved.')}
+    return;
+  }
   if(e.target.matches('input[name="logo_file"]')){
     const input=e.target,file=input.files?.[0];if(!file)return;
     if(!['image/jpeg','image/png','image/webp'].includes(file.type)||file.size>2*1024*1024){input.value='';toast('Choose a JPG, PNG, or WebP logo under 2 MB.');return}
@@ -1007,8 +1582,12 @@ document.addEventListener('change',e=>{
   }
 });
 root.addEventListener('change',async e=>{
+  if(e.target.id==='admin-stall-status-filter'){state.adminStallStatusFilter=e.target.value;updateAdminStallResults();return}
+  if(e.target.id==='admin-stall-open-filter'){state.adminStallOpenFilter=e.target.value;updateAdminStallResults();return}
+  if(e.target.id==='admin-stall-product-filter'){state.adminStallProductFilter=e.target.value;updateAdminStallResults();return}
   if(e.target.id==='menu-sort'){state.sort=e.target.value;renderBuyerView()}
   if(e.target.id==='stall-filter'){state.stallFilter=e.target.value;renderBuyerView()}
+  if(e.target.id==='budget-filter'){state.budgetMax=e.target.value;renderBuyerView()}
   if(e.target.id==='dietary-filter'){state.dietaryFilter=e.target.value;renderBuyerView()}
   if(e.target.id==='allergen-filter'){state.allergenFilter=e.target.value;renderBuyerView()}
   if(e.target.matches('[data-availability]')){try{await api(`/api/products/${e.target.dataset.availability}`,{method:'PATCH',body:json({available:e.target.checked})});toast('Menu availability saved.');await refresh()}catch(error){toast(error.message);await refresh()}}
@@ -1026,15 +1605,19 @@ root.addEventListener('change',e=>{
 document.addEventListener('click',async e=>{
   const workspaceTab=e.target.closest('[data-workspace-role][data-workspace-view]');
   if(workspaceTab){
-    if(workspaceTab.closest('#sidebar-navigation'))closeSidebar();
+    const fromBottomNav=Boolean(workspaceTab.closest('#role-bottom-nav'));
+    const fromSidebar=Boolean(workspaceTab.closest('#sidebar-navigation'));
+    if(fromSidebar)closeSidebar();
     const role=workspaceTab.dataset.workspaceRole,view=workspaceTab.dataset.workspaceView;
     if(role==='buyer'&&(state.user?.role==='buyer'||(!state.user&&state.publicBrowse))||state.user?.role===role){
       if(state[`${role}View`]===view)return;
       state[`${role}View`]=view;
-      const hashes={buyer:{menu:'#menu',orders:'#buyer-orders'},owner:{dashboard:'#owner-dashboard',orders:'#owner-orders',menu:'#owner-menu',stall:'#owner-stall',insights:'#owner-insights'},admin:{overview:'#admin-overview',stalls:'#admin-stalls',orders:'#admin-orders',reports:'#admin-reports',accounts:'#admin-accounts'}};
+      const hashes={buyer:{menu:'#menu',orders:'#buyer-orders'},owner:{dashboard:'#owner-dashboard',orders:'#owner-orders',menu:'#owner-menu',stall:'#owner-stall',insights:'#owner-insights'},admin:{overview:'#admin-overview',stalls:'#admin-stalls',orders:'#admin-orders',reports:'#admin-reports',accounts:'#admin-accounts'},runner:{summary:'#runner-summary',queue:'#runner-queue'}};
       const hash=hashes[role]?.[view];if(hash)history.pushState({workspace:role,view},'',hash);
       render();window.scrollTo({top:0,behavior:window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});
-      root.querySelector(`[data-workspace-role="${role}"][data-workspace-view="${view}"]`)?.focus({preventScroll:true});
+      if(fromBottomNav)document.querySelector(`#role-bottom-nav [data-workspace-role="${role}"][data-workspace-view="${view}"]`)?.focus({preventScroll:true});
+      else if(fromSidebar)focusSidebarTrigger();
+      else root.querySelector(`[data-workspace-role="${role}"][data-workspace-view="${view}"]`)?.focus({preventScroll:true});
     }
     return;
   }
@@ -1042,16 +1625,21 @@ document.addEventListener('click',async e=>{
   if(sidebarScroll){closeSidebar();document.getElementById(sidebarScroll.dataset.sidebarScroll)?.scrollIntoView({behavior:window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'start'});return}
   if(e.target.closest('#app-sidebar a[href]'))closeSidebar();
   const stallProfile=e.target.closest('[data-stall-profile]');if(stallProfile){try{await renderStallProfile(stallProfile.dataset.stallProfile)}catch(error){toast(error.message)}return}
+  const customerPreview=e.target.closest('[data-action="open-customer-stall-preview"]');if(customerPreview){try{await renderStallProfile(customerPreview.dataset.stallId,true)}catch(error){toast(`Customer preview could not load. ${error.message}`)}return}
   const feature=e.target.closest('[data-feature-product]');if(feature){feature.disabled=true;const active=feature.dataset.featureActive==='true';try{await api('/api/stall/feature',{method:'PATCH',body:json({product_id:Number(feature.dataset.featureProduct),featured:!active})});toast(active?'Campus pick removed.':'Featured on Fresh from our stalls for 24 hours!');await refresh()}catch(error){toast(error.message);feature.disabled=false}return}
   const moveFeatured=e.target.closest('[data-feature-move]');if(moveFeatured){const rail=$('.featured-rail'),card=rail?.querySelector('.featured-card');if(rail&&card)rail.scrollBy({left:(card.getBoundingClientRect().width+12)*Number(moveFeatured.dataset.featureMove),behavior:window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});return}
   const pauseFeatured=e.target.closest('[data-feature-pause]');if(pauseFeatured){state.featuredPaused=!state.featuredPaused;pauseFeatured.setAttribute('aria-pressed',String(state.featuredPaused));pauseFeatured.textContent=state.featuredPaused?'Play rotation':'Pause rotation';return}
   const enableAlerts=e.target.closest('[data-action="enable-notifications"]');if(enableAlerts){enableAlerts.disabled=true;try{await enablePushNotifications()}catch(error){toast(error.message);enableAlerts.disabled=false}return}
   const disableAlerts=e.target.closest('[data-action="disable-notifications"]');if(disableAlerts){disableAlerts.disabled=true;try{await disablePushNotifications()}catch(error){toast(error.message);disableAlerts.disabled=false}return}
+  const dismissAlertNudge=e.target.closest('[data-action="dismiss-notifications-nudge"]');if(dismissAlertNudge){state.notificationPromptDismissed=true;render();return}
    const runnerStart=e.target.closest('[data-runner-share-start]');if(runnerStart){await startAnonymousRunnerSharing();return}
    const runnerStop=e.target.closest('[data-runner-share-stop]');if(runnerStop){stopAnonymousRunnerSharing();return}
    const copyRunnerLink=e.target.closest('[data-copy-runner-link]');if(copyRunnerLink){const id=copyRunnerLink.dataset.copyRunnerLink,link=state.runnerLinks[id],field=$(`[data-runner-link-value="${id}"]`);if(!link)return;try{if(navigator.clipboard?.writeText)await navigator.clipboard.writeText(link);else if(field){field.focus();field.select();document.execCommand('copy')}toast('Runner link copied. Send it privately to the assigned runner.')}catch{field?.focus();field?.select();toast('Select and copy the runner link shown above.')}return}
   const zoom=e.target.closest('[data-map-zoom]');if(zoom){setMapZoom(zoom.dataset.mapZoom);return}
-   const mapPicker=e.target.closest('[data-map-picker]');if(mapPicker){const shell=mapPicker.closest('.campus-map-shell'),rect=shell.getBoundingClientRect(),x=e.detail===0?0.5:Math.max(0,Math.min(1,((e.clientX-rect.left)/rect.width-.5)/state.mapZoom+.5)),y=e.detail===0?0.5:Math.max(0,Math.min(1,((e.clientY-rect.top)/rect.height-.5)/state.mapZoom+.5)),point=mapLatLon(x*PNS_MAP.width,y*PNS_MAP.height);setDeliveryPoint(point.latitude,point.longitude,shell);return}
+   const mapPicker=e.target.closest('[data-map-picker]');if(mapPicker){const shell=mapPicker.closest('.campus-map-shell'),rect=shell.getBoundingClientRect(),x=e.detail===0?0.5:Math.max(0,Math.min(1,((e.clientX-rect.left)/rect.width-.5)/state.mapZoom+.5)),y=e.detail===0?0.5:Math.max(0,Math.min(1,((e.clientY-rect.top)/rect.height-.5)/state.mapZoom+.5)),point=mapLatLon(x*PNS_MAP.width,y*PNS_MAP.height);if(mapPicker.dataset.mapKind==='stall-location'){state.stallLocationDraft=point;state.stallLocationDraftOwnerId=state.user?.id??null;renderOwnerStallLocationMap();return}setDeliveryPoint(point.latitude,point.longitude,shell);return}
+  const stallMapPin=e.target.closest('[data-stall-map-pin]');if(stallMapPin){state.selectedStallFinderId=Number(stallMapPin.dataset.stallMapPin);document.querySelectorAll('[data-stall-map-pin]').forEach(pin=>{const selected=pin===stallMapPin;pin.classList.toggle('is-selected',selected);pin.setAttribute('aria-pressed',String(selected))});const card=$(`#stall-finder-stall-${state.selectedStallFinderId}`),list=card?.closest('.stall-finder-results');document.querySelectorAll('.stall-finder-card').forEach(item=>item.classList.toggle('is-selected',item===card));if(card&&list)list.scrollTo({top:Math.max(0,card.offsetTop-list.offsetTop),behavior:window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});return}
+  if(e.target.closest('[data-action="open-stall-finder"]')){await openStallFinder();return}
+  const mapMenu=e.target.closest('[data-action="view-stall-from-map"]');if(mapMenu){const id=mapMenu.dataset.stallId;$('#stall-finder-dialog')?.close();try{await renderStallProfile(id)}catch(error){toast(error.message)}return}
   const passwordToggle=e.target.closest('[data-toggle-password]');if(passwordToggle){e.preventDefault();const input=passwordToggle.closest('.front-input-wrap')?.querySelector('input[name="password"]');if(input){const showing=input.type==='password';input.type=showing?'text':'password';passwordToggle.setAttribute('aria-label',showing?'Hide password':'Show password');passwordToggle.setAttribute('aria-pressed',String(showing));passwordToggle.querySelector('span').textContent=showing?'Hide':'Show';input.focus({preventScroll:true})}return}
   const frontRoleChoice=e.target.closest('[data-front-role]');if(frontRoleChoice){state.authRole=frontRoleChoice.dataset.frontRole;document.querySelectorAll('[data-front-role]').forEach(choice=>{const selected=choice===frontRoleChoice;choice.classList.toggle('is-selected',selected);choice.setAttribute('aria-pressed',String(selected));choice.setAttribute('aria-label',choice.querySelector('.front-role-copy strong').textContent+(selected?' selected':''));const marker=choice.querySelector('.front-role-arrow');if(marker)marker.textContent=selected?'✓':'→'});const selectedRoleInput=$('#auth-form-slot input[name="role"]');if(selectedRoleInput)selectedRoleInput.value=state.authRole;const submit=$('#auth-form-slot .auth-front-form button[type="submit"]'),roleName=frontRoleChoice.querySelector('.front-role-copy strong').textContent;if(submit)submit.innerHTML='Log in as '+roleName+' <span aria-hidden="true">→</span>';const status=$('.auth-front-status');if(status){status.textContent='';status.classList.remove('is-visible')}return}
   const authTab=e.target.closest('[data-auth-mode]');if(authTab){state.authRole=authTab.dataset.authRole||state.authRole;const authModes={front:'front',login:'front',choose:'choose','login-choose':'login-choose',signup:'signup'};renderAuthWall(authModes[authTab.dataset.authMode]||'front',state.authRole);window.scrollTo(0,0);return}
@@ -1062,10 +1650,44 @@ document.addEventListener('click',async e=>{
   const filter=e.target.closest('[data-filter]');if(filter){const quickCategory=filter.classList.contains('market-category-tile'),pickedInsidePanel=Boolean(filter.closest('#menu-filter-panel'));state.filter=filter.dataset.filter;if(pickedInsidePanel)state.filterPanelOpen=false;renderBuyerView();if(quickCategory)requestAnimationFrame(()=>document.querySelector('#menu')?.scrollIntoView({behavior:'smooth',block:'start'}));return}
   const removeCart=e.target.closest('[data-remove-cart]');if(removeCart){state.cart.delete(Number(removeCart.dataset.removeCart));resetEmptyBag();accountTools();renderCart();return}
   const quant=e.target.closest('[data-quantity]');if(quant){changeQuantity(quant.dataset.id,Number(quant.dataset.quantity));return}
-  const orderButton=e.target.closest('[data-order-action]');if(orderButton){orderButton.disabled=true;try{await orderAction(orderButton)}catch(error){toast(error.message);orderButton.disabled=false}return}
-  const stallStatus=e.target.closest('[data-stall-status]');if(stallStatus){stallStatus.disabled=true;try{await api(`/api/admin/stalls/${stallStatus.dataset.stallStatus}`,{method:'PATCH',body:json({status:stallStatus.dataset.nextStatus})});toast(stallStatus.dataset.nextStatus==='paused'?'Stall paused; customers can’t order from it.':'Stall resumed and visible to customers.');await refresh()}catch(error){toast(error.message);stallStatus.disabled=false}return}
+  const breakToggle=e.target.closest('[data-stall-break-toggle]');if(breakToggle){breakToggle.disabled=true;const onBreak=breakToggle.dataset.nextBreak==='true';try{const result=await api('/api/stall/break',{method:'PATCH',body:json({on_break:onBreak})});state.user.stall_on_break=result.on_break;for(const product of state.products)if(product.stall_id===state.user.stall_id)product.stall_on_break=result.on_break;render();toast(result.on_break?'Your stall is on a short break. New orders are paused.':'Your stall is back and can accept orders during its posted hours.');await refresh()}catch(error){toast(error.message);breakToggle.disabled=false}return}
+  const orderButton=e.target.closest('[data-order-action]');if(orderButton){if(['edit-pending','cancel-pending'].includes(orderButton.dataset.orderAction)){try{openPendingOrderAction(orderButton)}catch(error){toast(error.message)}return}orderButton.disabled=true;try{await orderAction(orderButton)}catch(error){toast(error.message);orderButton.disabled=false}return}
+   const stallMode=e.target.closest('[data-stall-mode]');if(stallMode){stallMode.disabled=true;try{const result=await api('/api/admin/stall-policy',{method:'PATCH',body:json({mode:stallMode.dataset.stallMode})});toast(result.message);await refresh()}catch(error){toast(error.message);stallMode.disabled=false}return}
+   const cancelAdminDelete=e.target.closest('[data-admin-cancel-delete]');if(cancelAdminDelete){state.adminDeleteConfirm='';updateAdminStallResults();return}
+   const deleteStall=e.target.closest('[data-admin-delete-stall]');if(deleteStall){const key=`stall:${deleteStall.dataset.adminDeleteStall}`;if(state.adminDeleteConfirm!==key){state.adminDeleteConfirm=key;updateAdminStallResults();return}deleteStall.disabled=true;try{await api(`/api/admin/stalls/${deleteStall.dataset.adminDeleteStall}`,{method:'DELETE'});state.adminDeleteConfirm='';toast('Stall account removed. Historical orders remain saved.');await refresh()}catch(error){toast(error.message);deleteStall.disabled=false}return}
+   const deleteAdminProduct=e.target.closest('[data-admin-delete-product]');if(deleteAdminProduct){const key=`product:${deleteAdminProduct.dataset.adminDeleteProduct}`;if(state.adminDeleteConfirm!==key){state.adminDeleteConfirm=key;updateAdminStallResults();return}deleteAdminProduct.disabled=true;try{await api(`/api/admin/products/${deleteAdminProduct.dataset.adminDeleteProduct}`,{method:'DELETE'});state.adminDeleteConfirm='';toast('Food removed from the stall menu and customer catalog. Existing order records are preserved.');await refresh()}catch(error){toast(error.message);deleteAdminProduct.disabled=false}return}
+   const stallStatus=e.target.closest('[data-stall-status]');if(stallStatus){stallStatus.disabled=true;try{await api(`/api/admin/stalls/${stallStatus.dataset.stallStatus}`,{method:'PATCH',body:json({status:stallStatus.dataset.nextStatus})});state.adminDeleteConfirm='';toast(stallStatus.dataset.nextStatus==='approved'?'Stall approved and can sell food.':'Stall paused; customers can’t order from it.');await refresh()}catch(error){toast(error.message);stallStatus.disabled=false}return}
   const remove=e.target.closest('[data-delete-product]');if(remove){if(!confirm('Remove this item from your menu?'))return;try{await api(`/api/products/${remove.dataset.deleteProduct}`,{method:'DELETE'});toast('Menu item removed.');await refresh()}catch(error){toast(error.message)}return}
   const action=e.target.closest('[data-action]');if(!action)return;
+  if(action.dataset.action==='dismiss-order-action'){pendingOrderAction=null;$('#order-action-dialog')?.close();return}
+  if(action.dataset.action==='confirm-order-action'){action.disabled=true;await confirmPendingOrderAction();action.disabled=false;return}
+  if(action.dataset.action==='open-notification-inbox'){closeSidebar();await openNotificationInbox();return}
+  if(action.dataset.action==='mark-notifications-read'){action.disabled=true;try{await api('/api/notifications/inbox/read-all',{method:'PATCH',body:json({})});await loadNotificationInbox()}catch(error){toast(error.message);action.disabled=false}return}
+  if(action.dataset.action==='open-inbox-notification'){
+    const item=state.notifications.find(entry=>Number(entry.id)===Number(action.dataset.notificationId));if(!item)return;
+    action.disabled=true;
+    try{await api(`/api/notifications/inbox/${Number(item.id)}`,{method:'PATCH',body:json({})});await loadNotificationInbox();$('#notification-inbox-dialog')?.close();const destination=new URL(item.url||'/',location.origin);if(destination.origin===location.origin)location.assign(destination.href)}
+    catch(error){toast(error.message);action.disabled=false}
+    return;
+  }
+  if(action.dataset.action==='remove-weekly-menu-plan'){
+    action.disabled=true;
+    try{await api(`/api/menu-schedule/${Number(action.dataset.scheduleId)}`,{method:'DELETE'});toast('Weekly pick removed.');await refresh()}
+    catch(error){toast(error.message);action.disabled=false}
+    return;
+  }
+  if(action.dataset.action==='toggle-favorite-product'){toggleSavedMenuItem('product',action.dataset.id,action);return}
+  if(action.dataset.action==='toggle-favorite-stall'){toggleSavedMenuItem('stall',action.dataset.id,action);return}
+  if(action.dataset.action==='toggle-saved-menu'){
+    state.showSavedOnly=!state.showSavedOnly;
+    if(state.showSavedOnly){state.filter='All';state.budgetMax='All';state.query='';state.stallFilter='All';state.dietaryFilter='All';state.allergenFilter='All';state.sort='featured'}
+    renderBuyerView();return;
+  }
+  if(action.dataset.action==='remove-guest-photo'){
+    try{localStorage.removeItem(guestPhotoStorageKey());renderSidebar();toast('Guest photo removed from this device.')}
+    catch{toast('The guest photo could not be removed. Try again.')}
+    return;
+  }
   if(action.dataset.action==='start-guest-entry'){
     if(action.disabled)return;
     action.disabled=true;
@@ -1089,6 +1711,40 @@ document.addEventListener('click',async e=>{
     window.setTimeout(()=>{state.authRole='admin';renderAuthWall('front','admin')},reducedMotion?0:560);
     return;
   }
+  if(action.dataset.action==='admin-passkey-login'){
+    if(!window.isSecureContext||!navigator.credentials?.get){passkeyStatusMessage('Passkeys need a supported browser and a secure BiteHub connection.');return}
+    action.disabled=true;action.setAttribute('aria-busy','true');
+    try{
+      const options=await api('/api/admin/passkeys/login/options',{method:'POST',body:json({})});
+      const credential=await navigator.credentials.get({publicKey:passkeyOptionsForBrowser(options.publicKey)});
+      if(!credential)throw new Error('No passkey was selected. Try again when you are ready.');
+      const result=await api('/api/admin/passkeys/login/verify',{method:'POST',body:json({challenge_id:options.challenge_id,credential:passkeyCredentialForServer(credential,false)})});
+      state.user=result.user;state.cart.clear();resetEmptyBag();applyWorkspaceHash();startAutoRefresh();$('#auth-dialog').close();
+      toast('Signed in securely with your passkey.');await refresh();loadNotificationState();await openSharedStall();return;
+    }catch(error){passkeyStatusMessage(error.message||'Passkey sign-in could not be completed. Try again.')}finally{action.disabled=false;action.removeAttribute('aria-busy')}
+    return;
+  }
+  if(action.dataset.action==='register-admin-passkey'){
+    const status=$('#admin-passkey-status');
+    if(!window.isSecureContext||!navigator.credentials?.create){passkeyStatusMessage('Passkeys need a supported browser and a secure BiteHub connection.',status);return}
+    action.disabled=true;action.setAttribute('aria-busy','true');passkeyStatusMessage('Follow your device prompt to save a passkey.',status);
+    try{
+      const options=await api('/api/admin/passkeys/register/options',{method:'POST',body:json({})});
+      const credential=await navigator.credentials.create({publicKey:passkeyOptionsForBrowser(options.publicKey)});
+      if(!credential)throw new Error('No passkey was created. You can try again.');
+      const result=await api('/api/admin/passkeys/register/verify',{method:'POST',body:json({challenge_id:options.challenge_id,credential:passkeyCredentialForServer(credential,true)})});
+      await refreshAdminPasskeyStatus();passkeyStatusMessage(`Passkey added. ${result.count} registered.`,status);toast('Admin passkey added to this device.');
+    }catch(error){passkeyStatusMessage(error.message||'The passkey could not be added. Try again.',status)}finally{action.disabled=false;action.removeAttribute('aria-busy')}
+    return;
+  }
+  if(action.dataset.action==='enable-admin-passkeys'){
+    action.disabled=true;action.setAttribute('aria-busy','true');
+    try{
+      await api('/api/admin/passkeys/require',{method:'POST',body:json({})});
+      await refreshAdminPasskeyStatus();passkeyStatusMessage('Passkey-only sign-in is on. Add extra passkeys before removing any device.',$('#admin-passkey-status'));toast('School-admin sign-in now requires a passkey.');
+    }catch(error){passkeyStatusMessage(error.message||'Could not switch to passkey sign-in.',$('#admin-passkey-status'))}finally{action.disabled=false;action.removeAttribute('aria-busy')}
+    return;
+  }
   if(action.dataset.action==='forgot-password'){showAccountEmailDialog('password-forgot');return}
   if(action.dataset.action==='resend-verification'){
     const email=String(action.dataset.email||$('#auth-form-slot input[name="email"]')?.value||'').trim().toLowerCase();
@@ -1099,7 +1755,7 @@ document.addEventListener('click',async e=>{
     return;
   }
   if(action.dataset.action==='toggle-menu-filters'){state.filterPanelOpen=!state.filterPanelOpen;renderBuyerView();$('[data-action="toggle-menu-filters"]')?.focus();return}
-  if(action.dataset.action==='clear-menu-filters'){state.filter='All';state.stallFilter='All';state.dietaryFilter='All';state.allergenFilter='All';state.sort='featured';renderBuyerView();return}
+  if(action.dataset.action==='clear-menu-filters'){state.filter='All';state.budgetMax='All';state.stallFilter='All';state.dietaryFilter='All';state.allergenFilter='All';state.sort='featured';renderBuyerView();return}
   if(action.dataset.action==='leave-guest-mode'){
     action.disabled=true;
     try{await api('/api/guest/logout',{method:'POST',body:json({})})}
@@ -1115,7 +1771,7 @@ document.addEventListener('click',async e=>{
   }
   if(action.dataset.action==='guest-owner-login'){closeSidebar();state.publicBrowse=false;state.authRole='owner';history.pushState({},'','/');renderAuthWall('front','owner');window.scrollTo(0,0);return}
   if(action.dataset.action==='open-sidebar'){state.sidebarOpen=true;syncSidebarState();$('.sidebar-close')?.focus({preventScroll:true});return}
-  if(action.dataset.action==='close-sidebar'){closeSidebar();$('.sidebar-menu-button')?.focus({preventScroll:true});return}
+  if(action.dataset.action==='close-sidebar'){closeSidebar();focusSidebarTrigger();return}
   if(action.dataset.action==='show-delete-account'){
     const dialog=$('#delete-account-dialog'),impact=$('#delete-account-impact');
     if(!state.user||!dialog)return;
@@ -1143,6 +1799,18 @@ document.addEventListener('click',async e=>{
     try{await navigator.clipboard.writeText(url);toast('Stall link copied. Share it with your customers.')}catch(_){window.prompt('Copy this stall link:',url)}
     return;
   }
+  if(action.dataset.action==='open-order-messages'){
+    const orderId=Number(action.dataset.orderId);
+    if(Number.isSafeInteger(orderId)&&orderId>0)await openOrderMessages(orderId);
+    else toast('This order link is invalid.');
+    return;
+  }
+  if(action.dataset.action==='view-owner-new-orders'){
+    if(state.user?.role!=='owner')return;
+    const dialog=$('#order-messages-dialog');if(dialog?.open)dialog.close();
+    state.ownerView='orders';history.pushState({workspace:'owner',view:'orders'},'','#owner-orders');
+    await refresh();return;
+  }
   if(action.dataset.action==='open-cart'){renderCart();return}
   if(action.dataset.action==='logout'){closeSidebar();await api('/api/logout',{method:'POST',body:'{}'});clearTimeout(refreshTimer);if(state.trackingWatch!==null)navigator.geolocation?.clearWatch(state.trackingWatch);state.trackingWatch=null;state.user=null;state.cart.clear();resetEmptyBag();renderAuthWall();toast('You are signed out.');return}
   if(action.dataset.action==='clear-cart'){state.cart.clear();resetEmptyBag();accountTools();renderCart();return}
@@ -1160,10 +1828,10 @@ document.addEventListener('click',async e=>{
       }
       const guestDelivery=guest&&state.fulfillment==='delivery'?{guest_school_role:guestSchoolRole,guest_grade:guestGrade,guest_section:guestSection}:{};
       const result=await api(guest?'/api/guest/orders':'/api/orders',{method:'POST',body:json({...(guest?{guest_name:guestName,...guestDelivery}:{}),fulfillment:state.fulfillment,delivery_location:state.fulfillment==='delivery'?state.deliveryLocation:null,note:$('#order-note').value,items:cartEntries().map(p=>({product_id:p.id,quantity:p.quantity}))})});
-      if(guest){if(!result.guest_token||!result.pickup_code)throw new Error('The order was created, but BiteHub could not return its private tracking details. Contact the stall with your order number.');saveGuestOrderAccess({id:result.order_id,token:result.guest_token,code:result.pickup_code});state.guestName=guestName;state.buyerView='orders';history.pushState({workspace:'buyer',view:'orders'},'','#buyer-orders')}
-      state.cart.clear();resetEmptyBag();accountTools();$('#cart-dialog').close();
+      if(guest){if(!result.guest_token||!result.pickup_code)throw new Error('The order was created, but BiteHub could not return its private tracking details. Contact the stall with your order number.');saveGuestOrderAccess({id:result.order_id,token:result.guest_token,code:result.pickup_code});state.guestSessionId=result.guest_session_id||state.guestSessionId;state.guestName=guestName;state.buyerView='orders';history.pushState({workspace:'buyer',view:'orders'},'','#buyer-orders')}
+      state.cart.clear();resetEmptyBag();accountTools();$('#cart-dialog').close();if(guest)render();
       if(guest)toast(`Order #${result.order_id} sent. Your order code is ${result.pickup_code}.`);else toast(`Order #${result.order_id} sent to the stall.`);
-      await refresh();
+      await refresh();if(guest)loadNotificationState();
     }catch(error){toast(error.message);action.disabled=false}
   }
 });
@@ -1171,7 +1839,7 @@ document.addEventListener('click',e=>{
   if(e.target.closest('[data-front-role]')&&state.authRole==='owner'&&document.querySelector('#app.auth-open'))renderAuthForm('login','owner',true);
 });
 document.addEventListener('keydown',e=>{
-  if(e.key==='Escape'&&state.sidebarOpen){closeSidebar();$('.sidebar-menu-button')?.focus({preventScroll:true})}
+  if(e.key==='Escape'&&state.sidebarOpen){closeSidebar();focusSidebarTrigger()}
 });
 document.addEventListener('scroll',e=>{if(e.target.matches?.('.featured-rail'))state.featuredScroll=e.target.scrollLeft},{capture:true,passive:true});
 $('#cart-dialog').addEventListener('click',e=>{if(e.target===$('#cart-dialog'))$('#cart-dialog').close()});
@@ -1198,7 +1866,7 @@ $('#cart-dialog').addEventListener('change',e=>{
 });
 $('#account-tools').addEventListener('click',e=>{if(e.target.closest('[data-action="logout"]'))return});
 document.addEventListener('submit',async e=>{
-  const form=e.target.closest('[data-form]');if(!form)return;e.preventDefault();const submit=form.querySelector('button[type="submit"],button:not([type])'),submitLabel=submit?.innerHTML,status=form.querySelector('.auth-front-status');if(submit){submit.disabled=true;if(form.dataset.form==='login'){submit.setAttribute('aria-busy','true');submit.innerHTML='Signing in…'}}if(status){status.textContent='';status.classList.remove('is-visible')}
+  const form=e.target.closest('[data-form]');if(!form)return;e.preventDefault();const submit=form.querySelector('button[type="submit"],button:not([type])'),submitLabel=submit?.innerHTML,status=form.querySelector('.auth-front-status,.order-message-status');if(submit){submit.disabled=true;if(form.dataset.form==='login'){submit.setAttribute('aria-busy','true');submit.innerHTML='Signing in…'}}if(status){status.textContent='';status.classList.remove('is-visible')}
   try{
     const formData=new FormData(form),values=Object.fromEntries(formData.entries());
     if(form.dataset.form==='guest-entry'){
@@ -1206,6 +1874,17 @@ document.addEventListener('submit',async e=>{
       if(!name)throw new Error('Enter your name to continue as a guest.');
       state.guestName=name;
       await continueAsGuest();
+      return;
+    }
+    if(form.dataset.form==='order-message'){
+      const orderId=Number(form.dataset.orderId),message=String(values.message||'').trim();
+      if(!Number.isSafeInteger(orderId)||orderId<1)throw new Error('This order link is invalid.');
+      if(!message)throw new Error('Write a message before sending it.');
+      const token=state.user?'':guestOrderToken(orderId);
+      await api(`/api/orders/${orderId}/messages`,{method:'POST',body:json({action:'send',message,token})});
+      form.reset();
+      if(status){status.textContent='Message sent.';status.classList.add('is-visible')}
+      await loadOrderMessages(orderId,true);
       return;
     }
     if(form.dataset.form==='password-forgot'){
@@ -1252,6 +1931,10 @@ document.addEventListener('submit',async e=>{
     if(form.dataset.form==='login'){
       const result=await api('/api/login',{method:'POST',body:json(values)});state.user=result.user;if(state.user.role!=='buyer'){state.cart.clear();resetEmptyBag()}applyWorkspaceHash();startAutoRefresh();$('#auth-dialog').close();toast('Welcome back.');await refresh();loadNotificationState();await openSharedStall();return;
     }
+    if(form.dataset.form==='weekly-menu-plan'){
+      values.product_id=Number(values.product_id);values.weekday=Number(values.weekday);
+      await api('/api/menu-schedule',{method:'POST',body:json(values)});toast('Added to your repeating weekly menu.');await refresh();return;
+    }
     if(form.dataset.form==='product'){
       values.price=Number(values.price);const result=await api('/api/products',{method:'POST',body:json(values)});toast(`${result.product.name} added to your menu.`);await refresh();return;
     }
@@ -1259,7 +1942,9 @@ document.addEventListener('submit',async e=>{
       values.price=Number(values.price);await api(`/api/products/${form.dataset.id}`,{method:'PATCH',body:json(values)});$('#product-edit-dialog').close();toast('Menu item updated.');await refresh();return;
     }
     if(form.dataset.form==='feedback'){
-      values.rating=Number(values.rating);await api(`/api/orders/${form.dataset.orderId}/feedback`,{method:'POST',body:json(values)});toast('Thanks for sharing your feedback.');await refresh();return;
+      values.rating=Number(values.rating);
+      if(!state.user){values.guest_token=guestOrderToken(form.dataset.orderId);if(!values.guest_token)throw new Error('This private guest order link is missing. Open this order in the browser where you placed it.')}
+      await api(`/api/orders/${form.dataset.orderId}/feedback`,{method:'POST',body:json(values)});toast('Thanks for sharing your verified feedback.');await refresh();return;
     }
     if(form.dataset.form==='stall-hours'){
       values.prep_minutes=Number(values.prep_minutes);const result=await api('/api/stall/hours',{method:'PATCH',body:json(values)});state.user.stall_opens_at=result.opens_at;state.user.stall_closes_at=result.closes_at;state.user.stall_prep_minutes=result.prep_minutes;toast('Stall hours and prep time saved.');await refresh();return;
@@ -1267,9 +1952,23 @@ document.addEventListener('submit',async e=>{
     if(form.dataset.form==='stall-profile'){
       const result=await api('/api/stall/profile',{method:'PATCH',body:json(values)});state.user.stall_name=result.name;state.user.stall_description=result.description;toast('Public stall profile saved.');await refresh();return;
     }
+    if(form.dataset.form==='stall-location'){
+      const draft=state.stallLocationDraftOwnerId===state.user?.id?state.stallLocationDraft:null;
+      const point=draft||(state.user?.stall_pickup_lat!=null&&state.user?.stall_pickup_lon!=null?{latitude:state.user.stall_pickup_lat,longitude:state.user.stall_pickup_lon}:null);
+      if(!point)throw new Error('Tap the campus map to choose your pickup point first.');
+      const result=await api('/api/stall/location',{method:'PATCH',body:json(point)});
+      state.user.stall_pickup_lat=result.pickup_latitude;state.user.stall_pickup_lon=result.pickup_longitude;state.stallLocationDraft=null;state.stallLocationDraftOwnerId=null;
+      toast('Your stall pickup point is on the campus map.');await refresh();return;
+    }
   }catch(error){if(status){status.textContent=error.message||'Sign in could not be completed. Please try again.';status.classList.add('is-visible')}else toast(error.message)}finally{if(submit){submit.disabled=false;submit.removeAttribute('aria-busy');if(form.dataset.form==='login'&&submitLabel)submit.innerHTML=submitLabel}}
 });
+document.addEventListener('input',e=>{
+  if(e.target.id!=='stall-finder-search')return;
+  const cursor=e.target.selectionStart;state.stallFinderQuery=e.target.value;renderStallFinder();
+  const next=$('#stall-finder-search');next?.focus({preventScroll:true});if(next&&cursor!==null)next.setSelectionRange(cursor,cursor);
+});
 document.addEventListener('change',e=>{
+  if(e.target.id==='stall-finder-open-only'){state.stallFinderOpenOnly=e.target.checked;renderStallFinder();$('#stall-finder-open-only')?.focus({preventScroll:true});return}
   const form=e.target.closest('.sidebar-profile-form');if(!form)return;
   const avatar=form.querySelector('.sidebar-profile-avatar');
   if(e.target.matches('input[name="photo_file"]')&&e.target.files?.[0]){
@@ -1289,8 +1988,8 @@ async function boot(){
   const verificationToken=authLinkParams.get('verify_email')||'';
   const passwordResetToken=authLinkParams.get('reset_password')||'';
   const isAccountEmailLink=Boolean(verificationToken||passwordResetToken);
-  try{if(isRunnerLink){publicRunnerTracking=runnerTrackingFromHash();document.title='Share delivery location · BiteHub';renderRunnerSharePage(publicRunnerTracking?.orderId,Boolean(publicRunnerTracking));return}if(isAccountEmailLink){history.replaceState({},'',location.pathname+location.hash);state.publicBrowse=false;state.user=null;renderAuthWall('front','owner');if(verificationToken){try{const result=await api('/api/email/verify',{method:'POST',body:json({token:verificationToken})});const status=$('.auth-front-status');if(status){status.textContent=result.message;status.classList.add('is-visible')}else toast(result.message)}catch(error){const status=$('.auth-front-status');if(status){status.textContent=error.message;status.classList.add('is-visible')}else toast(error.message)}}else showAccountEmailDialog('password-reset',passwordResetToken);return}const session=await api('/api/session');state.user=session.user;if(state.user){applyWorkspaceHash();startAutoRefresh();await refresh();loadNotificationState();await openSharedStall()}else{if(session.guest_session){state.guestSessionId=session.guest_session.id;state.guestName=session.guest_session.name;state.publicBrowse=true}if(state.publicBrowse){applyWorkspaceHash();await refresh();await openSharedStall();startAutoRefresh()}else renderAuthWall()}}
-  catch(error){renderError(`${error.message} Start the server with “py server.py” from the FOODHUB folder.`)}
+  try{if(isRunnerLink){publicRunnerTracking=runnerTrackingFromHash();document.title='Share delivery location · BiteHub';renderRunnerSharePage(publicRunnerTracking?.orderId,Boolean(publicRunnerTracking));return}if(isAccountEmailLink){history.replaceState({},'',location.pathname+location.hash);state.publicBrowse=false;state.user=null;renderAuthWall('front','owner');if(verificationToken){try{const result=await api('/api/email/verify',{method:'POST',body:json({token:verificationToken})});const status=$('.auth-front-status');if(status){status.textContent=result.message;status.classList.add('is-visible')}else toast(result.message)}catch(error){const status=$('.auth-front-status');if(status){status.textContent=error.message;status.classList.add('is-visible')}else toast(error.message)}}else showAccountEmailDialog('password-reset',passwordResetToken);return}const session=await api('/api/session');state.user=session.user;state.orderMessagesAvailable=session.order_messages_available!==false;state.orderCancellationAvailable=session.order_cancellation_available!==false;state.guestFeedbackAvailable=session.guest_feedback_available!==false;state.notificationInboxAvailable=session.notification_inbox_available!==false;state.weeklyMenuAvailable=session.weekly_menu_available!==false;if(state.user){applyWorkspaceHash();startAutoRefresh();await refresh();loadNotificationState();await openSharedStall()}else{if(session.guest_session){state.guestSessionId=session.guest_session.id;state.guestName=session.guest_session.name;state.publicBrowse=true}if(state.publicBrowse){applyWorkspaceHash();await refresh();await openSharedStall();startAutoRefresh()}else renderAuthWall()}}
+  catch(error){renderError(`${apiErrorMessage(error)} Start the server with “py server.py” from the FOODHUB folder.`)}
   finally{dismissOpeningSplash();if(!isRunnerLink&&!isAccountEmailLink)showPrototypePolicyNotice()}
 }
 function escapePolicyHTML(value){

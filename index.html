@@ -2,15 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#A92D1D">
   <link rel="manifest" href="/manifest.webmanifest">
   <title>BiteHub · Palawan National School</title>
   <link rel="icon" type="image/svg+xml" href="bitehub-mark.svg?v=bitehub-red-gold-20261102">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="font-loader.js" defer></script>
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="app-ui.css?v=pns-school-only-20261017">
   <link rel="stylesheet" href="experience.css">
@@ -22,8 +21,8 @@
   <link rel="stylesheet" href="opening-screen.css?v=food-first-market-20261025">
   <link rel="stylesheet" href="sidebar-preferences.css?v=account-deletion-dashboard-20261014">
   <link rel="stylesheet" href="device-responsive.css?v=larger-header-mark-20261014">
-    <link rel="stylesheet" href="palette-theme.css?v=bitehub-skeleton-removed-20261102">
-  <link rel="stylesheet" href="prototype-notice.css?v=bitehub-loading-market-20261104a">
+    <link rel="stylesheet" href="palette-theme.css?v=admin-stall-controls-20261113">
+  <link rel="stylesheet" href="prototype-notice.css?v=order-actions-nav-20261109">
 </head>
 <body>
   <div id="opening-splash" class="opening-splash" role="status" aria-label="Loading BiteHub">
@@ -64,9 +63,11 @@
       <div class="header-brand-group">
         <a class="brand" href="#home" aria-label="BiteHub home"><img class="brand-mark" src="assets/bitehub-icon.png?v=bitehub-red-gold-20261102" alt=""><span class="brand-copy"><img class="brand-wordmark" src="assets/bitehub-wordmark.png?v=bitehub-red-gold-20261102" alt="BiteHub"></span></a>
       </div>
+      <span id="guest-ordering-status" class="guest-ordering-status" hidden>Guest ordering</span>
       <div id="account-tools" class="account-tools" hidden></div>
     </header>
     <main id="view-content" class="main-content" tabindex="-1"><div class="loading-state"><img class="brand-mark" src="assets/bitehub-icon.png?v=bitehub-red-gold-20261102" alt=""><p>Connecting to the PNS food hub…</p></div></main>
+    <nav id="role-bottom-nav" class="role-bottom-nav" aria-label="Main navigation" hidden></nav>
     <footer class="site-footer"><div class="header-school-signature"><img src="assets/palawan-national-school-logo.webp" alt=""><strong>PALAWAN NATIONAL SCHOOL</strong></div><button type="button" class="auth-front-footer-return" data-auth-mode="front" data-auth-role="buyer" aria-label="Return to customer sign-in" hidden>← Return to customer sign-in</button><nav class="prototype-footer-links" aria-label="BiteHub draft policies"><a href="/legal_drafts/PRIVACY_NOTICE_DRAFT.md">Privacy draft</a><a href="/legal_drafts/TERMS_OF_USE_DRAFT.md">Terms draft</a><a href="/legal_drafts/COOKIE_AND_LOCATION_NOTICES_DRAFT.md">Cookie &amp; GPS draft</a></nav></footer>
   </div>
   <dialog id="prototype-policy-dialog" class="prototype-policy-dialog" aria-labelledby="prototype-policy-title" aria-describedby="prototype-policy-description">
@@ -97,11 +98,52 @@
       <footer class="policy-document-footer"><small>Draft for review · Opened inside BiteHub</small><form method="dialog"><button class="button button-primary" type="submit">Close</button></form></footer>
     </article>
   </dialog>
+  <dialog id="order-action-dialog" class="modal order-action-dialog" aria-labelledby="order-action-title" aria-describedby="order-action-description">
+    <section class="order-action-card">
+      <form method="dialog" class="order-action-dismiss"><button class="icon-button" aria-label="Close order options">×</button></form>
+      <span class="order-action-mark" aria-hidden="true">↻</span>
+      <span class="eyebrow">YOUR PNS ORDER</span>
+      <h2 id="order-action-title">Order options</h2>
+      <p id="order-action-description"></p>
+      <div class="order-action-buttons"><button id="order-action-keep" type="button" class="button button-outline" data-action="dismiss-order-action">Keep order</button><button id="order-action-confirm" type="button" class="button button-primary" data-action="confirm-order-action">Continue</button></div>
+    </section>
+  </dialog>
+  <dialog id="order-messages-dialog" class="modal order-messages-modal" aria-labelledby="order-messages-title">
+    <section class="order-messages-card">
+      <header class="order-messages-header">
+        <span class="order-messages-mark" aria-hidden="true">✉</span>
+        <div><span class="eyebrow">BITEHUB ORDER CHAT</span><h2 id="order-messages-title">Order messages</h2><p id="order-messages-subtitle"></p></div>
+        <form method="dialog" class="order-messages-dismiss"><button class="icon-button" aria-label="Close messages">×</button></form>
+      </header>
+      <div id="owner-new-order-chat-alert" class="owner-new-order-chat-alert" role="status" aria-live="polite" hidden>
+        <span class="owner-new-order-chat-copy"><strong>New order waiting</strong><small data-owner-new-order-message>A new order came in while you were chatting.</small></span>
+        <button type="button" class="button button-primary button-small" data-action="view-owner-new-orders">View orders <span aria-hidden="true">→</span></button>
+      </div>
+      <div id="order-messages-list" class="order-messages-list" role="log" aria-live="polite" aria-relevant="additions text" tabindex="0"></div>
+      <form id="order-message-form" class="order-message-form" data-form="order-message">
+        <label for="order-message-text">Message</label>
+        <textarea id="order-message-text" name="message" rows="3" maxlength="1000" required placeholder="Ask about your order…"></textarea>
+        <div class="order-message-compose-footer"><small>Only you and the stall owner can see this conversation.</small><button class="button button-primary" type="submit">Send <span aria-hidden="true">→</span></button></div>
+        <p class="order-message-status" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+  </dialog>
+  <dialog id="notification-inbox-dialog" class="modal notification-inbox-modal" aria-labelledby="notification-inbox-title">
+    <section class="notification-inbox-card">
+      <header class="notification-inbox-header">
+        <span class="notification-inbox-mark" aria-hidden="true">♧</span>
+        <div><span class="eyebrow">BITEHUB UPDATES</span><h2 id="notification-inbox-title">Notifications</h2><p>Order changes and messages, saved here for you.</p></div>
+        <form method="dialog"><button class="icon-button" aria-label="Close notifications">×</button></form>
+      </header>
+      <div id="notification-inbox-content" class="notification-inbox-content" aria-live="polite"></div>
+    </section>
+  </dialog>
   <dialog id="cart-dialog" class="modal cart-modal" aria-labelledby="cart-title"><form method="dialog" class="modal-dismiss"><button id="cart-close" class="icon-button" aria-label="Close bag">×</button></form><div id="cart-content"></div></dialog>
   <button id="cart-fab" class="cart-fab" type="button" data-action="open-cart" hidden></button>
   <dialog id="product-dialog" class="modal product-modal"><div id="product-content"></div></dialog>
   <dialog id="product-edit-dialog" class="modal auth-modal"><div id="product-edit-content"></div></dialog>
   <dialog id="stall-dialog" class="modal stall-modal"><div id="stall-content"></div></dialog>
+  <dialog id="stall-finder-dialog" class="modal stall-finder-modal" aria-labelledby="stall-finder-title"><div id="stall-finder-content"></div></dialog>
   <dialog id="delete-account-dialog" class="modal delete-account-modal" aria-labelledby="delete-account-title">
     <form method="dialog" class="modal-dismiss"><button class="icon-button" aria-label="Close delete account confirmation">×</button></form>
     <form id="delete-account-form" class="delete-account-form" data-form="delete-account">
@@ -123,17 +165,27 @@
     </header>
     <div id="sidebar-account" class="sidebar-account"></div>
     <nav id="sidebar-navigation" class="sidebar-navigation" aria-label="Dashboard navigation"></nav>
+    <button id="sidebar-notification-inbox" class="sidebar-inbox-trigger" type="button" data-action="open-notification-inbox" hidden>
+      <span class="sidebar-link-icon" aria-hidden="true">♧</span><span>Notifications</span><span id="sidebar-inbox-count" class="sidebar-inbox-count" hidden>0</span>
+    </button>
     <div class="sidebar-settings-wrap">
       <button id="sidebar-settings-toggle" class="sidebar-settings-trigger" type="button" data-action="toggle-sidebar-settings" aria-expanded="false" aria-controls="sidebar-settings-panel"><span class="sidebar-link-icon" aria-hidden="true">⚙</span><span>Settings</span><span class="sidebar-chevron" aria-hidden="true">⌄</span></button>
       <section id="sidebar-settings-panel" class="sidebar-settings-panel" aria-label="Settings and preferences" hidden>
         <button id="theme-toggle" class="sidebar-preference" type="button" role="switch" aria-checked="false" data-action="toggle-theme"><span class="sidebar-preference-icon" aria-hidden="true">◐</span><span class="sidebar-preference-copy"><strong>Dark mode</strong><small id="theme-status">Off</small></span><span class="sidebar-switch" aria-hidden="true"><i></i></span></button>
         <div id="sidebar-notification-setting" class="sidebar-notification-setting" aria-live="polite"></div>
+        <section id="admin-passkey-setting" class="admin-passkey-setting" aria-label="Admin passkey sign-in" hidden>
+          <span class="sidebar-preference-icon" aria-hidden="true">⌑</span>
+          <span class="sidebar-preference-copy"><strong>Admin passkeys</strong><small id="admin-passkey-summary">Checking your sign-in setup…</small></span>
+          <button id="admin-passkey-register" class="button button-outline button-small" type="button" data-action="register-admin-passkey">Add this device</button>
+          <button id="admin-passkey-require" class="button button-primary button-small" type="button" data-action="enable-admin-passkeys" hidden>Require passkeys</button>
+          <p id="admin-passkey-status" class="admin-passkey-status" role="status" aria-live="polite"></p>
+        </section>
         <div class="sidebar-sound-setting"><div class="sidebar-sound-heading"><span class="sidebar-preference-icon" aria-hidden="true">♫</span><span class="sidebar-preference-copy"><strong>Background music</strong><small id="music-track" aria-live="polite">Off</small></span></div><button id="music-toggle" class="music-toggle" type="button" aria-pressed="false" aria-label="Play soft background music"><span class="music-toggle-icon" aria-hidden="true">♫</span><span id="music-label">Play soft music</span></button><label class="music-volume-label" for="music-volume">Volume</label><input id="music-volume" class="music-volume" type="range" min="0" max="16" value="8" aria-label="Background music volume"></div>
         <section class="sidebar-danger-zone" aria-labelledby="sidebar-account-actions-title"><strong id="sidebar-account-actions-title">Account actions</strong><small>These actions affect your BiteHub account.</small><button type="button" class="sidebar-delete-account" data-action="show-delete-account">Delete account</button></section>
       </section>
     </div>
     <footer class="sidebar-footer"><button class="sidebar-logout" type="button" data-action="logout"><span aria-hidden="true">↪</span>Sign out</button></footer>
   </aside>
-  <script src="app.js?v=bitehub-menu-polish-20261103b" defer></script>
+  <script src="app.js?v=admin-stall-controls-20261113" defer></script>
 </body>
 </html>

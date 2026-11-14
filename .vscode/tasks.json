@@ -1,0 +1,19 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run BiteHub on port 8001",
+			"type": "shell",
+			"command": "py",
+			"args": [
+				"server.py",
+				"--host",
+				"127.0.0.1",
+				"--port",
+				"8001"
+			],
+			"isBackground": true,
+			"problemMatcher": []
+		}
+	]
+}

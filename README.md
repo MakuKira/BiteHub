@@ -16,9 +16,16 @@ The database is created as `bitehub.sqlite3` in this folder. It survives server 
 
 ### Device order notifications
 
-Install the push encryption dependency once with `python -m pip install -r requirements.txt` (or use the same Python runtime that starts BiteHub). The server creates a VAPID key under `.local-certs/` automatically; keep that folder when moving the app so existing device subscriptions continue to work. Customers and stall owners enable alerts with the **Enable alerts** button. Customers receive order status changes; the stall owner receives new order alerts.
+Install the push encryption dependency with `python -m pip install -r requirements.txt` (or use the same Python runtime that starts BiteHub). Customers, guests with an order, and stall owners can turn alerts on from the order view or Settings. BiteHub asks the browser for notification permission only after the person presses **Turn on alerts**; they can choose **Not now** and enable alerts later. Buyers and guests receive order updates and stall replies; stall owners receive new-order alerts and customer messages.
 
-Push notifications require a secure browser origin: `localhost` works for development, and phones on the campus network need the HTTPS launcher with a certificate trusted by that phone. Set `BITEHUB_VAPID_SUBJECT` to a valid `mailto:` contact or HTTPS contact URL before deployment. Notifications are best-effort when a device is offline or its push subscription has expired.
+For a production Render deployment:
+
+1. Generate a VAPID signing key once with `python scripts/generate_vapid_key.py`.
+2. Copy the printed value into Render's private environment variable `BITEHUB_VAPID_PRIVATE_KEY_B64`. Keep this value secret and reuse the same value across deploys; replacing it invalidates existing device subscriptions.
+3. Keep `BITEHUB_REQUIRE_VAPID_SECRET=true`. The Render blueprint declares both variables and intentionally leaves the secret for you to add in the dashboard.
+4. To save guest notification subscriptions in Supabase, apply `supabase/migrations/202611090002_guest_push_subscriptions.sql` to the BiteHub production database, then redeploy/restart the server. Account notifications do not use this guest-only table.
+
+Push requires HTTPS in deployment. On iPhone and iPad, users need to add BiteHub to the Home Screen, open the installed web app, and tap the enable button there; iOS web push is available to Home Screen web apps on supported iOS/iPadOS versions. Android and desktop support depends on the browser. See [Apple's Web Push guidance](https://developer.apple.com/documentation/usernotifications/sending-web-push-notifications-in-web-apps-and-browsers) and [MDN's secure-context requirements for service workers](https://developer.mozilla.org/en-US/docs/Web/API/Service_Worker_API#service_workers_are_only_available_in_secure_contexts). Delivery is best-effort when a device is offline or its push subscription has expired.
 
 ### Phone GPS over local HTTPS
 
@@ -36,7 +43,11 @@ The phone and computer must stay on the same trusted network. Do not allow the s
 ## Account types
 
 - **Guest customer:** browse a stall-balanced rotating catalog, see daily featured PNS picks, explore one stall at a time, filter dietary labels and allergens, view item details, choose pickup or PNS delivery, receive status alerts and ready-time estimates, and review completed orders through a private guest link. A customer account is not required.
+- Customers can cancel a new order before the stall accepts it. **Edit order** cancels that pending order and returns any still-available items to the bag so the customer can update and submit a new order. If the stall accepts first, the server rejects the edit and keeps the accepted order unchanged. On Supabase, apply `supabase/migrations/202611090003_buyer_order_cancellation.sql` before enabling this feature; SQLite adds the required column on startup.
+- Guests can leave one review for each completed order from the same device that holds the order's private link. BiteHub verifies the guest token and completed-order status before accepting a rating; account customers continue using their signed-in account. On Supabase, apply `supabase/migrations/202611090004_guest_order_feedback.sql`; SQLite upgrades its review table on startup.
+- Guests can open the PNS campus stall finder, search stalls, filter to open stalls, and open a stall menu from the map. Stall owners set their public pickup point in **Stall setup**; it uses the existing pickup-coordinate columns and requires no database migration.
 - **PNS stall owner:** create a stall account for a named stall, set opening hours, typical prep time, pickup limits, and stock counts, feature one available item for 24 hours, upload optional JPG/PNG/WebP menu photos (up to 2 MB each), disclose dietary/allergen information, edit items, accept orders, assign delivery orders by typing a runner’s name, offer pickup when no runner is available, read customer feedback, and review anonymous stall and product detail views alongside item order counts.
+- Stall owners can switch on **Take a short break** from their workspace. Their stall and menu stay visible with a “Be right back” status, new orders are blocked by the server, and already-placed orders continue normally. The setting uses the existing database settings table; no schema migration is needed.
 - **PNS administrator:** pause or resume PNS stalls, review PNS activity, and pause or resume ordering.
 
 Delivery assignments do not require a runner account. The stall owner enters the runner’s name, marks the order on the way, and confirms delivery. If no runner is available, the customer can choose pickup at the stall or cancel the order. Existing runner accounts from earlier versions can still finish orders already assigned to them.

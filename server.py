@@ -3456,6 +3456,8 @@ class Handler(BaseHTTPRequestHandler):
             "legal_drafts/CHILD_FRIENDLY_PRIVACY_SUMMARY_DRAFT.md",
             "assets/bitehub-food-mark.png", "assets/bitehub-logo.png",
             "assets/bitehub-icon.png", "assets/bitehub-wordmark.png",
+            "assets/bitehub-pwa-180.png", "assets/bitehub-pwa-192.png",
+            "assets/bitehub-pwa-512.png", "assets/bitehub-pwa-maskable-512.png",
             "assets/palawan-national-school-logo.webp",
             "assets/bitehub-food-market-4k.webp",
             "assets/bitehub-food-market-medium.webp",

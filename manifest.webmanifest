@@ -1,10 +1,15 @@
 {
   "name": "BiteHub · Palawan National School",
-  "short_name": "BiteHub PNS",
+  "short_name": "BiteHub",
+  "id": "/",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "description": "Browse Palawan National School campus stalls, menus, and orders with BiteHub.",
   "background_color": "#FFF4DD",
   "theme_color": "#A92D1D",
+  "prefer_related_applications": false,
   "icons": [
     {
       "src": "/assets/bitehub-pwa-192.png",
@@ -16,7 +21,13 @@
       "src": "/assets/bitehub-pwa-512.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "/assets/bitehub-pwa-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ]
 }

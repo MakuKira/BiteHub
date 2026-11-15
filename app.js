@@ -2,6 +2,9 @@ const GUEST_ORDER_STORAGE_KEY='bitehub-guest-order-access-v1';
 const GUEST_LEFT_STORAGE_KEY='bitehub-guest-left-v1';
 const SAVED_MENU_STORAGE_KEY='bitehub-saved-menu-v1';
 const STARTUP_WELCOME_STORAGE_KEY='bitehub-startup-welcome-seen-v1';
+if('serviceWorker'in navigator&&window.isSecureContext){
+  window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js',{scope:'/'}).catch(error=>console.warn('BiteHub offline shell could not start.',error)),{once:true});
+}
 function hasSeenStartupWelcome(){
   try{
     if(localStorage.getItem(STARTUP_WELCOME_STORAGE_KEY)==='seen')return true;

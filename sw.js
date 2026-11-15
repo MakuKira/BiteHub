@@ -1,9 +1,56 @@
+const APP_SHELL_CACHE = 'bitehub-app-shell-v1';
+
 self.addEventListener('install', event => {
   event.waitUntil(self.skipWaiting());
 });
 
 self.addEventListener('activate', event => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil((async () => {
+    const keys = await caches.keys();
+    await Promise.all(keys
+      .filter(key => key.startsWith('bitehub-app-shell-') && key !== APP_SHELL_CACHE)
+      .map(key => caches.delete(key)));
+    await self.clients.claim();
+  })());
+});
+
+self.addEventListener('fetch', event => {
+  const request = event.request;
+  const url = new URL(request.url);
+  if (request.method !== 'GET' || url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
+
+  if (request.mode === 'navigate' && (url.pathname === '/' || url.pathname === '/index.html')) {
+    event.respondWith((async () => {
+      try {
+        const response = await fetch(request);
+        if (response.ok) {
+          const cache = await caches.open(APP_SHELL_CACHE);
+          await cache.put('/', response.clone());
+        }
+        return response;
+      } catch (_) {
+        return (await caches.match('/'))
+          || (await caches.match('/index.html'))
+          || new Response('BiteHub is offline. Reconnect to the internet and try again.', {
+            status: 503,
+            headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+          });
+      }
+    })());
+    return;
+  }
+
+  if (!['script', 'style', 'image', 'font'].includes(request.destination)) return;
+  event.respondWith((async () => {
+    const cache = await caches.open(APP_SHELL_CACHE);
+    try {
+      const response = await fetch(request);
+      if (response.ok && response.type === 'basic') await cache.put(request, response.clone());
+      return response;
+    } catch (_) {
+      return (await cache.match(request)) || Response.error();
+    }
+  })());
 });
 
 function refreshInstalledAppBadge() {
@@ -44,9 +91,9 @@ self.addEventListener('push', event => {
 self.addEventListener('notificationclick', event => {
   event.notification.close();
   const target = new URL(event.notification.data?.url || '/#buyer-orders', self.location.origin).href;
-  event.waitUntil(clients.matchAll({ type: 'window', includeUncontrolled: true }).then(windows => {
+  event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(windows => {
     const app = windows.find(client => client.url.startsWith(self.location.origin));
     if (app) return app.navigate(target).then(client => client.focus());
-    return clients.openWindow(target);
+    return self.clients.openWindow(target);
   }));
 });

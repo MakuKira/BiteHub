@@ -31,7 +31,7 @@ const hasSavedGuestOrders=savedGuestOrderAccess().length>0;
 const hasLeftGuestMode=(()=>{try{return sessionStorage.getItem(GUEST_LEFT_STORAGE_KEY)==='1'}catch{return false}})();
 let guestOrderAccess=savedGuestOrderAccess();
 const state={user:null,publicBrowse:new URLSearchParams(location.search).has('stall')||(hasSavedGuestOrders&&!hasLeftGuestMode),products:[],featuredProducts:[],weeklyMenu:[],weeklyMenuAvailable:true,notificationInboxAvailable:true,notifications:[],notificationUnreadCount:0,notificationInboxLoading:false,heroFeaturedIndex:0,featuredScroll:0,featuredPaused:false,featuredTimer:null,orders:[],ownerChatNewOrderIds:new Set(),overview:null,adminReports:null,adminReportsError:'',adminActivity:[],adminActivityError:'',adminActivityLoaded:false,adminActivityLoading:false,adminRestoreConfirm:null,reportRange:'30',reachAnalytics:null,paused:false,cart:new Map(),cartNote:'',guestName:'',guestSessionId:null,guestSchoolRole:'',guestGrade:'',guestSection:'',fulfillment:'pickup',deliveryLocation:null,stallLocationDraft:null,stallLocationDraftOwnerId:null,stallFinderStalls:[],stallFinderQuery:'',stallFinderOpenOnly:false,selectedStallFinderId:null,mapZoom:1,trackingWatch:null,lastLocationSent:0,runnerLinks:{},filter:'All',budgetMax:'All',query:'',sort:'featured',stallFilter:'All',dietaryFilter:'All',allergenFilter:'All',filterPanelOpen:false,showSavedOnly:false,savedProducts:initialSavedMenu.products,savedStalls:initialSavedMenu.stalls,buyerView:'menu',ownerView:'dashboard',adminView:'overview',adminStallSearch:'',adminStallStatusFilter:'all',adminStallOpenFilter:'all',adminStallProductFilter:'all',adminDeleteConfirm:'',runnerView:'summary',authRole:'buyer',frontGuestStarted:false,pushEnabled:false,pushAvailable:false,pushServerReady:false,pushPublicKey:'',pushRegistration:null,pushPermission:'default',notificationPromptDismissed:false,orderMessagesAvailable:true,orderCancellationAvailable:true,guestFeedbackAvailable:true,sidebarOpen:false,sidebarSettingsOpen:false,sidebarProfileOpen:false};
-let activeOrderMessageOrderId=null,orderMessageRefreshTimer=null,orderMessageRequestSequence=0,ownerMessageKnownOrderIds=new Set(),ownerOrderCheckInFlight=false,guestNotificationStateRequested=false,notificationInboxTimer=null,pendingOrderAction=null;
+let activeOrderMessageOrderId=null,orderMessageRefreshTimer=null,orderMessageRequestSequence=0,ownerMessageKnownOrderIds=new Set(),ownerOrderCheckInFlight=false,guestNotificationStateRequested=false,notificationInboxTimer=null,pendingOrderAction=null,notificationInboxScope='',notificationInboxSeenIds=new Set(),messageNotificationReadInFlight=new Set();
 const $=s=>document.querySelector(s), root=$('#view-content'), toastNode=$('#toast'), openingSplash=$('#opening-splash'), openingSplashStartedAt=performance.now(), openingSplashMinimumDuration=matchMedia('(prefers-reduced-motion: reduce)').matches?400:1750;
 let openingSplashDismissTimer=null;
 let startupWelcomePending=false;
@@ -201,7 +201,7 @@ function campusMap(order,interactive=false,mapPurpose='delivery'){
   const pickerLabel=mapPurpose==='stall-location'?'Tap the map to place your stall pickup point':'Choose a handoff point on the PNS campus map';
   return `<div class="campus-map-shell" data-campus-map="true" data-map-mode="${interactive?(mapPurpose==='stall-location'?'stall-picker':'picker'):'tracking'}" ${pointData(stall,'stall')} ${pointData(destination,'destination')} ${pointData(driver,'driver')}><div class="campus-map-scene" style="transform:scale(${state.mapZoom})"><img class="campus-map-image" src="assets/pns-campus-safe-routes.jpg" alt="PNS campus map with marked walking paths"><svg class="campus-map ${interactive?'is-picker':''}" viewBox="0 0 ${PNS_MAP.width} ${PNS_MAP.height}" preserveAspectRatio="none" role="${interactive?'button':'img'}" ${interactive?`data-map-picker data-map-kind="${mapPurpose}" tabindex="0" aria-label="${pickerLabel}"`:'aria-label="PNS campus delivery map showing the stall, runner location, handoff point, and campus walking route"'}><path class="map-walkway" d="${network}"/>${routePath}${pin(stall,'Stall pickup','stall')}${pin(destination,'Handoff point','destination')}${pin(driver,'Runner location','driver')}</svg></div><div class="map-zoom-controls" aria-label="Map zoom controls"><button type="button" data-map-zoom="in" aria-label="Zoom in">+</button><button type="button" data-map-zoom="out" aria-label="Zoom out">−</button><button type="button" data-map-zoom="reset" aria-label="Reset zoom">Reset</button></div></div>`;
 }
-function toast(message){toastNode.textContent=message;toastNode.classList.add('is-visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>toastNode.classList.remove('is-visible'),2800)}
+function toast(message,duration=2800){toastNode.textContent=message;toastNode.classList.add('is-visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>toastNode.classList.remove('is-visible'),duration)}
 async function api(path,options={}){
   let response;
   try{response=await fetch(path,{credentials:'same-origin',...options,headers:{...(options.body?{'Content-Type':'application/json'}:{}),...(options.headers||{})}})}
@@ -518,10 +518,44 @@ async function loadNotificationInbox(){
   if(!state.user&&!state.guestSessionId){state.notifications=[];state.notificationUnreadCount=0;syncNotificationInboxShortcut();return}
   if(!state.notificationInboxAvailable||state.notificationInboxLoading)return;
   state.notificationInboxLoading=true;
+  const previousUnreadCount=state.notificationUnreadCount;
   if($('#notification-inbox-dialog')?.open)renderNotificationInbox();
-  try{const result=await api('/api/notifications/inbox');state.notifications=result.notifications||[];state.notificationUnreadCount=Number(result.unread_count)||0}
+  try{
+    const result=await api('/api/notifications/inbox'),notifications=result.notifications||[];
+    const scope=state.user?`user:${state.user.id}`:`guest:${state.guestSessionId}`,firstLoad=scope!==notificationInboxScope;
+    const freshMessages=firstLoad?[]:notifications.filter(item=>!item.read_at&&!notificationInboxSeenIds.has(String(item.id))&&/^bitehub-message-\d+$/.test(String(item.tag||'')));
+    state.notifications=notifications;state.notificationUnreadCount=Number(result.unread_count)||0;
+    notificationInboxScope=scope;notificationInboxSeenIds=new Set(notifications.map(item=>String(item.id)));
+    const chatOpen=$('#order-messages-dialog')?.open&&activeOrderMessageOrderId!==null;
+    const visibleOrderId=chatOpen?activeOrderMessageOrderId:null;
+    const alertMessages=freshMessages.filter(item=>Number(String(item.tag).slice('bitehub-message-'.length))!==visibleOrderId);
+    if(alertMessages.length){
+      const orderIds=[...new Set(alertMessages.map(item=>String(item.tag).slice('bitehub-message-'.length)))].slice(0,3);
+      const summary=orderIds.length===1?`New message about order #${orderIds[0]}.`:`New messages about orders ${orderIds.map(id=>`#${id}`).join(', ')}.`;
+      toast(`${summary} Open More → Updates.`,5200);
+    }
+    if(visibleOrderId&&notifications.some(item=>!item.read_at&&item.tag===`bitehub-message-${visibleOrderId}`))void markOrderMessageNotificationsRead(visibleOrderId);
+  }
   catch(error){if(/migration/i.test(error.message))state.notificationInboxAvailable=false}
-  finally{state.notificationInboxLoading=false;syncNotificationInboxShortcut();if($('#notification-inbox-dialog')?.open)renderNotificationInbox()}
+  finally{state.notificationInboxLoading=false;syncNotificationInboxShortcut();if(previousUnreadCount!==state.notificationUnreadCount)renderRoleBottomNav();if($('#notification-inbox-dialog')?.open)renderNotificationInbox()}
+}
+function unreadOrderMessageCount(orderId){return state.notifications.reduce((count,item)=>count+(!item.read_at&&item.tag===`bitehub-message-${orderId}`?1:0),0)}
+async function markOrderMessageNotificationsRead(orderId){
+  if(!state.notificationInboxAvailable)return;
+  const pending=state.notifications.filter(item=>!item.read_at&&item.tag===`bitehub-message-${orderId}`&&/^\d+$/.test(String(item.id))&&!messageNotificationReadInFlight.has(String(item.id)));
+  if(!pending.length)return;
+  const marked=[];
+  await Promise.all(pending.map(async item=>{
+    const id=String(item.id);messageNotificationReadInFlight.add(id);
+    try{await api(`/api/notifications/inbox/${Number(id)}`,{method:'PATCH',body:json({})});marked.push(id)}catch{}
+    finally{messageNotificationReadInFlight.delete(id)}
+  }));
+  if(!marked.length)return;
+  const markedIds=new Set(marked),readAt=new Date().toISOString();
+  for(const item of state.notifications)if(markedIds.has(String(item.id)))item.read_at=readAt;
+  state.notificationUnreadCount=Math.max(0,state.notificationUnreadCount-marked.length);
+  syncNotificationInboxShortcut();renderRoleBottomNav();
+  if($('#notification-inbox-dialog')?.open)renderNotificationInbox();
 }
 async function openNotificationInbox(){
   const dialog=$('#notification-inbox-dialog');if(!dialog)return;
@@ -648,7 +682,7 @@ function startAutoRefresh(){
   if(!state.user&&!state.publicBrowse)return;
   if(!state.user&&state.guestSessionId)loadNotificationState();
   loadNotificationInbox();
-  if(notificationInboxTimer===null)notificationInboxTimer=setInterval(()=>{if(document.visibilityState==='visible')loadNotificationInbox()},30000);
+  if(notificationInboxTimer===null)notificationInboxTimer=setInterval(()=>{if(document.visibilityState==='visible')loadNotificationInbox()},15000);
   const canRefresh=()=>Boolean(state.user||state.publicBrowse);
   const schedule=delay=>{
     refreshTimer=setTimeout(async()=>{
@@ -892,10 +926,10 @@ function renderRoleBottomNav(){
   let tabs=[];
   if(role==='buyer'){
     const ordersCount=state.orders.filter(order=>!['completed','declined'].includes(order.status)).length;
-    tabs=[item(['menu','Browse',icons.browse]),item(['orders','Orders',icons.orders,ordersCount]),item(['bag','Bag',icons.bag],'open-cart'),item(['more','More',icons.more],'open-sidebar')];
+    tabs=[item(['menu','Browse',icons.browse]),item(['orders','Orders',icons.orders,ordersCount]),item(['bag','Bag',icons.bag],'open-cart'),item(['more','More',icons.more,state.notificationUnreadCount],'open-sidebar')];
   }else if(role==='owner'){
     const activeOrders=state.orders.filter(order=>!['completed','declined'].includes(order.status)).length;
-    tabs=[item(['dashboard','Today',icons.today]),item(['orders','Orders',icons.orders,activeOrders]),item(['menu','Menu',icons.menu]),item(['more','More',icons.more],'open-sidebar')];
+    tabs=[item(['dashboard','Today',icons.today]),item(['orders','Orders',icons.orders,activeOrders]),item(['menu','Menu',icons.menu]),item(['more','More',icons.more,state.notificationUnreadCount],'open-sidebar')];
   }else if(role==='admin'){
     const newOrders=state.orders.filter(order=>order.status==='placed').length;
     tabs=[item(['overview','Home',icons.home]),item(['stalls','Stalls',icons.stalls]),item(['orders','Orders',icons.orders,newOrders]),item(['more','More',icons.more],'open-sidebar')];
@@ -928,7 +962,7 @@ async function loadOrderMessages(orderId,quiet=false){
   const token=state.user?'':guestOrderToken(orderId);
   try{
     const result=await api(`/api/orders/${orderId}/messages`,{method:'POST',body:json({action:'list',token})});
-    if(activeOrderMessageOrderId===orderId&&request===orderMessageRequestSequence)renderOrderMessages(result.messages||[]);
+    if(activeOrderMessageOrderId===orderId&&request===orderMessageRequestSequence){renderOrderMessages(result.messages||[]);await markOrderMessageNotificationsRead(orderId)}
   }catch(error){
     if(!quiet&&activeOrderMessageOrderId===orderId&&request===orderMessageRequestSequence&&list)list.innerHTML=`<p class="order-message-empty" role="alert">${esc(error.message)}</p>`;
   }
@@ -1023,7 +1057,8 @@ function orderCard(order){
   const ownerPickupOffer=userRole==='owner'&&order.pickup_offer_status==='pending'?`<p class="pickup-offer-wait" role="status">Waiting for the customer to choose pickup or cancellation.</p>`:'';
   const pickupCodeCard=customerView&&order.pickup_code&&(order.fulfillment==='pickup'||order.is_guest)?`<p class="guest-pickup-code"><span>${order.fulfillment==='pickup'?'Pickup code':'Order code'}</span><strong>${esc(order.pickup_code)}</strong><small>${order.fulfillment==='pickup'?'Show this code to the stall owner when you collect your order.':'Keep this private code with your order details.'}</small></p>`:'';
   if(state.orderMessagesAvailable&&['buyer','guest','owner'].includes(userRole)){
-    const messageButton=`<button type="button" class="button button-outline button-small order-message-trigger" data-action="open-order-messages" data-order-id="${order.id}"><span aria-hidden="true">✉</span> ${customerView?'Message stall':'Message customer'}</button>`;
+    const unreadMessages=unreadOrderMessageCount(order.id),messageLabel=customerView?'Message stall':'Message customer';
+    const messageButton=`<button type="button" class="button button-outline button-small order-message-trigger" data-action="open-order-messages" data-order-id="${order.id}"${unreadMessages?` aria-label="${messageLabel}, ${unreadMessages} unread messages"`:''}><span aria-hidden="true">✉</span> ${messageLabel}${unreadMessages?`<span class="order-message-unread" aria-hidden="true">${unreadMessages>99?'99+':unreadMessages}</span>`:''}</button>`;
     actions=actions?`${actions}${messageButton}`:messageButton;
   }
   return `<article class="order-card"><div class="order-card-top"><div><span class="order-number">ORDER #${order.id} · ${new Date(order.created_at).toLocaleString([], {dateStyle:'medium',timeStyle:'short'})}</span><h3>${esc(order.stall)}</h3></div><span class="status-badge status-${esc(order.status)}">${esc(orderStatusText(order,userRole))}</span></div>${progress}<div class="order-card-body"><div><p class="order-items-summary">${itemText}</p><p class="order-subline">${order.fulfillment==='delivery'?'School delivery only':pickupTime?`Pickup · ${pickupTime}`:'Pickup'}${order.runner?` · Runner: ${esc(order.runner)}`:''}${order.buyer_note?` · “${esc(order.buyer_note)}”`:''}</p>${!customerView?`<p class="order-subline">Placed by ${esc(order.buyer)}${order.buyer_email?` · ${esc(order.buyer_email)}`:''}</p>`:''}${guestDeliveryDetails}</div><strong class="order-total">${money(order.total)}</strong></div>${pickupCodeCard}${pickupOffer}${ownerPickupOffer}${tracking}${estimate}${actions?`<div class="order-actions">${actions}</div>`:''}${feedback}${feedbackUnavailable}${feedbackForm}</article>`;

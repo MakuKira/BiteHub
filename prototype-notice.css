@@ -4912,6 +4912,7 @@ html[data-theme="dark"] #cart-dialog .bag-payment-note[data-awaiting-handoff="tr
 .order-message-status { display: none; margin: 6px 0 0; color: #147a6d; font-size: 11px; }
 .order-message-status.is-visible { display: block; }
 .order-message-trigger { gap: 7px; }
+.order-message-unread { display: inline-grid; min-width: 19px; height: 19px; place-items: center; padding: 0 5px; border-radius: 999px; background: #cf3026; color: #fff; font-size: 10px; font-weight: 900; line-height: 1; }
 
 @media (max-width: 520px) {
   .order-messages-modal { width: calc(100vw - 16px); max-width: calc(100vw - 16px); height: calc(100dvh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); max-height: calc(100dvh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); border-radius: 20px; }
@@ -6266,4 +6267,53 @@ html[data-theme='dark'] .order-action-mark { border-color: #705633; background: 
   #opening-splash.opening-splash .splash-logo-loader img { opacity: 1 !important; clip-path: none !important; transform: none !important; }
   #opening-splash.opening-splash .splash-logo-particle { display: none !important; }
   #opening-splash.opening-splash .splash-brand-lockup { opacity: 1 !important; transform: none !important; }
+}
+
+/* Shorten the mobile guest welcome page: keep the footer close to the card
+   instead of stretching an empty main area to fill the viewport. */
+@media (max-width: 760px) {
+  #app.auth-open:has(.role-home--front .guest-start-idle),
+  #app.auth-open:has(.role-home--front .guest-entry-revealed) {
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  #app.auth-open:has(.role-home--front .guest-start-idle) .main-content,
+  #app.auth-open:has(.role-home--front .guest-entry-revealed) .main-content {
+    flex: 0 0 auto;
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  #app.auth-open:has(.role-home--front .guest-start-idle) .role-home--front,
+  #app.auth-open:has(.role-home--front .guest-entry-revealed) .role-home--front {
+    height: auto;
+    min-height: 0;
+    flex: 0 0 auto;
+    overflow: visible;
+    padding-bottom: 10px;
+  }
+
+  #app.auth-open:has(.role-home--front .guest-start-idle) .auth-front-layout,
+  #app.auth-open:has(.role-home--front .guest-entry-revealed) .auth-front-layout {
+    flex: 0 0 auto;
+    grid-template-rows: auto auto;
+    align-content: start;
+    gap: clamp(8px, 1.2svh, 12px);
+    padding-bottom: 0;
+  }
+
+  #app.auth-open:has(.role-home--front .guest-start-idle) .auth-front-card,
+  #app.auth-open:has(.role-home--front .guest-entry-revealed) .auth-front-card {
+    max-height: none;
+    overflow: visible;
+  }
+
+  #app.auth-open:has(.role-home--front .guest-start-idle) .site-footer,
+  #app.auth-open:has(.role-home--front .guest-entry-revealed) .site-footer {
+    min-height: 0;
+    padding: 6px 9px max(6px, env(safe-area-inset-bottom));
+  }
 }
